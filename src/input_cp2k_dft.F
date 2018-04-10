@@ -2922,6 +2922,12 @@ CONTAINS
                           default_l_val=.FALSE., citations=(/Iannuzzi2006, Brelaz1979, Andermatt2016/))
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
+      CALL keyword_create(keyword, name="KG_ENERGY_CORRECTION", &
+                          description="Enable Harris energy correcyion for Kim-Gordon-like scheme.", &
+                          usage="KG_ENERGY_CORRECTION", lone_keyword_l_val=.TRUE., &
+                          default_l_val=.FALSE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, name="MAP_CONSISTENT", &
                           description="Compute the exact derivative (Hks) of the energy with respect to the density matrix. "// &
