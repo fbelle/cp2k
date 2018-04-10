@@ -697,6 +697,7 @@ CONTAINS
       CALL section_vals_val_get(qs_section, "LS_SCF", l_val=qs_control%do_ls_scf)
       CALL section_vals_val_get(qs_section, "ALMO_SCF", l_val=qs_control%do_almo_scf)
       CALL section_vals_val_get(qs_section, "KG_METHOD", l_val=qs_control%do_kg)
+      CALL section_vals_val_get(qs_section, "KG_ENERGY_CORRECTION", l_val=qs_control%do_kg_ec)
 
       ! Logicals
       CALL section_vals_val_get(qs_section, "MAP_CONSISTENT", l_val=qs_control%map_consistent)

@@ -66,6 +66,7 @@ MODULE kg_environment_types
       REAL(KIND=dp)                                    :: etotal
       REAL(KIND=dp)                                    :: eband, exc, ehartree, vhxc
       REAL(KIND=dp)                                    :: edispersion
+      
       ! full neighbor lists and corresponding task list
       TYPE(neighbor_list_set_p_type), &
          DIMENSION(:), POINTER                         :: sab_orb, sac_ppl, sap_ppnl
@@ -74,12 +75,13 @@ MODULE kg_environment_types
       TYPE(section_vals_type), POINTER                 :: xc_section
       TYPE(qs_dispersion_type), POINTER                :: dispersion_env
       ! matrices in complete basis
-      ! KS: Kohn-Sham; H: Core; S: overlap; T: kinetic energy;
+      ! KS: Kohn-Sham; H: Core; S: overlap; T: kinetic energy, W: wheighed density;
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_ks
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_h
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_s
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_t
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_p
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_w
       ! reduce basis
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER     :: mao_coef
    END TYPE energy_correction_type
