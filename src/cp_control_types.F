@@ -244,6 +244,7 @@ MODULE cp_control_types
       LOGICAL                              :: do_almo_scf
       LOGICAL                              :: do_ls_scf
       LOGICAL                              :: do_kg
+      LOGICAL                              :: do_kg_ec ! Perform KG energy_correction
       LOGICAL                              :: commensurate_mgrids
       LOGICAL                              :: realspace_mgrids
       LOGICAL                              :: map_consistent
