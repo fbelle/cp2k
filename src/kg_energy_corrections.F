@@ -219,6 +219,19 @@ CONTAINS
             WRITE (unit_nr, '(/,T2,A)') '!-----------------------------------------------------------------------------!'
             WRITE (unit_nr, '(T2,A,A,A,A,A)') "!", REPEAT("-", 27), " KG energy correction ", REPEAT("-", 28), "!"
          END IF
+
+
+        ! fbelle
+        ! store old rho (before energy correction) 
+        CALL get_qs_env(qs_env,rho=rho)
+        CALL qs_rho_create(ec_env%old_rho)
+        CALL duplicate_rho_type(rho_input=rho, &
+                                rho_output=ec_env%old_rho, &
+                                qs_env=qs_env)
+
+       WRITE(*,*) "ASSOCIATED(ec_env%old_rho)", ASSOCIATED(ec_env%old_rho)
+
+
          ! build neighbor and task lists
          CALL ec_build_neighborlist(qs_env, ec_env)
          CALL ec_build_core_hamiltonian(qs_env, ec_env, my_calc_forces)
@@ -252,33 +265,10 @@ CONTAINS
       !------------------------------------------------------------------------
 
 
-      !------------------------------------------------------------------------
-      !fbelle 
-      CALL qs_rho_get(rho, rho_ao_kp=rho_ao)
-      
-      WRITE(*,*) "kg_energy_correction - AFTER dbcsr_copy - rho_ao "
-      WRITE(*,*) "ASSOCIATED(rho_ao)", ASSOCIATED(rho_ao)
-      IF(ASSOCIATED(rho_ao)) THEN
-          CALL dbcsr_print(rho_ao(1,1)%matrix)
-      END IF
-      WRITE(*,*) "ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
-      IF(ASSOCIATED(ec_env%matrix_p)) THEN
-          CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
-      END IF
-      !------------------------------------------------------------------------
-
 
          CALL ec_energy(qs_env, ec_env, unit_nr)
 
 
-      ! fbelle
-      ! store old rho (before energy correction) 
-      CALL qs_rho_create(ec_env%old_rho)
-      CALL duplicate_rho_type(rho_input=rho, &
-                              rho_output=ec_env%old_rho, &
-                              qs_env=qs_env)
-  
-!      CALL qs_rho_release(ec_env%old_rho)
 
 
 !         ! print density matrix after kg_energy_correction 
@@ -310,6 +300,7 @@ CONTAINS
 
       END IF
 
+       WRITE(*,*) "2ASSOCIATED(ec_env%old_rho)", ASSOCIATED(ec_env%old_rho)
       CALL timestop(handle)
 
    END SUBROUTINE kg_energy_correction
