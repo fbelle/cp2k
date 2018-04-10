@@ -77,6 +77,7 @@ MODULE ec_force
                                               mo_set_type
    USE qs_rho_methods,                  ONLY: qs_rho_update_rho
    USE qs_rho_types,                    ONLY: qs_rho_get,&
+                                              qs_rho_release,&
                                               qs_rho_type
    USE qs_scf_post_scf,                 ONLY: qs_scf_compute_properties
    USE qs_subsys_types,                 ONLY: qs_subsys_set,&
@@ -297,8 +298,14 @@ CONTAINS
 
 
       ! deallocate W Matrix:
-      CALL get_qs_env(qs_env=qs_env)
-      CALL dbcsr_deallocate_matrix_set(ec_env%matrix_w)
+      ! done in kg_env_release
+!      CALL get_qs_env(qs_env=qs_env)
+!      CALL dbcsr_deallocate_matrix_set(ec_env%matrix_w)
+
+      ! release old_rho
+      ! this should probably be elsewhere
+      !CALL qs_rho_release(ec_env%old_rho)
+
 
 
     CALL timestop(handle)
@@ -368,8 +375,6 @@ CONTAINS
                            use_data=REALDATA3D, &
                            in_space=REALSPACE)
 
-    
-                        
     ! Get the total density in g-space [ions + electrons]
     ! rho contains old density info
     !CALL calc_rho_tot_gspace(rho_tot_gspace, qs_env, rho)

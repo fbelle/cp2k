@@ -30,6 +30,11 @@ MODULE kg_environment_types
                                               neighbor_list_set_p_type
    USE task_list_types,                 ONLY: deallocate_task_list,&
                                               task_list_type
+   !fbelle 
+   USE qs_rho_types,                    ONLY: qs_rho_create,&
+                                              qs_rho_get,&
+                                              qs_rho_release,&
+                                              qs_rho_type
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -82,8 +87,14 @@ MODULE kg_environment_types
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_t
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_p
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_w
+      
       ! reduce basis
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER     :: mao_coef
+      
+      ! store old rho
+      TYPE(qs_rho_type), POINTER                    :: old_rho
+
+
    END TYPE energy_correction_type
 
 ! **************************************************************************************************
@@ -221,6 +232,7 @@ CONTAINS
          IF (ASSOCIATED(kg_env%ec_env%matrix_s)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_s)
          IF (ASSOCIATED(kg_env%ec_env%matrix_t)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_t)
          IF (ASSOCIATED(kg_env%ec_env%matrix_p)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_p)
+         IF (ASSOCIATED(kg_env%ec_env%matrix_w)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_w)
          IF (ASSOCIATED(kg_env%ec_env%task_list)) THEN
             CALL deallocate_task_list(kg_env%ec_env%task_list)
          END IF
@@ -229,6 +241,9 @@ CONTAINS
          ! dispersion environment
          IF (ASSOCIATED(kg_env%ec_env%dispersion_env)) THEN
             CALL qs_dispersion_release(kg_env%ec_env%dispersion_env)
+         END IF
+         IF (ASSOCIATED(kg_env%ec_env%old_rho)) THEN
+            CALL qs_rho_release(kg_env%ec_env%old_rho)
          END IF
       END IF
 

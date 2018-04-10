@@ -99,7 +99,9 @@ MODULE kg_energy_corrections
                                               local_atoms_type,&
                                               pair_radius_setup
    USE qs_overlap,                      ONLY: build_overlap_matrix
-   USE qs_rho_types,                    ONLY: qs_rho_get,&
+   USE qs_rho_types,                    ONLY: qs_rho_create,&
+                                              qs_rho_get,&
+                                              qs_rho_release,&
                                               qs_rho_type
    USE qs_vxc,                          ONLY: qs_vxc_create
    USE task_list_methods,               ONLY: generate_qs_task_list
@@ -116,7 +118,9 @@ MODULE kg_energy_corrections
                                               mo_set_type
    USE dm_ls_scf_types,                 ONLY: ls_scf_env_type
    USE dm_ls_scf_qs,                    ONLY: matrix_ls_to_qs
-   USE qs_rho_methods,                  ONLY: qs_rho_rebuild
+   USE qs_rho_methods,                  ONLY: duplicate_rho_type,&
+                                              qs_rho_rebuild,&
+                                              qs_rho_update_rho
    USE cp_output_handling,              ONLY: cp_print_key_finished_output,&
                                               cp_print_key_unit_nr
    USE qs_initial_guess,                ONLY: calculate_atomic_block_dm
@@ -265,6 +269,16 @@ CONTAINS
 
 
          CALL ec_energy(qs_env, ec_env, unit_nr)
+
+
+      ! fbelle
+      ! store old rho (before energy correction) 
+      CALL qs_rho_create(ec_env%old_rho)
+      CALL duplicate_rho_type(rho_input=rho, &
+                              rho_output=ec_env%old_rho, &
+                              qs_env=qs_env)
+  
+!      CALL qs_rho_release(ec_env%old_rho)
 
 
 !         ! print density matrix after kg_energy_correction 
