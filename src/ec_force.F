@@ -114,7 +114,7 @@ MODULE ec_force
                                               REALSPACE,&
                                               RECIPROCALSPACE,&
                                               pw_p_type
-                                           
+   USE ec_methods,                      ONLY: ec_write_forces                                           
                                            
                                            
 #include "./base/base_uses.f90"
@@ -304,35 +304,35 @@ CONTAINS
 
 
     WRITE(*,*) "Forces END of ec_forces"  
-    !CALL ec_write_forces(qs_env, calculate_forces)
+    CALL ec_write_forces(qs_env, calculate_forces)
 
     
 
 
-      !------------------------------------------------------------------------
-      !fbelle 
-      
-      WRITE(*,*) "ec_forces - END  - rho_ao "
-
-      CALL get_qs_env(qs_env,rho=rho)
-      CALL qs_rho_get(rho, rho_ao_kp=rho_ao, rho_r=rho_r, rho_g=rho_g)
-      WRITE(*,*) "rho_r%pw%in_use", rho_r(1)%pw%in_use
-      WRITE(*,*) "rho_r(1)%pw%cr3d(1,1,1)", rho_r(1)%pw%cr3d(1,1,1)
-      WRITE(*,*) "rho_g%pw%in_use", rho_g(1)%pw%in_use
-
-      WRITE(*,*) "rho_g(1)%pw%cc(1)", rho_g(1)%pw%cc(1)
-      WRITE(*,*) "rho_g(1)%pw%cc(2)", rho_g(1)%pw%cc(2)
-      WRITE(*,*) "rho_g(1)%pw%cc(262144)", rho_g(1)%pw%cc(262144)
-
-      WRITE(*,*) "ASSOCIATED(rho_ao)", ASSOCIATED(rho_ao)
-      IF(ASSOCIATED(rho_ao)) THEN
-          CALL dbcsr_print(rho_ao(1,1)%matrix)
-      END IF
-      WRITE(*,*) "ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
-      IF(ASSOCIATED(ec_env%matrix_p)) THEN
-          CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
-      END IF
-      !------------------------------------------------------------------------
+!      !------------------------------------------------------------------------
+!      !fbelle 
+!      
+!      WRITE(*,*) "ec_forces - END  - rho_ao "
+!
+!      CALL get_qs_env(qs_env,rho=rho)
+!      CALL qs_rho_get(rho, rho_ao_kp=rho_ao, rho_r=rho_r, rho_g=rho_g)
+!      WRITE(*,*) "rho_r%pw%in_use", rho_r(1)%pw%in_use
+!      WRITE(*,*) "rho_r(1)%pw%cr3d(1,1,1)", rho_r(1)%pw%cr3d(1,1,1)
+!      WRITE(*,*) "rho_g%pw%in_use", rho_g(1)%pw%in_use
+!
+!      WRITE(*,*) "rho_g(1)%pw%cc(1)", rho_g(1)%pw%cc(1)
+!      WRITE(*,*) "rho_g(1)%pw%cc(2)", rho_g(1)%pw%cc(2)
+!      WRITE(*,*) "rho_g(1)%pw%cc(262144)", rho_g(1)%pw%cc(262144)
+!
+!      WRITE(*,*) "ASSOCIATED(rho_ao)", ASSOCIATED(rho_ao)
+!      IF(ASSOCIATED(rho_ao)) THEN
+!          CALL dbcsr_print(rho_ao(1,1)%matrix)
+!      END IF
+!      WRITE(*,*) "ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
+!      IF(ASSOCIATED(ec_env%matrix_p)) THEN
+!          CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
+!      END IF
+!      !------------------------------------------------------------------------
 
 
       ! deallocate W Matrix:
@@ -453,95 +453,5 @@ CONTAINS
 
   END SUBROUTINE ec_nsc_force
 
-! **************************************************************************************************
-!> \brief  Write output of forces 
-!> \param qs_env ...
-!> \date    03.2018
-!> \author  Fabian Belleflamme
-! **************************************************************************************************
-  SUBROUTINE ec_write_forces(qs_env, calculate_forces)
-
-    TYPE(qs_environment_type), POINTER                 :: qs_env
-    LOGICAL                                            :: calculate_forces 
-
-    CHARACTER(len=*), PARAMETER :: routineN = 'qs_forces', routineP = moduleN//':'//routineN
-    
-    INTEGER                                            :: handle
-    TYPE(cp_logger_type), POINTER                      :: logger
-    TYPE(cp_para_env_type), POINTER                    :: para_env
-    TYPE(qs_force_type), DIMENSION(:), POINTER         :: force
-    !fbelle
-    CHARACTER(LEN=35)                                  :: fmtstr2
-    REAL(KIND=dp), DIMENSION(3)                        :: grand_total
-    INTEGER                                            :: i, iatom, ikind, natom, ndigits
-    INTEGER, ALLOCATABLE, DIMENSION(:)                 :: atom_of_kind, kind_of
-    TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
-
-    logger => cp_get_default_logger()
-    
-    CALL timeset(routineN//"_forces", handle)
-    
-    CALL get_qs_env(qs_env,para_env=para_env)
-
-    !---------------------------------------------------------------------------------------
-    IF(para_env%mepos==0) THEN
-    
-    IF (calculate_forces) THEN
-    
-       
-       !needs this somehow
-       CALL get_qs_env(qs_env=qs_env, force=force)
-       
-       ! get atom mapping
-       NULLIFY (atomic_kind_set)
-       CALL get_qs_env(qs_env, atomic_kind_set=atomic_kind_set)
-       CALL get_atomic_kind_set(atomic_kind_set=atomic_kind_set, natom=natom)
-       ALLOCATE (atom_of_kind(natom), kind_of(natom))
-       CALL get_atomic_kind_set(atomic_kind_set=atomic_kind_set, &
-                                atom_of_kind=atom_of_kind, &
-                                kind_of=kind_of)
-       
-       ndigits=6
-       
-       fmtstr2 = "(/,(T2,I5,4X,I4,T18,A,T34,3F  .  ))"
-       WRITE (UNIT=fmtstr2(32:33), FMT="(I2)") ndigits
-       WRITE (UNIT=fmtstr2(29:30), FMT="(I2)") ndigits+6
-       
-       !grand_total(:) = 0.0_dp
-       
-          DO iatom = 1, natom
-             ikind = kind_of(iatom)
-             i = atom_of_kind(iatom)
-             WRITE (UNIT=6, FMT=fmtstr2) &
-                iatom, ikind, "       overlap", force(ikind)%overlap(1:3, i), &
-                iatom, ikind, "  overlap_admm", force(ikind)%overlap_admm(1:3, i), &
-                iatom, ikind, "       kinetic", force(ikind)%kinetic(1:3, i), &
-                iatom, ikind, "       gth_ppl", force(ikind)%gth_ppl(1:3, i), &
-                iatom, ikind, "      gth_nlcc", force(ikind)%gth_nlcc(1:3, i), &
-                iatom, ikind, "      gth_ppnl", force(ikind)%gth_ppnl(1:3, i), &
-                iatom, ikind, "  core_overlap", force(ikind)%core_overlap(1:3, i), &
-                iatom, ikind, "      rho_core", force(ikind)%rho_core(1:3, i), &
-                iatom, ikind, "      rho_elec", force(ikind)%rho_elec(1:3, i), &
-                iatom, ikind, "      rho_lri_elec", force(ikind)%rho_lri_elec(1:3, i), &
-                iatom, ikind, "      ch_pulay", force(ikind)%ch_pulay(1:3, i), &
-                iatom, ikind, "    dispersion", force(ikind)%dispersion(1:3, i), &
-                iatom, ikind, "         other", force(ikind)%other(1:3, i), &
-                iatom, ikind, "       fock_4c", force(ikind)%fock_4c(1:3, i), &
-                iatom, ikind, "     ehrenfest", force(ikind)%ehrenfest(1:3, i), &
-                iatom, ikind, "        efield", force(ikind)%efield(1:3, i), &
-                iatom, ikind, "           eev", force(ikind)%eev(1:3, i), &
-                iatom, ikind, "   mp2_non_sep", force(ikind)%mp2_non_sep(1:3, i), &
-                iatom, ikind, "       mp2_sep", force(ikind)%mp2_sep(1:3, i), &
-                iatom, ikind, "         total", force(ikind)%total(1:3, i)
-             grand_total(1:3) = grand_total(1:3)+force(ikind)%total(1:3, i)
-          END DO
-    
-    END IF
-    END IF
-    !---------------------------------------------------------------------------------------
-
-    CALL timestop(handle)
-
-  END SUBROUTINE ec_write_forces
 
 END MODULE ec_force

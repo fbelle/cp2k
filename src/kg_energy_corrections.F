@@ -124,6 +124,8 @@ MODULE kg_energy_corrections
    USE cp_output_handling,              ONLY: cp_print_key_finished_output,&
                                               cp_print_key_unit_nr
    USE qs_initial_guess,                ONLY: calculate_atomic_block_dm
+   USE ec_methods,                      ONLY: ec_write_forces
+
 
 #include "./base/base_uses.f90"
 
@@ -516,43 +518,27 @@ CONTAINS
 !      ENDIF
 !      !---------------------------------------------------------------------------------------
 
-      IF (.NOT. calculate_forces) THEN
 
-         NULLIFY(ec_env%matrix_p)
-          
-         IF (ASSOCIATED(sac_ppl)) THEN
-            CALL build_core_ppl(ec_env%matrix_h, ec_env%matrix_p, force, virial, calculate_forces, use_virial, nder, &
-                                qs_kind_set, atomic_kind_set, particle_set, sab_orb, sac_ppl, &
-                                nimages, cell_to_index, "HARRIS")
-         END IF
+       IF (ASSOCIATED(sac_ppl)) THEN
+          CALL build_core_ppl(ec_env%matrix_h, ec_env%matrix_p, force, virial, calculate_forces, use_virial, nder, &
+                              qs_kind_set, atomic_kind_set, particle_set, sab_orb, sac_ppl, &
+                              nimages, cell_to_index, "HARRIS")
+       END IF
 
-         ! compute the ppnl contribution to the core hamiltonian ***
-         eps_ppnl = dft_control%qs_control%eps_ppnl
-         IF (ASSOCIATED(sap_ppnl)) THEN
-            CALL build_core_ppnl(ec_env%matrix_h, ec_env%matrix_p, force, virial, calculate_forces, use_virial, nder, &
-                                 qs_kind_set, atomic_kind_set, particle_set, sab_orb, sap_ppnl, eps_ppnl, &
-                                 nimages, cell_to_index, "HARRIS")
-         END IF
+       ! compute the ppnl contribution to the core hamiltonian ***
+       eps_ppnl = dft_control%qs_control%eps_ppnl
+       IF (ASSOCIATED(sap_ppnl)) THEN
+          CALL build_core_ppnl(ec_env%matrix_h, ec_env%matrix_p, force, virial, calculate_forces, use_virial, nder, &
+                               qs_kind_set, atomic_kind_set, particle_set, sab_orb, sap_ppnl, eps_ppnl, &
+                               nimages, cell_to_index, "HARRIS")
+       END IF
 
-      ELSE
 
-      !WRITE(*,*) " ec_build_core_ham before forces build_core_ppl  Assoc(p)", ASSOCIATED(ec_env%matrix_p)
-      !WRITE(*,*) " is force env associated"
-         IF (ASSOCIATED(sac_ppl)) THEN
-            CALL build_core_ppl(ec_env%matrix_h, ec_env%matrix_p, force, virial, calculate_forces, use_virial, nder, &
-                                qs_kind_set, atomic_kind_set, particle_set, sab_orb, sac_ppl, &
-                                nimages, cell_to_index, "HARRIS")
-         END IF
 
-         ! compute the ppnl contribution to the core hamiltonian ***
-         eps_ppnl = dft_control%qs_control%eps_ppnl
-         IF (ASSOCIATED(sap_ppnl)) THEN
-            CALL build_core_ppnl(ec_env%matrix_h, ec_env%matrix_p, force, virial, calculate_forces, use_virial, nder, &
-                                 qs_kind_set, atomic_kind_set, particle_set, sab_orb, sap_ppnl, eps_ppnl, &
-                                 nimages, cell_to_index, "HARRIS")
-         END IF
 
-      END IF
+    WRITE(*,*) "Forces LEAVING ec_build_core_hamiltonian"  
+    CALL ec_write_forces(qs_env, calculate_forces)
+
 
 !     !---------------------------------------------------------------------------------------
 !      IF (calculate_forces) THEN
