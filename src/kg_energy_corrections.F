@@ -8,6 +8,7 @@
 !>        Kim-Gordon calculation
 !> \par History
 !>       03.2014 created
+!>       04.2018 Fabian Belleflamme - adding forces
 !> \author JGH
 ! **************************************************************************************************
 MODULE kg_energy_corrections
@@ -101,6 +102,7 @@ MODULE kg_energy_corrections
    USE qs_rho_types,                    ONLY: qs_rho_create,&
                                               qs_rho_get,&
                                               qs_rho_release,&
+                                              qs_rho_set,&
                                               qs_rho_type
    USE qs_vxc,                          ONLY: qs_vxc_create
    USE task_list_methods,               ONLY: generate_qs_task_list
@@ -141,7 +143,6 @@ MODULE kg_energy_corrections
    ! make this subr avail for external use 
    PUBLIC :: ec_build_core_hamiltonian
    PUBLIC :: ec_build_ks_matrix
-   !PUBLIC :: ec_mo
    PUBLIC :: ec_calculate_w_matrix
 
 CONTAINS
@@ -171,13 +172,8 @@ CONTAINS
       ! 
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_w   
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
-      !TYPE(dft_control_type), POINTER                    :: dft_control
-      !INTEGER                                            :: ispin, nspins
-      !TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+      TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(cp_para_env_type), POINTER                    :: para_env
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       ::  rho_ao
-      TYPE(qs_rho_type), POINTER                         :: rho
-      
 
 !      WRITE(*,*) "kg_energy_correction - ENTERING"
       CALL timeset(routineN, handle)
@@ -221,18 +217,6 @@ CONTAINS
             WRITE (unit_nr, '(T2,A,A,A,A,A)') "!", REPEAT("-", 27), " KG energy correction ", REPEAT("-", 28), "!"
          END IF
 
-
-        ! fbelle
-        ! store old rho (before energy correction) 
-        CALL get_qs_env(qs_env,rho=rho)
-        CALL qs_rho_create(ec_env%old_rho)
-        CALL duplicate_rho_type(rho_input=rho, &
-                                rho_output=ec_env%old_rho, &
-                                qs_env=qs_env)
-
-       WRITE(*,*) "ASSOCIATED(ec_env%old_rho)", ASSOCIATED(ec_env%old_rho)
-
-
          ! build neighbor and task lists
          CALL ec_build_neighborlist(qs_env, ec_env)
          CALL ec_build_core_hamiltonian(qs_env, ec_env, my_calc_forces)
@@ -249,28 +233,7 @@ CONTAINS
          END IF
          CALL ec_ks_solver(qs_env, ec_env)
 
-      !------------------------------------------------------------------------
-      !fbelle 
-      CALL get_qs_env(qs_env,rho=rho)
-      CALL qs_rho_get(rho, rho_ao_kp=rho_ao)
-      
-      WRITE(*,*) "kg_energy_correction - BEFORE calculate_atomic_block_dm - rho_ao "
-      WRITE(*,*) "ASSOCIATED(rho_ao)", ASSOCIATED(rho_ao)
-      IF(ASSOCIATED(rho_ao)) THEN
-          CALL dbcsr_print(rho_ao(1,1)%matrix)
-      END IF
-      WRITE(*,*) "ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
-      IF(ASSOCIATED(ec_env%matrix_p)) THEN
-          CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
-      END IF
-      !------------------------------------------------------------------------
-
-
-
          CALL ec_energy(qs_env, ec_env, unit_nr)
-
-
-
 
 !         ! print density matrix after kg_energy_correction 
 !         WRITE(*,*) "kg_energy_correction - LEAVING - ec_env%matrix_p"
@@ -301,7 +264,6 @@ CONTAINS
 
       END IF
 
-       WRITE(*,*) "2ASSOCIATED(ec_env%old_rho)", ASSOCIATED(ec_env%old_rho)
       CALL timestop(handle)
 
    END SUBROUTINE kg_energy_correction
@@ -487,36 +449,11 @@ CONTAINS
       NULLIFY (cell_to_index, virial)
       use_virial = .FALSE.
 
-!     !---------------------------------------------------------------------------------------
-!      IF (calculate_forces) THEN
-!      
-!         WRITE(*,*) "Forces ec_build_core_hamiltonian BEFORE core_ppl "  
-!      
-!      !needs this somehow
-!      CALL get_qs_env(qs_env=qs_env, force=force)
-!      
-!      fmtstr2 = "(/,(T2,I5,4X,I4,T18,A,T34,3F  .  ))"
-!      WRITE (UNIT=fmtstr2(32:33), FMT="(I2)") ndigits
-!      WRITE (UNIT=fmtstr2(29:30), FMT="(I2)") ndigits+6
-!      
-!         DO iatom = 1, natom
-!            ikind = kind_of(iatom)
-!            i = atom_of_kind(iatom)
-!            WRITE (UNIT=6, FMT=fmtstr2) &
-!               iatom, ikind, "       overlap", force(ikind)%overlap(1:3, i), &
-!               iatom, ikind, "       kinetic", force(ikind)%kinetic(1:3, i), &
-!               iatom, ikind, "       gth_ppl", force(ikind)%gth_ppl(1:3, i), &
-!               iatom, ikind, "      gth_nlcc", force(ikind)%gth_nlcc(1:3, i), &
-!               iatom, ikind, "      gth_ppnl", force(ikind)%gth_ppnl(1:3, i), &
-!               iatom, ikind, "  core_overlap", force(ikind)%core_overlap(1:3, i), &
-!               iatom, ikind, "    dispersion", force(ikind)%dispersion(1:3, i), &
-!               iatom, ikind, "         total", force(ikind)%total(1:3, i)
-!            grand_total(1:3) = grand_total(1:3)+force(ikind)%total(1:3, i)
-!         END DO
-!     
-!      ENDIF
-!      !---------------------------------------------------------------------------------------
 
+      
+      
+!    WRITE(*,*) "Forces ec_build_core_hamiltonian BEFORE core_ppl "  
+!    CALL ec_write_forces(qs_env, calculate_forces)
 
        IF (ASSOCIATED(sac_ppl)) THEN
           CALL build_core_ppl(ec_env%matrix_h, ec_env%matrix_p, force, virial, calculate_forces, use_virial, nder, &
@@ -536,39 +473,8 @@ CONTAINS
 
 
     WRITE(*,*) "Forces LEAVING ec_build_core_hamiltonian"  
-    CALL ec_write_forces(qs_env, calculate_forces)
+!    CALL ec_write_forces(qs_env, calculate_forces)
 
-
-!     !---------------------------------------------------------------------------------------
-!      IF (calculate_forces) THEN
-!      
-!         WRITE(*,*) "Forces LEAVING ec_build_core_hamiltonian"  
-!      
-!      !needs this somehow
-!      CALL get_qs_env(qs_env=qs_env, force=force)
-!      
-!      fmtstr2 = "(/,(T2,I5,4X,I4,T18,A,T34,3F  .  ))"
-!      WRITE (UNIT=fmtstr2(32:33), FMT="(I2)") ndigits
-!      WRITE (UNIT=fmtstr2(29:30), FMT="(I2)") ndigits+6
-!      
-!         DO iatom = 1, natom
-!            ikind = kind_of(iatom)
-!            i = atom_of_kind(iatom)
-!            WRITE (UNIT=6, FMT=fmtstr2) &
-!               iatom, ikind, "       overlap", force(ikind)%overlap(1:3, i), &
-!               iatom, ikind, "       kinetic", force(ikind)%kinetic(1:3, i), &
-!               iatom, ikind, "       gth_ppl", force(ikind)%gth_ppl(1:3, i), &
-!               iatom, ikind, "      gth_nlcc", force(ikind)%gth_nlcc(1:3, i), &
-!               iatom, ikind, "      gth_ppnl", force(ikind)%gth_ppnl(1:3, i), &
-!               iatom, ikind, "  core_overlap", force(ikind)%core_overlap(1:3, i), &
-!               iatom, ikind, "    dispersion", force(ikind)%dispersion(1:3, i), &
-!               iatom, ikind, "         total", force(ikind)%total(1:3, i)
-!            grand_total(1:3) = grand_total(1:3)+force(ikind)%total(1:3, i)
-!         END DO
-!     
-!      ENDIF
-!      !---------------------------------------------------------------------------------------
-!
 !      !--------------------------------------------------------------------------
 ! 
 !        WRITE(*,*) "Energy - LEAVING ec_build_core_hamiltonian" 
