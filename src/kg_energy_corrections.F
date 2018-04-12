@@ -172,7 +172,6 @@ CONTAINS
       ! 
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_w   
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
-      TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(cp_para_env_type), POINTER                    :: para_env
 
 !      WRITE(*,*) "kg_energy_correction - ENTERING"
