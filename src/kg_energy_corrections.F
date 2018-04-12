@@ -8,7 +8,7 @@
 !>        Kim-Gordon calculation
 !> \par History
 !>       03.2014 created
-!>       04.2018 Fabian Belleflamme - adding forces
+!>       02.2018 Fabian Belleflamme - adding forces
 !> \author JGH
 ! **************************************************************************************************
 MODULE kg_energy_corrections
@@ -144,6 +144,7 @@ MODULE kg_energy_corrections
    PUBLIC :: ec_build_core_hamiltonian
    PUBLIC :: ec_build_ks_matrix
    PUBLIC :: ec_calculate_w_matrix
+   PUBLIC :: ec_ks_solver
 
 CONTAINS
 
@@ -664,6 +665,8 @@ CONTAINS
 
          !CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
          
+         ! fbelle 
+         ! added pmat to integrate_v_rspace
          CALL integrate_v_rspace(v_rspace=v_rspace(ispin), &
                                  pmat=ec_env%matrix_p(ispin, 1), &
                                  hmat=ec_env%matrix_ks(ispin, 1), &
@@ -674,7 +677,6 @@ CONTAINS
                                  task_list_external=ec_env%task_list)
          END IF
 
- ! fbelle pssst, added pmat to integrate_v_rspace
 
 
          IF (ASSOCIATED(v_tau_rspace)) THEN
