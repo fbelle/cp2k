@@ -97,24 +97,24 @@ CONTAINS
              i = atom_of_kind(iatom)
              WRITE (UNIT=6, FMT=fmtstr2) &
                 iatom, ikind, "       overlap", force(ikind)%overlap(1:3, i), &
-                iatom, ikind, "  overlap_admm", force(ikind)%overlap_admm(1:3, i), &
+!                iatom, ikind, "  overlap_admm", force(ikind)%overlap_admm(1:3, i), &
                 iatom, ikind, "       kinetic", force(ikind)%kinetic(1:3, i), &
                 iatom, ikind, "       gth_ppl", force(ikind)%gth_ppl(1:3, i), &
-                iatom, ikind, "      gth_nlcc", force(ikind)%gth_nlcc(1:3, i), &
-                iatom, ikind, "      gth_ppnl", force(ikind)%gth_ppnl(1:3, i), &
+ !               iatom, ikind, "      gth_nlcc", force(ikind)%gth_nlcc(1:3, i), &
+!               iatom, ikind, "      gth_ppnl", force(ikind)%gth_ppnl(1:3, i), &
                 iatom, ikind, "  core_overlap", force(ikind)%core_overlap(1:3, i), &
                 iatom, ikind, "      rho_core", force(ikind)%rho_core(1:3, i), &
                 iatom, ikind, "      rho_elec", force(ikind)%rho_elec(1:3, i), &
-                iatom, ikind, "      rho_lri_elec", force(ikind)%rho_lri_elec(1:3, i), &
+!                iatom, ikind, "      rho_lri_elec", force(ikind)%rho_lri_elec(1:3, i), &
                 iatom, ikind, "      ch_pulay", force(ikind)%ch_pulay(1:3, i), &
                 iatom, ikind, "    dispersion", force(ikind)%dispersion(1:3, i), &
                 iatom, ikind, "         other", force(ikind)%other(1:3, i), &
-                iatom, ikind, "       fock_4c", force(ikind)%fock_4c(1:3, i), &
-                iatom, ikind, "     ehrenfest", force(ikind)%ehrenfest(1:3, i), &
-                iatom, ikind, "        efield", force(ikind)%efield(1:3, i), &
-                iatom, ikind, "           eev", force(ikind)%eev(1:3, i), &
-                iatom, ikind, "   mp2_non_sep", force(ikind)%mp2_non_sep(1:3, i), &
-                iatom, ikind, "       mp2_sep", force(ikind)%mp2_sep(1:3, i), &
+!                iatom, ikind, "       fock_4c", force(ikind)%fock_4c(1:3, i), &
+!                iatom, ikind, "     ehrenfest", force(ikind)%ehrenfest(1:3, i), &
+!                iatom, ikind, "        efield", force(ikind)%efield(1:3, i), &
+!                iatom, ikind, "           eev", force(ikind)%eev(1:3, i), &
+!                iatom, ikind, "   mp2_non_sep", force(ikind)%mp2_non_sep(1:3, i), &
+!                iatom, ikind, "       mp2_sep", force(ikind)%mp2_sep(1:3, i), &
                 iatom, ikind, "         total", force(ikind)%total(1:3, i)
              grand_total(1:3) = grand_total(1:3)+force(ikind)%total(1:3, i)
           END DO
