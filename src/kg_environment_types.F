@@ -87,6 +87,7 @@ MODULE kg_environment_types
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_t
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_p
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_w
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_delta
       
       ! reduce basis
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER     :: mao_coef
@@ -233,6 +234,7 @@ CONTAINS
          IF (ASSOCIATED(kg_env%ec_env%matrix_t)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_t)
          IF (ASSOCIATED(kg_env%ec_env%matrix_p)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_p)
          IF (ASSOCIATED(kg_env%ec_env%matrix_w)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_w)
+         IF (ASSOCIATED(kg_env%ec_env%matrix_delta)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_delta)
          IF (ASSOCIATED(kg_env%ec_env%task_list)) THEN
             CALL deallocate_task_list(kg_env%ec_env%task_list)
          END IF
