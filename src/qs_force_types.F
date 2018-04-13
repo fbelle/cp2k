@@ -356,23 +356,29 @@ CONTAINS
 !> \param atomic_kind_set ...
 !> \par History
 !>      07.2014 JGH
+!>      04.2018 fbelle : added functionaliy needed for Harris functional force calculations
 !> \author JGH
 ! **************************************************************************************************
-   SUBROUTINE add_qs_force(force, qs_force, forcetype, atomic_kind_set)
+   SUBROUTINE add_qs_force(force, qs_force, forcetype, atomic_kind_set, alpha)
 
       REAL(KIND=dp), DIMENSION(:, :), INTENT(IN)         :: force
       TYPE(qs_force_type), DIMENSION(:), POINTER         :: qs_force
       CHARACTER(LEN=*), INTENT(IN)                       :: forcetype
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      REAL(KIND=dp), INTENT(in), OPTIONAL                :: alpha
 
       CHARACTER(len=*), PARAMETER :: routineN = 'add_qs_force', routineP = moduleN//':'//routineN
 
       INTEGER                                            :: ia, iatom, ikind, natom_kind
       TYPE(atomic_kind_type), POINTER                    :: atomic_kind
+      REAL(KIND=dp)                                      :: my_alpha
 
 !   ------------------------------------------------------------------------
 
       CPASSERT(ASSOCIATED(qs_force))
+
+      my_alpha = 1.0_dp
+      IF (PRESENT(alpha)) my_alpha = alpha
 
       SELECT CASE (forcetype)
       CASE ("overlap_admm")
@@ -384,6 +390,17 @@ CONTAINS
                qs_force(ikind)%overlap_admm(:, ia) = qs_force(ikind)%overlap_admm(:, ia)+force(:, iatom)
             END DO
          END DO
+
+      CASE ("ec_nsc_force")
+         DO ikind = 1, SIZE(atomic_kind_set, 1)
+            atomic_kind => atomic_kind_set(ikind)
+            CALL get_atomic_kind(atomic_kind=atomic_kind, natom=natom_kind)
+            DO ia = 1, natom_kind
+               iatom = atomic_kind%atom_list(ia)
+               qs_force(ikind)%rho_elec(:, ia) = qs_force(ikind)%rho_elec(:, ia) + alpha*force(:, iatom)
+            END DO
+         END DO
+
       CASE DEFAULT
          CPABORT("")
       END SELECT
