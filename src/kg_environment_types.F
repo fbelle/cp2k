@@ -35,6 +35,8 @@ MODULE kg_environment_types
                                               qs_rho_get,&
                                               qs_rho_release,&
                                               qs_rho_type
+   USE qs_force_types,                  ONLY: deallocate_qs_force,&
+                                              qs_force_type
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -95,6 +97,8 @@ MODULE kg_environment_types
       ! store old rho
       TYPE(qs_rho_type), POINTER                    :: old_rho
 
+      ! store force environment 
+      TYPE(qs_force_type), DIMENSION(:), POINTER    :: force
 
    END TYPE energy_correction_type
 
@@ -247,6 +251,9 @@ CONTAINS
          IF (ASSOCIATED(kg_env%ec_env%old_rho)) THEN
             CALL qs_rho_release(kg_env%ec_env%old_rho)
          END IF
+
+         ! force environment 
+         IF (ASSOCIATED(kg_env%force)) CALL deallocate_qs_force(kg_env%force)
       END IF
 
       DEALLOCATE (kg_env)
