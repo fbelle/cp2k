@@ -169,7 +169,7 @@ CONTAINS
       NULLIFY (kg_env%lri_density)
       NULLIFY (kg_env%ec_env%sab_orb, kg_env%ec_env%sac_ppl, kg_env%ec_env%sap_ppnl)
       NULLIFY (kg_env%ec_env%matrix_ks, kg_env%ec_env%matrix_h, kg_env%ec_env%matrix_s)
-      NULLIFY (kg_env%ec_env%matrix_t, kg_env%ec_env%matrix_p, lg_env%ec_env%matrix_w)
+      NULLIFY (kg_env%ec_env%matrix_t, kg_env%ec_env%matrix_p, kg_env%ec_env%matrix_w)
       NULLIFY (kg_env%ec_env%matrix_delta)
       NULLIFY (kg_env%ec_env%task_list)
       NULLIFY (kg_env%ec_env%mao_coef)
