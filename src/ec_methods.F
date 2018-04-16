@@ -30,9 +30,9 @@ MODULE ec_methods
    PRIVATE
 
    LOGICAL, PARAMETER :: debug_this_module = .TRUE.
-   CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_ks_methods'
+   CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'ec_methods'
 
-   PUBLIC :: ec_write_forces 
+   PUBLIC :: ec_write_forces, ec_write_forces2 
 
 CONTAINS
 
@@ -42,9 +42,10 @@ CONTAINS
 !> \date    03.2018
 !> \author  Fabian Belleflamme
 ! **************************************************************************************************
-  SUBROUTINE ec_write_forces(qs_env, calculate_forces)
+  SUBROUTINE ec_write_forces(qs_env, force, calculate_forces)
 
     TYPE(qs_environment_type), POINTER                 :: qs_env
+    TYPE(qs_force_type), DIMENSION(:), POINTER         :: force
     LOGICAL                                            :: calculate_forces 
 
     CHARACTER(len=*), PARAMETER :: routineN = 'qs_forces', routineP = moduleN//':'//routineN
@@ -52,7 +53,6 @@ CONTAINS
     INTEGER                                            :: handle
     TYPE(cp_logger_type), POINTER                      :: logger
     TYPE(cp_para_env_type), POINTER                    :: para_env
-    TYPE(qs_force_type), DIMENSION(:), POINTER         :: force
     !fbelle
     CHARACTER(LEN=35)                                  :: fmtstr2
     REAL(KIND=dp), DIMENSION(3)                        :: grand_total
@@ -73,7 +73,7 @@ CONTAINS
     
        
        !needs this somehow
-       CALL get_qs_env(qs_env=qs_env, force=force)
+       CALL get_qs_env(qs_env=qs_env)
        
        ! get atom mapping
        NULLIFY (atomic_kind_set)
@@ -90,7 +90,7 @@ CONTAINS
        WRITE (UNIT=fmtstr2(32:33), FMT="(I2)") ndigits
        WRITE (UNIT=fmtstr2(29:30), FMT="(I2)") ndigits+6
        
-       !grand_total(:) = 0.0_dp
+       grand_total(:) = 0.0_dp
        
           DO iatom = 1, natom
              ikind = kind_of(iatom)
@@ -100,8 +100,8 @@ CONTAINS
 !                iatom, ikind, "  overlap_admm", force(ikind)%overlap_admm(1:3, i), &
                 iatom, ikind, "       kinetic", force(ikind)%kinetic(1:3, i), &
                 iatom, ikind, "       gth_ppl", force(ikind)%gth_ppl(1:3, i), &
- !               iatom, ikind, "      gth_nlcc", force(ikind)%gth_nlcc(1:3, i), &
-!               iatom, ikind, "      gth_ppnl", force(ikind)%gth_ppnl(1:3, i), &
+                iatom, ikind, "      gth_nlcc", force(ikind)%gth_nlcc(1:3, i), &
+                iatom, ikind, "      gth_ppnl", force(ikind)%gth_ppnl(1:3, i), &
                 iatom, ikind, "  core_overlap", force(ikind)%core_overlap(1:3, i), &
                 iatom, ikind, "      rho_core", force(ikind)%rho_core(1:3, i), &
                 iatom, ikind, "      rho_elec", force(ikind)%rho_elec(1:3, i), &
@@ -127,5 +127,94 @@ CONTAINS
 
   END SUBROUTINE ec_write_forces
 
+
+! **************************************************************************************************
+!> \brief   Simplified from qs_force.F write_forces 
+!> \param qs_env ...
+!> \param qs_force ...
+!> \date    04.2018
+!> \author  fbelle
+! **************************************************************************************************
+   SUBROUTINE ec_write_forces2(qs_env, qs_force)
+!   SUBROUTINE ec_write_forces2(qs_force, atomic_kind_set, ftype, output_unit, print_section)
+
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(qs_force_type), DIMENSION(:), POINTER         :: qs_force
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_write_forces2', routineP = moduleN//':'//routineN
+
+      CHARACTER(LEN=35)                                  :: fmtstr2
+      CHARACTER(LEN=48)                                  :: fmtstr1
+      INTEGER                                            :: i, iatom, ikind, natom, ndigits
+      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: atom_of_kind, kind_of
+      REAL(KIND=dp), DIMENSION(3)                        :: grand_total
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+
+
+      IF (.NOT. ASSOCIATED(qs_force)) THEN
+         CALL cp_abort(__LOCATION__, &
+                       "The qs_force pointer is not associated "// &
+                       "and cannot be printed")
+      END IF
+
+
+      ! get atom mapping
+      NULLIFY (atomic_kind_set)
+      CALL get_qs_env(qs_env, atomic_kind_set=atomic_kind_set)
+
+      CALL get_atomic_kind_set(atomic_kind_set=atomic_kind_set, &
+                               natom=natom)
+      ALLOCATE (atom_of_kind(natom))
+      ALLOCATE (kind_of(natom))
+      CALL get_atomic_kind_set(atomic_kind_set=atomic_kind_set, &
+                               atom_of_kind=atom_of_kind, &
+                               kind_of=kind_of)
+
+      ! Variable precision output of the forces
+      ndigits=6
+
+      fmtstr1 = "(/,/,T2,A,/,/,T3,A,T11,A,T23,A,T40,A1,2(  X,A1))"
+      WRITE (UNIT=fmtstr1(41:42), FMT="(I2)") ndigits+5
+
+      fmtstr2 = "(/,(T2,I5,4X,I4,T18,A,T34,3F  .  ))"
+      WRITE (UNIT=fmtstr2(32:33), FMT="(I2)") ndigits
+      WRITE (UNIT=fmtstr2(29:30), FMT="(I2)") ndigits+6
+
+      WRITE (UNIT=6, FMT=fmtstr1) &
+         "FORCES [a.u.]", "Atom", "Kind", "Component", "X", "Y", "Z"
+
+      grand_total(:) = 0.0_dp
+
+      DO iatom = 1, natom
+         ikind = kind_of(iatom)
+         i = atom_of_kind(iatom)
+         WRITE (UNIT=6, FMT=fmtstr2) &
+            iatom, ikind, "       overlap", qs_force(ikind)%overlap(1:3, i), &
+            iatom, ikind, "  overlap_admm", qs_force(ikind)%overlap_admm(1:3, i), &
+            iatom, ikind, "       kinetic", qs_force(ikind)%kinetic(1:3, i), &
+            iatom, ikind, "       gth_ppl", qs_force(ikind)%gth_ppl(1:3, i), &
+            iatom, ikind, "      gth_nlcc", qs_force(ikind)%gth_nlcc(1:3, i), &
+            iatom, ikind, "      gth_ppnl", qs_force(ikind)%gth_ppnl(1:3, i), &
+            iatom, ikind, "  core_overlap", qs_force(ikind)%core_overlap(1:3, i), &
+            iatom, ikind, "      rho_core", qs_force(ikind)%rho_core(1:3, i), &
+            iatom, ikind, "      rho_elec", qs_force(ikind)%rho_elec(1:3, i), &
+            iatom, ikind, "      rho_lri_elec", qs_force(ikind)%rho_lri_elec(1:3, i), &
+            iatom, ikind, "      ch_pulay", qs_force(ikind)%ch_pulay(1:3, i), &
+            iatom, ikind, "    dispersion", qs_force(ikind)%dispersion(1:3, i), &
+            iatom, ikind, "         other", qs_force(ikind)%other(1:3, i), &
+            iatom, ikind, "       fock_4c", qs_force(ikind)%fock_4c(1:3, i), &
+            iatom, ikind, "     ehrenfest", qs_force(ikind)%ehrenfest(1:3, i), &
+            iatom, ikind, "        efield", qs_force(ikind)%efield(1:3, i), &
+            iatom, ikind, "           eev", qs_force(ikind)%eev(1:3, i), &
+            iatom, ikind, "   mp2_non_sep", qs_force(ikind)%mp2_non_sep(1:3, i), &
+            iatom, ikind, "       mp2_sep", qs_force(ikind)%mp2_sep(1:3, i), &
+            iatom, ikind, "         total", qs_force(ikind)%total(1:3, i)
+         grand_total(1:3) = grand_total(1:3)+qs_force(ikind)%total(1:3, i)
+      END DO
+
+      DEALLOCATE (atom_of_kind)
+      DEALLOCATE (kind_of)
+
+   END SUBROUTINE ec_write_forces2
 
 END MODULE ec_methods
