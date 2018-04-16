@@ -176,6 +176,7 @@ CONTAINS
       NULLIFY (kg_env%ec_env%dispersion_env)
       NULLIFY (kg_env%ec_env%xc_section)
       NULLIFY (kg_env%ec_env%old_rho)
+      NULLIFY (kg_env%ec_env%force)
 
       kg_env%ec_env%mao = .FALSE.
 
@@ -205,6 +206,12 @@ CONTAINS
                                    i_val=kg_env%ec_env%mao_max_iter)
          CALL section_vals_val_get(input, "DFT%KG_METHOD%ENERGY_CORRECTION%MAO_EPS_GRAD", &
                                    r_val=kg_env%ec_env%mao_eps_grad)
+
+! fbelle cp_subsys_create 
+!      my_force_env_section => section_vals_get_subs_vals(root_section, "FORCE_EVAL")
+!      IF (PRESENT(force_env_section)) &
+!         my_force_env_section => force_env_section
+
 
          ! set basis
          nkind = SIZE(qs_kind_set)
