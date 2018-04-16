@@ -53,9 +53,11 @@ MODULE qs_force_types
 
    PUBLIC :: allocate_qs_force, &
              add_qs_force, &
+             qs_copy_force,&
              deallocate_qs_force, &
              replicate_qs_force, &
              zero_qs_force
+            
 
 CONTAINS
 
@@ -406,5 +408,131 @@ CONTAINS
       END SELECT
 
    END SUBROUTINE add_qs_force
+
+
+! **************************************************************************************************
+!> \brief copy existing force environment
+!> \param force_out - output force environment
+!> \param force_in - input force environment
+!> \par History
+!>      04.2018 fbelle : added functionaliy needed for Harris functional force calculations
+!> \author JGH
+! **************************************************************************************************
+   SUBROUTINE qs_copy_force(force_out, force_in)
+
+      TYPE(qs_force_type), DIMENSION(:), INTENT(INOUT), POINTER &
+                                                         :: force_out
+      TYPE(qs_force_type), DIMENSION(:), INTENT(IN), POINTER &
+                                                         :: force_in
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'qs_copy_force', routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: ikind, nkind
+    
+      CPASSERT(ASSOCIATED(force_out) .OR. ASSOCIATED(force_in))
+    
+      
+      nkind = SIZE(force_in)
+
+      DO ikind = 1, nkind
+
+         IF (ASSOCIATED(force_in(ikind)%all_potential)) THEN
+            force_out(ikind)%all_potential(:,:) = force_in(ikind)%all_potential(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%core_overlap)) THEN
+            force_out(ikind)%core_overlap(:,:) = force_in(ikind)%core_overlap(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%gth_ppl)) THEN
+            force_out(ikind)%gth_ppl(:,:) = force_in(ikind)%gth_ppl(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%gth_nlcc)) THEN
+            force_out(ikind)%gth_nlcc(:,:) = force_in(ikind)%gth_nlcc(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%gth_ppnl)) THEN
+            force_out(ikind)%gth_ppnl(:,:) = force_in(ikind)%gth_ppnl(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%kinetic)) THEN
+            force_out(ikind)%kinetic(:,:) = force_in(ikind)%kinetic(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%overlap)) THEN
+            force_out(ikind)%overlap(:,:) = force_in(ikind)%overlap(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%overlap_admm)) THEN
+            force_out(ikind)%overlap_admm(:,:) = force_in(ikind)%overlap_admm(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%rho_core)) THEN
+            force_out(ikind)%rho_core(:,:) = force_in(ikind)%rho_core(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%rho_elec)) THEN
+            force_out(ikind)%rho_elec(:,:) = force_in(ikind)%rho_elec(:,:)
+         END IF
+         
+         IF (ASSOCIATED(force_in(ikind)%rho_lri_elec)) THEN
+            force_out(ikind)%rho_lri_elec(:,:) = force_in(ikind)%rho_lri_elec(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%vhxc_atom)) THEN
+            force_out(ikind)%vhxc_atom(:,:) = force_in(ikind)%vhxc_atom(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%g0s_Vh_elec)) THEN
+            force_out(ikind)%g0s_Vh_elec(:,:) = force_in(ikind)%g0s_Vh_elec(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%repulsive)) THEN
+            force_out(ikind)%repulsive(:,:) = force_in(ikind)%repulsive(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%dispersion)) THEN
+            force_out(ikind)%dispersion(:,:) = force_in(ikind)%dispersion(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%other)) THEN
+            force_out(ikind)%other(:,:) = force_in(ikind)%other(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%total)) THEN
+            force_out(ikind)%total(:,:) = force_in(ikind)%total(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%ch_pulay)) THEN
+            force_out(ikind)%ch_pulay(:,:) = force_out(ikind)%ch_pulay(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%fock_4c)) THEN
+            force_out(ikind)%fock_4c(:,:) = force_out(ikind)%fock_4c(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%mp2_sep)) THEN
+            force_out(ikind)%mp2_sep(:,:) = force_out(ikind)%mp2_sep(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%mp2_non_sep)) THEN
+            force_out(ikind)%mp2_non_sep(:,:) = force_out(ikind)%mp2_non_sep(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%ehrenfest)) THEN
+            force_out(ikind)%ehrenfest(:,:) = force_in(ikind)%ehrenfest(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%efield)) THEN
+            force_out(ikind)%efield(:,:) = force_in(ikind)%efield(:,:)
+         END IF
+
+         IF (ASSOCIATED(force_in(ikind)%eev)) THEN
+            force_out(ikind)%eev(:,:) = force_in(ikind)%eev(:,:)
+         END IF
+      END DO
+
+   END SUBROUTINE qs_copy_force
 
 END MODULE qs_force_types
