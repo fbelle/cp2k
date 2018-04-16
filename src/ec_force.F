@@ -71,6 +71,7 @@ MODULE ec_force
    USE qs_external_potential,           ONLY: external_c_potential,&
                                               external_e_potential
    USE qs_force_types,                  ONLY: allocate_qs_force,&
+                                              qs_copy_force,&
                                               qs_force_type,&
                                               replicate_qs_force,&
                                               zero_qs_force
@@ -123,7 +124,8 @@ MODULE ec_force
                                               REALSPACE,&
                                               RECIPROCALSPACE,&
                                               pw_p_type
-   USE ec_methods,                      ONLY: ec_write_forces                                           
+   USE ec_methods,                      ONLY: ec_write_forces,&                                           
+                                              ec_write_forces2                                           
    USE qs_ks_utils,                     ONLY: print_densities
    USE qs_integrate_potential,          ONLY: integrate_v_rspace
    USE qs_rho_methods,                  ONLY: duplicate_rho_type                                           
@@ -140,7 +142,7 @@ MODULE ec_force
 
 ! *** Public subroutines ***
 
-   PUBLIC :: ec_forces, ec_nsc_force, ec_write_forces
+   PUBLIC :: ec_forces, ec_nsc_force
 
 CONTAINS
 
@@ -171,11 +173,22 @@ CONTAINS
     TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: rho_ao
     TYPE(qs_rho_type), POINTER                         :: rho
     TYPE(dft_control_type), POINTER                    :: dft_control
-    INTEGER                                            :: ispin, nspins
+    INTEGER                                            :: ispin, nspins, nkind
     TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho_g, rho_r
-    TYPE(pw_p_type), DIMENSION(:), POINTER             :: old_rho_r, old_rho_g
+!    TYPE(pw_p_type), DIMENSION(:), POINTER             :: old_rho_r, old_rho_g
     TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: old_rho_ao
-    
+    INTEGER, ALLOCATABLE, DIMENSION(:)                 :: natom_of_kind
+    TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+    !fbelle
+!    TYPE(qs_force_type), DIMENSION(:), POINTER         :: ec_force
+!    INTEGER                                            :: natom
+    TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+
+
+!!---------------------------------------------------------------------------------------
+!!  Initial general setup
+!!---------------------------------------------------------------------------------------
+
     logger => cp_get_default_logger()
     
     CALL timeset(routineN//"_forces", handle)
@@ -189,7 +202,7 @@ CONTAINS
     calculate_forces = .TRUE.
     
     ! get qs and kg environment
-    NULLIFY (para_env, rho_ao, old_rho_ao)
+    NULLIFY (para_env, rho_ao, old_rho_ao, dft_control)
     CALL get_qs_env(qs_env=qs_env, kg_env=kg_env, dft_control=dft_control, para_env=para_env)
 
     !shortcut to ec_type
@@ -197,12 +210,33 @@ CONTAINS
     ec_env => kg_env%ec_env
     nspins = dft_control%nspins
 
-    ! store old rho (before energy correction) 
+
+    ! Introduce new ec_env%force type to store forces and prevent overwriting
+    !    especially to rho_elec
+    ! get atom mapping
+    NULLIFY (atomic_kind_set)
+    CALL get_qs_env(qs_env, atomic_kind_set=atomic_kind_set, particle_set=particle_set)
+
+    IF (.NOT. ASSOCIATED(ec_env%force)) THEN
+       nkind = SIZE(atomic_kind_set)
+       ALLOCATE (natom_of_kind(nkind))
+       CALL get_atomic_kind_set(atomic_kind_set=atomic_kind_set, &
+                                natom_of_kind=natom_of_kind)
+       CALL allocate_qs_force(ec_env%force, natom_of_kind)
+       DEALLOCATE (natom_of_kind)
+    END IF
+    CALL zero_qs_force(ec_env%force)
+
+    ! store old rho (before energy correction)
+    ! after kg_energy_correction rho_structure is not updated
+    ! only new density matrix : ec_env%matrix_p 
     CALL get_qs_env(qs_env,rho=rho)
     CALL qs_rho_get(rho, rho_ao_kp=rho_ao, rho_r=rho_r, rho_g=rho_g)
     CALL qs_rho_create(ec_env%old_rho)
 
-    ! copy rho structure, alret, sets density matrix to 0 
+    ! copy rho structure, alert, sets density matrix to zero
+    ! rho_in  = rho
+    ! rho_out = ec_env%old_rho
     CALL duplicate_rho_type(rho, ec_env%old_rho, qs_env)
                    
     ! duplicate_rho_types doesnt copy density matrix ...
@@ -211,60 +245,9 @@ CONTAINS
        CALL dbcsr_copy(old_rho_ao(ispin,1)%matrix, rho_ao(ispin,1)%matrix, keep_sparsity=.FALSE.)
     END DO
 
-!      !------------------------------------------------------------------------
-!      !fbelle 
-!      CALL get_qs_env(qs_env,rho=rho)
-!      CALL qs_rho_get(rho, rho_ao_kp=rho_ao)
-!     
-!      WRITE(*,*) repeat("-",80)  
-!      WRITE(*,*) "ec_forces - BEFORE rho_ao update "
-!
-!      ! RHO OUTPUT
-!      CALL qs_rho_get(rho, rho_ao_kp=rho_ao, rho_r=rho_r, rho_g=rho_g)
-!      WRITE(*,*) "rho_r%pw%in_use", rho_r(1)%pw%in_use
-!      WRITE(*,*) "rho_r(1)%pw%cr3d(1,1,1)", rho_r(1)%pw%cr3d(1,1,1)
-!      WRITE(*,*) "rho_r(1)%pw%cr3d(1,1,2)", rho_r(1)%pw%cr3d(1,1,2)
-!      WRITE(*,*) "rho_r(1)%pw%cr3d(1,1,3)", rho_r(1)%pw%cr3d(1,1,3)
-!      
-!      WRITE(*,*) "rho_g%pw%in_use", rho_g(1)%pw%in_use
-!      WRITE(*,*) "rho_g(1)%pw%cc(1)", rho_g(1)%pw%cc(1)
-!      WRITE(*,*) "rho_g(1)%pw%cc(2)", rho_g(1)%pw%cc(2)
-!      WRITE(*,*) "rho_g(1)%pw%cc(262144)", rho_g(1)%pw%cc(262144)
-!
-!
-!      WRITE(*,*) "ASSOCIATED(rho_ao)", ASSOCIATED(rho_ao)
-!      IF(ASSOCIATED(rho_ao)) THEN
-!          CALL dbcsr_print(rho_ao(1,1)%matrix)
-!      END IF
-!      WRITE(*,*) "ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
-!      IF(ASSOCIATED(ec_env%matrix_p)) THEN
-!          CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
-!      END IF
-!      
-!      !RHO INPUT
-!      CALL qs_rho_get(ec_env%old_rho, rho_r=old_rho_r, rho_g=old_rho_g, rho_ao_kp=old_rho_ao )
-!      WRITE(*,*) "old_rho_r%pw%in_use",         old_rho_r(1)%pw%in_use
-!      WRITE(*,*) "old_rho_r(1)%pw%cr3d(1,1,1)", old_rho_r(1)%pw%cr3d(1,1,1)
-!      WRITE(*,*) "old_rho_r(1)%pw%cr3d(1,1,2)", old_rho_r(1)%pw%cr3d(1,1,2)
-!      WRITE(*,*) "old_rho_r(1)%pw%cr3d(1,1,3)", old_rho_r(1)%pw%cr3d(1,1,3)
-!      
-!      WRITE(*,*) "old_rho_g%pw%in_use",        old_rho_g(1)%pw%in_use
-!      WRITE(*,*) "old_rho_g(1)%pw%cc(1)",      old_rho_g(1)%pw%cc(1)
-!      WRITE(*,*) "old_rho_g(1)%pw%cc(2)",      old_rho_g(1)%pw%cc(2)
-!      WRITE(*,*) "old_rho_g(1)%pw%cc(262144)", old_rho_g(1)%pw%cc(262144)
-!
-!      WRITE(*,*) "ASSOCIATED(old_rho_ao)", ASSOCIATED(old_rho_ao)
-!      IF(ASSOCIATED(old_rho_ao)) THEN
-!          CALL dbcsr_print(old_rho_ao(1,1)%matrix)
-!      END IF
-!      
-!      WRITE(*,*) repeat("-",80)  
-!      !------------------------------------------------------------------------
-
-    ! before engaging in calculation of force components
-    !update rho_ao with new density matrix of energy correction
-    ! 'rho_in' = old_rho stored at beginning of kg_energy_correction in ec_env%old_rho 
-    ! 'rho_out' = rho 
+    ! update rho strucutre with new density matrix of energy correction
+    ! 'rho_ao_in'  = ec_env%matrix_p 
+    ! 'rho_ao_out' = rho%rho_ao(:,:) 
      
     CALL get_qs_env(qs_env, rho=rho)
     CALL qs_rho_get(rho, rho_ao_kp=rho_ao)
@@ -272,59 +255,9 @@ CONTAINS
        CALL dbcsr_copy(rho_ao(ispin,1)%matrix, ec_env%matrix_p(ispin,1)%matrix ,keep_sparsity=.FALSE.)
     END DO
     
-    ! updates rho_r and rho_g to rho%rho_ao
+    ! updates rho_r and rho_g wrt to new rho%rho_ao
     CALL qs_rho_update_rho(rho, qs_env=qs_env)
 
-      !------------------------------------------------------------------------
-      !fbelle 
-      CALL get_qs_env(qs_env,rho=rho)
-      CALL qs_rho_get(rho, rho_ao_kp=rho_ao)
-     
-      WRITE(*,*) repeat("-",80)  
-      WRITE(*,*) "ec_forces - AFTER rho_ao update "
-
-      ! RHO OUTPUT
-      CALL qs_rho_get(rho, rho_ao_kp=rho_ao, rho_r=rho_r, rho_g=rho_g)
-      WRITE(*,*) "rho_r%pw%in_use", rho_r(1)%pw%in_use
-      WRITE(*,*) "rho_r(1)%pw%cr3d(1,1,1)", rho_r(1)%pw%cr3d(1,1,1)
-      WRITE(*,*) "rho_r(1)%pw%cr3d(1,1,2)", rho_r(1)%pw%cr3d(1,1,2)
-      WRITE(*,*) "rho_r(1)%pw%cr3d(1,1,3)", rho_r(1)%pw%cr3d(1,1,3)
-      
-      WRITE(*,*) "rho_g%pw%in_use", rho_g(1)%pw%in_use
-      WRITE(*,*) "rho_g(1)%pw%cc(1)", rho_g(1)%pw%cc(1)
-      WRITE(*,*) "rho_g(1)%pw%cc(2)", rho_g(1)%pw%cc(2)
-      WRITE(*,*) "rho_g(1)%pw%cc(262144)", rho_g(1)%pw%cc(262144)
-
-
-      WRITE(*,*) "ASSOCIATED(rho_ao)", ASSOCIATED(rho_ao)
-      IF(ASSOCIATED(rho_ao)) THEN
-          CALL dbcsr_print(rho_ao(1,1)%matrix)
-      END IF
-      WRITE(*,*) "ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
-      IF(ASSOCIATED(ec_env%matrix_p)) THEN
-          CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
-      END IF
-      
-      !RHO INPUT
-      CALL qs_rho_get(rho_struct=ec_env%old_rho, rho_r=old_rho_r, rho_g=old_rho_g, rho_ao_kp=old_rho_ao )
-      WRITE(*,*) "old_rho_r%pw%in_use",         old_rho_r(1)%pw%in_use
-      WRITE(*,*) "old_rho_r(1)%pw%cr3d(1,1,1)", old_rho_r(1)%pw%cr3d(1,1,1)
-      WRITE(*,*) "old_rho_r(1)%pw%cr3d(1,1,2)", old_rho_r(1)%pw%cr3d(1,1,2)
-      WRITE(*,*) "old_rho_r(1)%pw%cr3d(1,1,3)", old_rho_r(1)%pw%cr3d(1,1,3)
-      
-      WRITE(*,*) "old_rho_g%pw%in_use",        old_rho_g(1)%pw%in_use
-      WRITE(*,*) "old_rho_g(1)%pw%cc(1)",      old_rho_g(1)%pw%cc(1)
-      WRITE(*,*) "old_rho_g(1)%pw%cc(2)",      old_rho_g(1)%pw%cc(2)
-      WRITE(*,*) "old_rho_g(1)%pw%cc(262144)", old_rho_g(1)%pw%cc(262144)
-
-      WRITE(*,*) "ASSOCIATED(old_rho_ao)", ASSOCIATED(old_rho_ao)
-      IF(ASSOCIATED(old_rho_ao)) THEN
-          CALL dbcsr_print(old_rho_ao(1,1)%matrix)
-      END IF
-      
-      WRITE(*,*) repeat("-",80)  
-      !------------------------------------------------------------------------
-  
     ! calculate matrix_w = matrix_p*matrix_ks*matrix_p
     !IF(para_env%mepos==0) THEN 
     !   WRITE(*,*) "ec_force - ec_calculate_w_matrix"
@@ -344,7 +277,6 @@ CONTAINS
     ! already in ec_build_ks_matrix
     ! CALL calculate_ecore_overlap(qs_env, para_env, calculate_forces=.TRUE.)
 
-
     ! next are all grid based forces : 
     ! rho_elec
     ! rho_core
@@ -355,10 +287,36 @@ CONTAINS
     ! At this point: F_band + F_core have been calculated
     ! Missing: NSC terms F_\delta_H and F_\delta_XC
 
+    ! Store these forces contributions in ec_env%force
+    CALL qs_copy_force(ec_env%force, force)
+
+    ! empty qs force type
+    CALL zero_qs_force(force)
+  
+    CALL get_qs_env(qs_env, force=force) 
+    WRITE(*,*) "ec_force - qs_env%...%force"
+    CALL ec_write_forces2(qs_env, force)
+
+    WRITE(*,*) "ec_force - ec_env%force - after zero_qs-force"
+    !CALL get_qs_env(qs_env, force=force)
+    CALL ec_write_forces2(qs_env, ec_env%force)
+
     ! forces from double counting terms
     CALL ec_nsc_force(qs_env)
 
-    CALL get_qs_env(qs_env, force=force)
+    WRITE(*,*) "ec_force - qs_env%...%force - after ec_nsc_force"
+    CALL ec_write_forces2(qs_env, force)
+
+    WRITE(*,*) "ec_force - ec_env%force - after ec_nsc_force"
+    !CALL get_qs_env(qs_env, force=force)
+    CALL ec_write_forces2(qs_env, ec_env%force)
+
+
+!    CALL get_qs_env(qs_env, force=force)
+!    WRITE(*,*) "WRITE 1 FUCKING FORCE"
+!    WRITE(*,*) "force(1)%overlap(1,1)", force(1)%overlap(1,1)
+!    CALL ec_write_forces2(qs_env, force)
+
 
     !  *** replicate forces ***
     ! sums up of current forces in total
@@ -366,43 +324,9 @@ CONTAINS
 
 
 !    WRITE(*,*) "Forces END of ec_forces"  
-!    CALL ec_write_forces(qs_env, calculate_forces)
+!     CALL ec_write_forces(qs_env, ec_env%force, calculate_forces=.TRUE.)
 
 
-!      !------------------------------------------------------------------------
-!      !fbelle 
-!      
-!      WRITE(*,*) "ec_forces - END  - rho_ao "
-!
-!      CALL get_qs_env(qs_env,rho=rho)
-!      CALL qs_rho_get(rho, rho_ao_kp=rho_ao, rho_r=rho_r, rho_g=rho_g)
-!      WRITE(*,*) "rho_r%pw%in_use", rho_r(1)%pw%in_use
-!      WRITE(*,*) "rho_r(1)%pw%cr3d(1,1,1)", rho_r(1)%pw%cr3d(1,1,1)
-!      WRITE(*,*) "rho_g%pw%in_use", rho_g(1)%pw%in_use
-!
-!      WRITE(*,*) "rho_g(1)%pw%cc(1)", rho_g(1)%pw%cc(1)
-!      WRITE(*,*) "rho_g(1)%pw%cc(2)", rho_g(1)%pw%cc(2)
-!      WRITE(*,*) "rho_g(1)%pw%cc(262144)", rho_g(1)%pw%cc(262144)
-!
-!      WRITE(*,*) "ASSOCIATED(rho_ao)", ASSOCIATED(rho_ao)
-!      IF(ASSOCIATED(rho_ao)) THEN
-!          CALL dbcsr_print(rho_ao(1,1)%matrix)
-!      END IF
-!      WRITE(*,*) "ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
-!      IF(ASSOCIATED(ec_env%matrix_p)) THEN
-!          CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
-!      END IF
-!      !------------------------------------------------------------------------
-
-
-      ! deallocate W Matrix:
-      ! done in kg_env_release
-!      CALL get_qs_env(qs_env=qs_env)
-!      CALL dbcsr_deallocate_matrix_set(ec_env%matrix_w)
-
-      ! release old_rho
-      ! this should probably be elsewhere
-      !CALL qs_rho_release(ec_env%old_rho)
 
 
 
@@ -457,8 +381,8 @@ CONTAINS
     
     
     WRITE(*,*) "ec_nsc_force - BEGINNING"
-    CALL zero_qs_force(force)
-    CALL ec_write_forces(qs_env, calculate_forces=.TRUE.)
+!    CALL zero_qs_force(force)
+!    CALL ec_write_forces(qs_env, ec_env%force, calculate_forces=.TRUE.)
 
     nspins = dft_control%nspins
      
@@ -552,6 +476,7 @@ CONTAINS
                                calculate_forces=calculate_forces)
     END DO
     
+    CALL get_qs_env(qs_env, force=force)
 
 
 
@@ -573,7 +498,7 @@ CONTAINS
 !    END DO
 
     WRITE(*,*) "ec_nsc_force - END"
-    CALL ec_write_forces(qs_env, calculate_forces=.TRUE.)
+!    CALL ec_write_forces(qs_env, force, calculate_forces=.TRUE.)
 
     CALL timestop(handle)
 
