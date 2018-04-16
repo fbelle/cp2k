@@ -253,7 +253,7 @@ CONTAINS
          END IF
 
          ! force environment 
-         IF (ASSOCIATED(kg_env%force)) CALL deallocate_qs_force(kg_env%force)
+         IF (ASSOCIATED(kg_env%ec_env%force)) CALL deallocate_qs_force(kg_env%ec_env%force)
       END IF
 
       DEALLOCATE (kg_env)
