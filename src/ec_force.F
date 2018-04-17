@@ -8,8 +8,8 @@
 ! NEW : contains just force routines necessary
 
 ! **************************************************************************************************
-!> \brief Quickstep force driver routine
-!> \author MK (12.06.2002)
+!> \brief Harris functional force driver routine
+!> \author Fabian Belleflamme (02.2018)
 
 !> Force contributions : ec_core_hamiltonian  kinetic, overlap, gth_ppl, gth_ppnl
 !>                       gth_nlcc ... not implemented
@@ -21,6 +21,7 @@ MODULE ec_force
                                               calc_mixed_overlap_force
    USE admm_types,                      ONLY: admm_type
    USE atomic_kind_types,               ONLY: atomic_kind_type,&
+                                              get_atomic_kind,&
                                               get_atomic_kind_set
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
@@ -70,7 +71,8 @@ MODULE ec_force
                                               set_qs_env
    USE qs_external_potential,           ONLY: external_c_potential,&
                                               external_e_potential
-   USE qs_force_types,                  ONLY: allocate_qs_force,&
+   USE qs_force_types,                  ONLY: add_qs_force,&
+                                              allocate_qs_force,&
                                               qs_copy_force,&
                                               qs_force_type,&
                                               replicate_qs_force,&
@@ -203,7 +205,11 @@ CONTAINS
     
     ! get qs and kg environment
     NULLIFY (para_env, rho_ao, old_rho_ao, dft_control)
-    CALL get_qs_env(qs_env=qs_env, kg_env=kg_env, dft_control=dft_control, para_env=para_env)
+    CALL get_qs_env(qs_env=qs_env,& 
+                    kg_env=kg_env,&
+                    dft_control=dft_control,&
+                    force = force,&
+                     para_env=para_env)
 
     !shortcut to ec_type
     ! ec_build_neighborlist has been built during kg_energy_correction call
@@ -258,6 +264,7 @@ CONTAINS
     ! updates rho_r and rho_g wrt to new rho%rho_ao
     CALL qs_rho_update_rho(rho, qs_env=qs_env)
 
+
     ! calculate matrix_w = matrix_p*matrix_ks*matrix_p
     !IF(para_env%mepos==0) THEN 
     !   WRITE(*,*) "ec_force - ec_calculate_w_matrix"
@@ -288,28 +295,28 @@ CONTAINS
     ! Missing: NSC terms F_\delta_H and F_\delta_XC
 
     ! Store these forces contributions in ec_env%force
+    !                  to            from
     CALL qs_copy_force(ec_env%force, force)
 
     ! empty qs force type
     CALL zero_qs_force(force)
   
-    CALL get_qs_env(qs_env, force=force) 
-    WRITE(*,*) "ec_force - qs_env%...%force"
-    CALL ec_write_forces2(qs_env, force)
-
-    WRITE(*,*) "ec_force - ec_env%force - after zero_qs-force"
-    !CALL get_qs_env(qs_env, force=force)
-    CALL ec_write_forces2(qs_env, ec_env%force)
+!    CALL get_qs_env(qs_env, force=force) 
+!    WRITE(*,*) "ec_force - qs_env%...%force - after zero_qs_force(force)"
+!    CALL ec_write_forces2(qs_env, force)
+!
+!    WRITE(*,*) "ec_force - ec_env%force - after zero_qs_force(force)"
+!    CALL ec_write_forces2(qs_env, ec_env%force)
 
     ! forces from double counting terms
     CALL ec_nsc_force(qs_env)
 
-    WRITE(*,*) "ec_force - qs_env%...%force - after ec_nsc_force"
-    CALL ec_write_forces2(qs_env, force)
-
-    WRITE(*,*) "ec_force - ec_env%force - after ec_nsc_force"
-    !CALL get_qs_env(qs_env, force=force)
-    CALL ec_write_forces2(qs_env, ec_env%force)
+!    WRITE(*,*) "ec_force - qs_env%...%force - after ec_nsc_force"
+!    CALL ec_write_forces2(qs_env, force)
+!
+!    WRITE(*,*) "ec_force - ec_env%force - after ec_nsc_force"
+!    !CALL get_qs_env(qs_env, force=force)
+!    CALL ec_write_forces2(qs_env, ec_env%force)
 
 
 !    CALL get_qs_env(qs_env, force=force)
@@ -323,12 +330,8 @@ CONTAINS
     CALL replicate_qs_force(force, para_env)
 
 
-!    WRITE(*,*) "Forces END of ec_forces"  
+    WRITE(*,*) "Forces END of ec_forces"  
 !     CALL ec_write_forces(qs_env, ec_env%force, calculate_forces=.TRUE.)
-
-
-
-
 
     CALL timestop(handle)
 
@@ -368,6 +371,9 @@ CONTAINS
     INTEGER                                            :: ispin, nspins
     LOGICAL                                            :: calculate_forces 
     TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_delta
+    TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+    INTEGER                                            :: i, iatom, ikind, natom
+    INTEGER, ALLOCATABLE, DIMENSION(:)                 :: atom_of_kind, kind_of
 
     logger => cp_get_default_logger()
     
@@ -379,15 +385,14 @@ CONTAINS
 
     calculate_forces = .TRUE.
     
-    
     WRITE(*,*) "ec_nsc_force - BEGINNING"
-!    CALL zero_qs_force(force)
-!    CALL ec_write_forces(qs_env, ec_env%force, calculate_forces=.TRUE.)
 
     nspins = dft_control%nspins
      
+!!---------------------------------------------------------------------------------------
     ! *** Calculation of forces due to non-self consistency of energy correction *** ! 
     ! First, v_hartree[rho_out-rho_in]
+!!---------------------------------------------------------------------------------------
 
     NULLIFY (pw_env)
     CALL get_qs_env(qs_env, pw_env=pw_env)
@@ -419,16 +424,6 @@ CONTAINS
     ! get rho_in - before Harris energy correction
     CALL qs_rho_get(ec_env%old_rho, rho_r=old_rho_r, rho_g=old_rho_g, rho_ao_kp=old_rho_ao )
 
-!    WRITE(*,*) "ec_nsc_force - rho_ao "
-!    IF(ASSOCIATED(rho_ao)) THEN
-!        CALL dbcsr_print(rho_ao(1, 1)%matrix)
-!    END IF
-!    WRITE(*,*) "ec_nsc_force - old_rho_ao "
-!    IF(ASSOCIATED(rho_ao)) THEN
-!        CALL dbcsr_print(old_rho_ao(1)%matrix)
-!    END IF
-   
-
     ! create delta density matrix
     IF (ASSOCIATED(ec_env%matrix_delta)) CALL dbcsr_deallocate_matrix_set(ec_env%matrix_delta)
     CALL dbcsr_allocate_matrix_set(ec_env%matrix_delta, nspins, 1)
@@ -442,16 +437,6 @@ CONTAINS
        CALL dbcsr_copy(matrix_delta(ispin, 1)%matrix, rho_ao(ispin, 1)%matrix)
        CALL dbcsr_add(matrix_delta(ispin, 1)%matrix, old_rho_ao(ispin, 1)%matrix, alpha_scalar=1.0_dp, beta_scalar=-1.0_dp)
     END DO
-
-!    WRITE(*,*) "ec_nsc_force - matrix_delta "
-!    IF(ASSOCIATED(ec_env%matrix_delta)) THEN
-!        CALL dbcsr_print(ec_env%matrix_delta(1, 1)%matrix)
-!    END IF
-!
-!    WRITE(*,*) "ec_nsc_force - matrix_delta"
-!    IF(ASSOCIATED(ec_env%matrix_delta)) THEN
-!        CALL dbcsr_print(ec_env%matrix_delta(1, 1)%matrix)
-!    END IF
 
     CALL print_densities(qs_env, rho)
    
@@ -475,15 +460,45 @@ CONTAINS
                                qs_env=qs_env, &
                                calculate_forces=calculate_forces)
     END DO
-    
+
+
     CALL get_qs_env(qs_env, force=force)
 
+    WRITE(*,*) "ec_nsc_force - qs_env%...%force - rho_elec"
+    CALL ec_write_forces2(qs_env, force)
+
+    WRITE(*,*) "ec_force - ec_env%force - rho_elec"
+    CALL ec_write_forces2(qs_env, ec_env%force)
 
 
+    !---------------------------------------------------------------------------------------
+    ! Need to copy NSC Hartree force contrib from qs_env%...%force to stored forces in ec_env%force
+    ! acting on rho_elec 
+    !---------------------------------------------------------------------------------------
 
+    ! get atomic mappng
+    CALL get_qs_env(qs_env, atomic_kind_set=atomic_kind_set, natom=natom)
+    ALLOCATE (atom_of_kind(natom), kind_of(natom))
+    CALL get_atomic_kind_set(atomic_kind_set, atom_of_kind=atom_of_kind, kind_of=kind_of)
+ 
+    ! Substract NSC Hartree force contribution from saved forces in ec_env%force
+    DO iatom = 1, natom
+       ikind = kind_of(iatom)
+       i = atom_of_kind(iatom)
+       ec_env%force(ikind)%rho_elec(1:3, i) = ec_env%force(ikind)%rho_elec(1:3, i) - force(ikind)%rho_elec(1:3, i)
+    END DO
 
+    DEALLOCATE (atom_of_kind, kind_of)
 
+    ! Delete NSC Hartree force contribution
+    CALL zero_qs_force(force)
+    
+    
+    WRITE(*,*) "ec_nsc_force - qs_env%...%force - after copy of rho_elec"
+    CALL ec_write_forces2(qs_env, force)
 
+    WRITE(*,*) "ec_force - ec_env%force - after copy of rho_elec"
+    CALL ec_write_forces2(qs_env, ec_env%force)
 
 
 
