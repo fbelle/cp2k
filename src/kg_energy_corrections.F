@@ -53,7 +53,9 @@ MODULE kg_energy_corrections
                                               sgp_potential_type
    USE input_constants,                 ONLY: kg_ec_diagonalization,&
                                               kg_ec_functional_harris
-   USE input_section_types,             ONLY: section_vals_val_get
+   USE input_section_types,             ONLY: section_vals_val_get,&
+                                              section_vals_type,&
+                                              section_vals_get_subs_vals
    USE kg_environment_types,            ONLY: energy_correction_type,&
                                               kg_environment_type
    USE kinds,                           ONLY: default_string_length,&
@@ -92,12 +94,14 @@ MODULE kg_energy_corrections
    USE qs_kinetic,                      ONLY: build_kinetic_matrix
    USE qs_ks_methods,                   ONLY: calc_rho_tot_gspace
    USE qs_ks_types,                     ONLY: qs_ks_env_type
-   USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type
+   USE qs_neighbor_list_types,          ONLY: deallocate_neighbor_list_set,&
+                                               neighbor_list_set_p_type
    USE qs_neighbor_lists,               ONLY: atom2d_build,&
                                               atom2d_cleanup,&
                                               build_neighbor_lists,&
                                               local_atoms_type,&
-                                              pair_radius_setup
+                                              pair_radius_setup,&
+                                              write_neighbor_lists
    USE qs_overlap,                      ONLY: build_overlap_matrix
    USE qs_rho_types,                    ONLY: qs_rho_create,&
                                               qs_rho_get,&
@@ -126,6 +130,7 @@ MODULE kg_energy_corrections
                                               cp_print_key_unit_nr
    USE qs_initial_guess,                ONLY: calculate_atomic_block_dm
    USE ec_methods,                      ONLY: ec_write_forces
+   USE qs_ks_types,                     ONLY: get_ks_env
 
 
 #include "./base/base_uses.f90"
@@ -143,8 +148,9 @@ MODULE kg_energy_corrections
    ! make this subr avail for external use 
    PUBLIC :: ec_build_core_hamiltonian
    PUBLIC :: ec_build_ks_matrix
-   PUBLIC :: ec_calculate_w_matrix
    PUBLIC :: ec_ks_solver
+   PUBLIC :: ec_energy
+   PUBLIC :: ec_build_neighborlist
 
 CONTAINS
 
@@ -171,17 +177,15 @@ CONTAINS
       TYPE(energy_correction_type), POINTER              :: ec_env
       TYPE(kg_environment_type), POINTER                 :: kg_env
       ! 
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_w   
-      TYPE(qs_ks_env_type), POINTER                      :: ks_env
       TYPE(cp_para_env_type), POINTER                    :: para_env
 
 !      WRITE(*,*) "kg_energy_correction - ENTERING"
       CALL timeset(routineN, handle)
 
       my_calc_forces = .FALSE.
-! fbelle
-! disable so that CALL ec_build_core_hamiltonian only for energy here
-!      IF (PRESENT(calculate_forces)) my_calc_forces = calculate_forces
+      ! fbelle
+      ! disable so that CALL ec_build_core_hamiltonian only for energy here
+      !IF (PRESENT(calculate_forces)) my_calc_forces = calculate_forces
 
 
       CALL get_qs_env(qs_env,para_env=para_env)
@@ -222,8 +226,6 @@ CONTAINS
          CALL ec_build_core_hamiltonian(qs_env, ec_env, my_calc_forces)
          CALL ec_build_ks_matrix(qs_env, ec_env, my_calc_forces)
 
-         CALL get_qs_env(qs_env,ks_env=ks_env,matrix_w=matrix_w)
-
          ! MAO basis
          IF (ec_env%mao) THEN
             IF (ASSOCIATED(ec_env%mao_coef)) CALL dbcsr_deallocate_matrix_set(ec_env%mao_coef)
@@ -234,13 +236,6 @@ CONTAINS
          CALL ec_ks_solver(qs_env, ec_env)
 
          CALL ec_energy(qs_env, ec_env, unit_nr)
-
-!         ! print density matrix after kg_energy_correction 
-!         WRITE(*,*) "kg_energy_correction - LEAVING - ec_env%matrix_p"
-!         WRITE(*,*) "ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
-!         CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
-
-
 
 !         IF (calculate_forces) THEN
 !           CALL kg_response_solver(qs_env,ec_env)
@@ -289,7 +284,6 @@ CONTAINS
       LOGICAL                                            :: use_virial
       REAL(KIND=dp)                                      :: eps_filter, eps_ppnl
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
-      !TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_p
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
          POINTER                                         :: sab_orb, sac_ppl, sap_ppnl
@@ -298,22 +292,15 @@ CONTAINS
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
       TYPE(virial_type), POINTER                         :: virial
-      !fbelle
-!      CHARACTER(LEN=35)                                  :: fmtstr2
-!      REAL(KIND=dp), DIMENSION(3)                        :: grand_total
-!      INTEGER                                            :: i, iatom, ikind, natom, ndigits
-!      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: atom_of_kind, kind_of
-!      TYPE(qs_energy_type), POINTER                      :: energy
-!      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_w   
       TYPE(cp_para_env_type), POINTER                    :: para_env
 
       IF (calculate_forces) THEN
          WRITE(*,*) "In ec_build_core_hamiltonian with forces", calculate_forces
-         WRITE(*,*) "ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
+         !WRITE(*,*) "ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
          CALL timeset(routineN//"_forces", handle)
       ELSE
          WRITE(*,*) "In ec_build_core_hamiltonian without forces", calculate_forces
-         WRITE(*,*) "ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
+         !WRITE(*,*) "ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
          CALL timeset(routineN, handle)
       ENDIF
 
@@ -336,24 +323,13 @@ CONTAINS
       sac_ppl => ec_env%sac_ppl
       sap_ppnl => ec_env%sap_ppnl
 
-
-
       IF (calculate_forces) THEN
-
          CALL get_qs_env(qs_env=qs_env, force=force)
-
       END IF
 
       ! forces require first derivative of energy
       IF (calculate_forces) THEN
          nder=1
-!         WRITE(*,*) "density matrix before overlap and kinetic"
-!         CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
-!         WRITE(*,*) "ec_build_core_hamiltonian - ec_env%matrix_w"
-!         WRITE(*,*) "ASSOCIATED(matrix_w)", ASSOCIATED(ec_env%matrix_w)
-!         IF(ASSOCIATED(ec_env%matrix_w)) THEN
-!            CALL dbcsr_print(ec_env%matrix_w(1,1)%matrix)
-!         END IF
       ELSE
          nder=0   
       END IF
@@ -409,6 +385,7 @@ CONTAINS
                                 matrixkp_p=ec_env%matrix_p)
 
       CALL get_qs_env(qs_env,para_env=para_env)
+
 !      IF(para_env%mepos==0) THEN
 !         WRITE(*,*) " ec_build_core_hamiltonian ec_env%matrix_s", ASSOCIATED(ec_env%matrix_s)
 !         IF(ASSOCIATED(ec_env%matrix_s)) THEN
@@ -424,7 +401,6 @@ CONTAINS
 !         END IF
 !      END IF
 
-      !WRITE(*,*) " ec_build_core_hamiltonian ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_t)
       ! initialize H matrix
       CALL dbcsr_allocate_matrix_set(ec_env%matrix_h, 1, 1)
       ALLOCATE (ec_env%matrix_h(1, 1)%matrix)
@@ -439,21 +415,9 @@ CONTAINS
       CALL get_qs_env(qs_env=qs_env, qs_kind_set=qs_kind_set, particle_set=particle_set, &
                       atomic_kind_set=atomic_kind_set)
       
-      !fbelle  
-      ! original - annuls density matrix
-      ! Forces require knowledge of density matrix, 
-      ! matrix_p calculated during energy correction, and stored in ec_env%matrix_p
-      !NULLIFY (cell_to_index, matrix_p, force, virial)
-      
       ! fbelle - new
       NULLIFY (cell_to_index, virial)
       use_virial = .FALSE.
-
-
-      
-      
-!    WRITE(*,*) "Forces ec_build_core_hamiltonian BEFORE core_ppl "  
-!    CALL ec_write_forces(qs_env, calculate_forces)
 
        IF (ASSOCIATED(sac_ppl)) THEN
           CALL build_core_ppl(ec_env%matrix_h, ec_env%matrix_p, force, virial, calculate_forces, use_virial, nder, &
@@ -469,10 +433,7 @@ CONTAINS
                                nimages, cell_to_index, "HARRIS")
        END IF
 
-
-
-
-    WRITE(*,*) "Forces LEAVING ec_build_core_hamiltonian"  
+!    WRITE(*,*) "Forces LEAVING ec_build_core_hamiltonian"  
 !    CALL ec_write_forces(qs_env, calculate_forces)
 
 !      !--------------------------------------------------------------------------
@@ -553,8 +514,7 @@ CONTAINS
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
       TYPE(qs_rho_type), POINTER                         :: rho
       TYPE(virial_type), POINTER                         :: virial
-!      TYPE(qs_energy_type), POINTER                      :: energy
-!      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       ::  rho_ao
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: my_matrix_ks
 
       CALL timeset(routineN, handle)
 
@@ -567,33 +527,28 @@ CONTAINS
       use_virial = virial%pv_availability .AND. (.NOT. virial%pv_numer)
       CPASSERT(.NOT. use_virial)
 
-!      !------------------------------------------------------------------------
-!      !fbelle 
-!      CALL qs_rho_get(rho, rho_ao_kp=rho_ao)
-!      
-!      WRITE(*,*) "ec_build_ks_matrix - BEGINNING - rho_ao "
-!      WRITE(*,*) "ASSOCIATED(rho_ao)", ASSOCIATED(rho_ao)
-!
-!      IF(ASSOCIATED(rho_ao)) THEN
-!          CALL dbcsr_print(rho_ao(1,1)%matrix)
+!      IF(calculate_forces) THEN
+!         WRITE(*,*) " ec_build_ks_matrix ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
+!         IF(ASSOCIATED(ec_env%matrix_p)) THEN
+!             CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
+!         END IF
 !      END IF
-!      !------------------------------------------------------------------------
-      !IF(calculate_forces) THEN
-      !   WRITE(*,*) " ec_build_ks_matrix ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
-      !END IF
 
-      ! Kohn-Sham matrix
-      IF (ASSOCIATED(ec_env%matrix_ks)) CALL dbcsr_deallocate_matrix_set(ec_env%matrix_ks)
+      IF (.NOT. calculate_forces) THEN
+         WRITE(*,*) "ec_build_ks_matrix - NO FORCES"
+         ! Kohn-Sham matrix
+         IF (ASSOCIATED(ec_env%matrix_ks)) CALL dbcsr_deallocate_matrix_set(ec_env%matrix_ks)
 
-      CALL dbcsr_allocate_matrix_set(ec_env%matrix_ks, nspins, 1)
-      DO ispin = 1, nspins
-         headline = "KOHN-SHAM MATRIX"
-         ALLOCATE (ec_env%matrix_ks(ispin, 1)%matrix)
-         CALL dbcsr_create(ec_env%matrix_ks(ispin, 1)%matrix, name=TRIM(headline), &
-                           template=ec_env%matrix_s(1, 1)%matrix, matrix_type=dbcsr_type_symmetric)
-         CALL cp_dbcsr_alloc_block_from_nbl(ec_env%matrix_ks(ispin, 1)%matrix, ec_env%sab_orb)
-         CALL dbcsr_set(ec_env%matrix_ks(ispin, 1)%matrix, 0.0_dp)
-      ENDDO
+         CALL dbcsr_allocate_matrix_set(ec_env%matrix_ks, nspins, 1)
+         DO ispin = 1, nspins
+            headline = "KOHN-SHAM MATRIX"
+            ALLOCATE (ec_env%matrix_ks(ispin, 1)%matrix)
+            CALL dbcsr_create(ec_env%matrix_ks(ispin, 1)%matrix, name=TRIM(headline), &
+                              template=ec_env%matrix_s(1, 1)%matrix, matrix_type=dbcsr_type_symmetric)
+            CALL cp_dbcsr_alloc_block_from_nbl(ec_env%matrix_ks(ispin, 1)%matrix, ec_env%sab_orb)
+            CALL dbcsr_set(ec_env%matrix_ks(ispin, 1)%matrix, 0.0_dp)
+         ENDDO
+      END IF
 
       NULLIFY (pw_env)
       CALL get_qs_env(qs_env=qs_env, pw_env=pw_env)
@@ -613,15 +568,23 @@ CONTAINS
                              rho_tot_gspace%pw, &
                              use_data=COMPLEXDATA1D, &
                              in_space=RECIPROCALSPACE)
-
       CALL pw_pool_create_pw(auxbas_pw_pool, &
                              v_hartree_rspace%pw, &
                              use_data=REALDATA3D, &
                              in_space=REALSPACE)
 
-      ! Get the total density in g-space [ions + electrons]
-      CALL calc_rho_tot_gspace(rho_tot_gspace, qs_env, rho)
+      ! Density for energy correction
+      IF (.NOT. calculate_forces) THEN
+         ! Get the total density in g-space [ions + electrons]
+         CALL calc_rho_tot_gspace(rho_tot_gspace, qs_env, rho)
+      ELSE
+         ! force calculation: v_H[rho_in]+mu_xc[rho_in] 
+         ! Get the OLD total density in g-space [ions + electrons]
+         CALL calc_rho_tot_gspace(rho_tot_gspace, qs_env, ec_env%old_rho)
+      END IF
 
+
+      ! Hartree potential
       CALL pw_poisson_solve(poisson_env, rho_tot_gspace%pw, ehartree, &
                             v_hartree_gspace%pw)
       CALL pw_transfer(v_hartree_gspace%pw, v_hartree_rspace%pw)
@@ -638,10 +601,12 @@ CONTAINS
 
       evhxc = 0.0_dp
 
-      
-      !WRITE(*,*) " ec_build_ks_matrix right before integrate ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
-      !WRITE(*,*) "calculate_forces", calculate_forces
-
+!      IF(para_env%mepos==0) THEN
+!         WRITE(*,*) " ec_build_ks_matrix - BEFORE - ec_env%matrix_ks", ASSOCIATED(ec_env%matrix_ks)
+!         IF(ASSOCIATED(ec_env%matrix_ks)) THEN
+!               CALL dbcsr_print(ec_env%matrix_ks(1,1)%matrix)
+!         END IF
+!      END IF
 
       CALL qs_rho_get(rho, rho_r=rho_r)
       IF (ASSOCIATED(v_tau_rspace)) THEN
@@ -654,36 +619,43 @@ CONTAINS
          ! integrate over potential <a|V|b>
 
          IF (.NOT. calculate_forces) THEN
-         CALL integrate_v_rspace(v_rspace=v_rspace(ispin), &
-                                 hmat=ec_env%matrix_ks(ispin, 1), &
-                                 qs_env=qs_env, &
-                                 calculate_forces=.FALSE., &
-                                 basis_type="HARRIS", &
-                                 task_list_external=ec_env%task_list)
-
+            CALL integrate_v_rspace(v_rspace = v_rspace(ispin), &
+                                    hmat = ec_env%matrix_ks(ispin, 1), &
+                                    qs_env = qs_env, &
+                                    calculate_forces = .FALSE., &
+                                    basis_type = "HARRIS", &
+                                    task_list_external = ec_env%task_list)
          ELSE
+            ! fbelle 
+            ! added pmat to integrate_v_rspace
+            ! overwrites KS matrix
+            NULLIFY (my_matrix_ks)
+            CALL dbcsr_allocate_matrix_set(my_matrix_ks, nspins, 1)
+            ALLOCATE (my_matrix_ks(ispin,1)%matrix)
+            CALL dbcsr_copy(my_matrix_ks(ispin,1)%matrix, ec_env%matrix_ks(ispin,1)%matrix, & 
+                            keep_sparsity = .FALSE., name="DUMMY KS-MATRIX")
 
-         !CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
+
+            CALL integrate_v_rspace(v_rspace = v_rspace(ispin), &
+                                    pmat = ec_env%matrix_p(ispin, 1), &
+                                    hmat = my_matrix_ks(ispin, 1), &
+                                    !hmat = ec_env%matrix_ks(ispin, 1), &
+                                    qs_env = qs_env, &
+                                    calculate_forces = calculate_forces, &
+                                    basis_type = "HARRIS", &
+                                    task_list_external = ec_env%task_list)
+    
+            ! Deallocate dummy ks matrix                         
+            CALL dbcsr_deallocate_matrix_set(my_matrix_ks)
          
-         ! fbelle 
-         ! added pmat to integrate_v_rspace
-         CALL integrate_v_rspace(v_rspace=v_rspace(ispin), &
-                                 pmat=ec_env%matrix_p(ispin, 1), &
-                                 hmat=ec_env%matrix_ks(ispin, 1), &
-                                 qs_env=qs_env, &
-                                 calculate_forces=calculate_forces, &
-                                 !calculate_forces=.FALSE., &
-                                 basis_type="HARRIS", &
-                                 task_list_external=ec_env%task_list)
          END IF
-
-
 
          IF (ASSOCIATED(v_tau_rspace)) THEN
             ! integrate over Tau-potential <nabla.a|V|nabla.b>
             CALL pw_scale(v_tau_rspace(ispin)%pw, v_tau_rspace(ispin)%pw%pw_grid%dvol)
             CALL integrate_v_rspace(v_rspace=v_tau_rspace(ispin), hmat=ec_env%matrix_ks(ispin, 1), &
-                                    qs_env=qs_env, calculate_forces=calculate_forces, compute_tau=.TRUE., &
+                                    qs_env=qs_env, calculate_forces=calculate_forces, &
+                                     compute_tau=.TRUE., &
                                     basis_type="HARRIS", &
                                     task_list_external=ec_env%task_list)
          END IF
@@ -691,12 +663,20 @@ CONTAINS
          ! calclulate Int(vhxc*rho)dr and Int(vtau*tau)dr
          evhxc = evhxc+pw_integral_ab(rho_r(ispin)%pw, v_rspace(ispin)%pw)/v_rspace(1)%pw%pw_grid%dvol
          IF (ASSOCIATED(v_tau_rspace)) THEN
-            evhxc = evhxc+pw_integral_ab(tau_r(ispin)%pw, v_tau_rspace(ispin)%pw)/v_tau_rspace(ispin)%pw%pw_grid%dvol
+            evhxc = evhxc+pw_integral_ab(tau_r(ispin)%pw, & 
+                v_tau_rspace(ispin)%pw)/v_tau_rspace(ispin)%pw%pw_grid%dvol
          END IF
 
       END DO
 
-      ! force%rho_core
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) " ec_build_ks_matrix - AFTER integrate_v_rspace - ec_env%matrix_ks", ASSOCIATED(ec_env%matrix_ks)
+         IF(ASSOCIATED(ec_env%matrix_ks)) THEN
+               CALL dbcsr_print(ec_env%matrix_ks(1,1)%matrix)
+         END IF
+      END IF
+
+      ! Core-Core repulsion forces (force%rho_core)
       IF (calculate_forces) THEN
          CALL integrate_v_core_rspace(v_hartree_rspace, qs_env)
       END IF
@@ -713,21 +693,31 @@ CONTAINS
       ! energies
       CALL calculate_ecore_self(qs_env, E_self_core=eself)
       CALL calculate_ecore_overlap(qs_env, para_env, calculate_forces=calculate_forces, E_overlap_core=eovrl)
+  
       ec_env%exc = eexc
       ec_env%ehartree = ehartree+eovrl+eself
       ec_env%vhxc = evhxc
 
-      ! add the core matrix
-      DO ispin = 1, nspins
-         CALL dbcsr_add(ec_env%matrix_ks(ispin, 1)%matrix, ec_env%matrix_h(1, 1)%matrix, &
-                        alpha_scalar=1.0_dp, beta_scalar=1.0_dp)
-      END DO
+      IF (.NOT. calculate_forces) THEN
+         ! add the core matrix
+         DO ispin = 1, nspins
+            CALL dbcsr_add(ec_env%matrix_ks(ispin, 1)%matrix, ec_env%matrix_h(1, 1)%matrix, &
+                           alpha_scalar=1.0_dp, beta_scalar=1.0_dp)
+         END DO
 
-      ! At this point the ks matrix is up to date, filter it if requested
-      DO ispin = 1, nspins
-         CALL dbcsr_filter(ec_env%matrix_ks(ispin, 1)%matrix, &
-                           dft_control%qs_control%eps_filter_matrix)
-      ENDDO
+         ! At this point the ks matrix is up to date, filter it if requested
+         DO ispin = 1, nspins
+            CALL dbcsr_filter(ec_env%matrix_ks(ispin, 1)%matrix, &
+                              dft_control%qs_control%eps_filter_matrix)
+         ENDDO
+      END IF
+
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) " ec_build_ks_matrix - END - ec_env%matrix_ks", ASSOCIATED(ec_env%matrix_ks)
+         IF(ASSOCIATED(ec_env%matrix_ks)) THEN
+               CALL dbcsr_print(ec_env%matrix_ks(1,1)%matrix)
+         END IF
+      END IF
 
       DEALLOCATE (v_rspace)
 
@@ -791,11 +781,6 @@ CONTAINS
       IF (ec_env%mao) THEN
          CALL mao_release_matrices(ec_env, ksmat, smat, pmat)
       ENDIF
-
-
-
-
-
 
       CALL timestop(handle)
 
@@ -1225,88 +1210,4 @@ CONTAINS
 
    END SUBROUTINE ec_build_neighborlist
 
-! **************************************************************************************************
-!> \brief Compute matrix_w as needed for the forces
-!>        W = P*KS*P
-!> \param matrix_w ...
-!> \param ls_scf_env ...
-!> \par History
-!>       2018.2 created [Fabian Belleflamme]
-!> \author Fabian Belleflamme - heavily influenced by calculate_w_matrix in dm_ls_scf 
-! **************************************************************************************************
-   SUBROUTINE ec_calculate_w_matrix(qs_env, ec_env)
-      TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(energy_correction_type), POINTER              :: ec_env
-
-      CHARACTER(len=*), PARAMETER :: routineN = 'ec_calculate_w_matrix', &
-         routineP = moduleN//':'//routineN
-
-      INTEGER                                            :: handle, ispin, nspins
-      REAL(KIND=dp)                                      :: scaling
-      TYPE(dbcsr_type)                                   :: matrix_tmp1, matrix_tmp2, matrix_tmp3
-      TYPE(dft_control_type), POINTER                    :: dft_control
-
-      CALL timeset(routineN, handle)
-
-!      WRITE(*,*) "ec_calculate_w_matrix - Beginning"
-
-      CALL get_qs_env(qs_env=qs_env, dft_control=dft_control)
-      
-      ! To iterate over matrices
-      nspins = dft_control%nspins
-
-      ! allocate ec_env%matrix_w
-      CALL dbcsr_allocate_matrix_set(ec_env%matrix_w, nspins, 1)
-      DO ispin = 1, nspins
-         ALLOCATE (ec_env%matrix_w(ispin,1)%matrix)
-         CALL dbcsr_copy(ec_env%matrix_w(ispin, 1)%matrix, ec_env%matrix_s(1, 1)%matrix , name="W MATRIX")
-         CALL dbcsr_set(ec_env%matrix_w(ispin, 1)%matrix, 0.0_dp)
-      END DO
-
-      ! initialize temp matrices for multiplication
-      DO ispin = 1, nspins
-         CALL dbcsr_create(matrix_tmp1, template=ec_env%matrix_s(ispin, 1)%matrix, name="TMP1 MATRIX")
-         CALL dbcsr_create(matrix_tmp2, template=ec_env%matrix_s(ispin, 1)%matrix, name="TMP2 MATRIX")
-         CALL dbcsr_create(matrix_tmp3, template=ec_env%matrix_s(ispin, 1)%matrix, name="TMP3 MATRIX")
-      END DO
-
-         CALL dbcsr_set(matrix_tmp1, 0.0_dp)
-         CALL dbcsr_set(matrix_tmp2, 0.0_dp)
-         CALL dbcsr_set(matrix_tmp3, 0.0_dp)
-
-         CALL dbcsr_finalize(matrix_tmp1)
-         CALL dbcsr_finalize(matrix_tmp2)
-         CALL dbcsr_finalize(matrix_tmp3)
-
-      IF (nspins == 1) THEN
-         scaling = 0.5_dp
-      ELSE
-         scaling = 1.0_dp
-      ENDIF
-
-      ! in the multiplication used to be ls_scf_env%eps_filter
-      DO ispin = 1, nspins
-         CALL dbcsr_copy(matrix_tmp3, ec_env%matrix_ks(ispin, 1)%matrix)
-         CALL dbcsr_multiply("N", "N", scaling, ec_env%matrix_p(ispin, 1)%matrix, matrix_tmp3, &
-                             0.0_dp, matrix_tmp1)
-         CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_tmp1, ec_env%matrix_p(ispin,1)%matrix, &
-                             0.0_dp, matrix_tmp2)
-         CALL dbcsr_copy(ec_env%matrix_w(1,1)%matrix, matrix_tmp2, name="MATRIX W EC")
-      END DO
-
-!      WRITE(*,*) "ec_calculate_w_matrix - END - ec_env%matrix_w"
-!      WRITE(*,*) "ASSOCIATED(ec_env%matrix_w)", ASSOCIATED(ec_env%matrix_w)
-!      IF(ASSOCIATED(ec_env%matrix_w)) THEN
-!         CALL dbcsr_print(ec_env%matrix_w(1,1)%matrix)
-!      END IF
-      
-      DO ispin = 1, nspins
-         CALL dbcsr_release(matrix_tmp1)
-         CALL dbcsr_release(matrix_tmp2)
-         CALL dbcsr_release(matrix_tmp3)
-      END DO
-      
-      CALL timestop(handle)
-
-   END SUBROUTINE ec_calculate_w_matrix
 END MODULE kg_energy_corrections
