@@ -152,6 +152,7 @@ MODULE kg_energy_corrections
    PUBLIC :: ec_ks_solver
    PUBLIC :: ec_energy
    PUBLIC :: ec_build_neighborlist
+   PUBLIC :: mao_create_matrices
 
 CONTAINS
 
@@ -296,11 +297,11 @@ CONTAINS
       TYPE(cp_para_env_type), POINTER                    :: para_env
 
       IF (calculate_forces) THEN
-         WRITE(*,*) "In ec_build_core_hamiltonian with forces", calculate_forces
+         !WRITE(*,*) "In ec_build_core_hamiltonian with forces", calculate_forces
          !WRITE(*,*) "ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
          CALL timeset(routineN//"_forces", handle)
       ELSE
-         WRITE(*,*) "In ec_build_core_hamiltonian without forces", calculate_forces
+         !WRITE(*,*) "In ec_build_core_hamiltonian without forces", calculate_forces
          !WRITE(*,*) "ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
          CALL timeset(routineN, handle)
       ENDIF
@@ -536,7 +537,6 @@ CONTAINS
 !      END IF
 
       IF (.NOT. calculate_forces) THEN
-         WRITE(*,*) "ec_build_ks_matrix - NO FORCES"
          ! Kohn-Sham matrix
          IF (ASSOCIATED(ec_env%matrix_ks)) CALL dbcsr_deallocate_matrix_set(ec_env%matrix_ks)
 
@@ -602,13 +602,6 @@ CONTAINS
 
       evhxc = 0.0_dp
 
-!      IF(para_env%mepos==0) THEN
-!         WRITE(*,*) " ec_build_ks_matrix - BEFORE - ec_env%matrix_ks", ASSOCIATED(ec_env%matrix_ks)
-!         IF(ASSOCIATED(ec_env%matrix_ks)) THEN
-!               CALL dbcsr_print(ec_env%matrix_ks(1,1)%matrix)
-!         END IF
-!      END IF
-
       CALL qs_rho_get(rho, rho_r=rho_r)
       IF (ASSOCIATED(v_tau_rspace)) THEN
          CALL qs_rho_get(rho, tau_r=tau_r)
@@ -670,13 +663,6 @@ CONTAINS
 
       END DO
 
-      IF(para_env%mepos==0) THEN
-         WRITE(*,*) " ec_build_ks_matrix - AFTER integrate_v_rspace - ec_env%matrix_ks", ASSOCIATED(ec_env%matrix_ks)
-         IF(ASSOCIATED(ec_env%matrix_ks)) THEN
-               CALL dbcsr_print(ec_env%matrix_ks(1,1)%matrix)
-         END IF
-      END IF
-
       ! Core-Core repulsion forces (force%rho_core)
       IF (calculate_forces) THEN
          CALL integrate_v_core_rspace(v_hartree_rspace, qs_env)
@@ -711,13 +697,6 @@ CONTAINS
             CALL dbcsr_filter(ec_env%matrix_ks(ispin, 1)%matrix, &
                               dft_control%qs_control%eps_filter_matrix)
          ENDDO
-      END IF
-
-      IF(para_env%mepos==0) THEN
-         WRITE(*,*) " ec_build_ks_matrix - END - ec_env%matrix_ks", ASSOCIATED(ec_env%matrix_ks)
-         IF(ASSOCIATED(ec_env%matrix_ks)) THEN
-               CALL dbcsr_print(ec_env%matrix_ks(1,1)%matrix)
-         END IF
       END IF
 
       DEALLOCATE (v_rspace)
@@ -842,6 +821,20 @@ CONTAINS
          CALL dbcsr_multiply("T", "N", 1.0_dp, mao_coef(ispin)%matrix, cgmat, 0.0_dp, ksmat(ispin, 1)%matrix)
       END DO
       CALL dbcsr_release(cgmat)
+
+
+      WRITE(*,*) "mao_create_matrices -  ASSOCIATED(ma_coef)", ASSOCIATED(mao_coef)
+      IF(ASSOCIATED(mao_coef)) THEN
+          CALL dbcsr_print(mao_coef(1)%matrix)
+      END IF
+      WRITE(*,*) "mao_create_matrices -  ASSOCIATED(ec_env%matrix_ks)", ASSOCIATED(ec_env%matrix_ks)
+      IF(ASSOCIATED(ec_env%matrix_ks)) THEN
+          CALL dbcsr_print(ec_env%matrix_ks(1,1)%matrix)
+      END IF
+      WRITE(*,*) "mao_create_matrices -  ASSOCIATED(ksmat)", ASSOCIATED(ksmat)
+      IF(ASSOCIATED(ksmat)) THEN
+          CALL dbcsr_print(ksmat(1,1)%matrix)
+      END IF
 
       CALL dbcsr_allocate_matrix_set(pmat, nspins, 1)
       DO ispin = 1, nspins

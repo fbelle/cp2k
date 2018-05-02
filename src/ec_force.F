@@ -5,12 +5,18 @@
 
 ! **************************************************************************************************
 !> \brief Harris functional force driver routine
-
-!> Force contributions : ec_core_hamiltonian  kinetic, overlap, gth_ppl, gth_ppnl
-!>                       gth_nlcc ... not implemented
-!> F_tot = F_kin + F_gth_ppl + F_gth_ppnl + F_BS_H[n_out] + F_BS_XC[n_out] + F_core
-!>         + F_NSC
-!> w/ F_NSC = F_BS_H + F_BS_XC + F_delta_H + F_delta_XC
+!>
+!> Force contributions : ec_core_hamiltonian:  kinetic, overlap, gth_ppl, 
+!>                                             gth_ppnl
+!>                       ec_build_ks_matrix:   core_overlap, rho_core, rho_elec
+!>                       ec_nsc_force:         (-1)*rho_elec
+!> F_tot = F_kin[n_out] + F_gth_ppl[n_out] + F_gth_ppnl[n_out] + F_BS_H[n_out] + F_BS_XC[n_out] 
+!>         + F_core[rho_core + n_out] + F_NSC[n_in, n_out]
+!>
+!> w/ F_NSCF_NSC[n_in, n_out] = F_BS_H + F_BS_XC + F_delta_H + F_delta_XC
+!>                            = \int (v_hartree[rho_out-rho_in] +
+!>                                   (rho_out - rho_in)*\mu'_[rho_in])*\nabla_I(rho_in) dr
+!>
 !> \date 02.2018
 !> \author Fabian Belleflamme
 ! **************************************************************************************************
@@ -19,9 +25,6 @@ MODULE ec_force
                                               get_atomic_kind,&
                                               get_atomic_kind_set
    USE cp_control_types,                ONLY: dft_control_type
-   USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
-   USE cp_dbcsr_output,                 ONLY: cp_dbcsr_write_sparse_matrix
-   USE cp_fm_types,                     ONLY: cp_fm_type
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_type
    USE cp_output_handling,              ONLY: cp_p_file,&
@@ -32,7 +35,6 @@ MODULE ec_force
                                               dbcsr_copy,&
                                               dbcsr_create,&
                                               dbcsr_deallocate_matrix_set,&
-                                              dbcsr_finalize,&
                                               dbcsr_init_p,&
                                               dbcsr_p_type,&
                                               dbcsr_set,&
@@ -45,12 +47,7 @@ MODULE ec_force
                                               section_vals_type,&
                                               section_vals_val_get
    USE kinds,                           ONLY: dp
-   USE message_passing,                 ONLY: mp_sum
    USE particle_types,                  ONLY: particle_type
-   USE qs_core_energies,                ONLY: calculate_ecore_overlap,&
-                                              calculate_ecore_self
-   USE qs_core_hamiltonian,             ONLY: build_core_hamiltonian_matrix
-   USE qs_energy,                       ONLY: qs_energies
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
    USE qs_force_types,                  ONLY: add_qs_force,&
@@ -61,7 +58,8 @@ MODULE ec_force
                                               zero_qs_force
    USE qs_ks_methods,                   ONLY: calc_rho_tot_gspace
    USE qs_ks_types,                     ONLY: qs_ks_env_type
-   USE qs_rho_methods,                  ONLY: qs_rho_update_rho
+   USE qs_rho_methods,                  ONLY: qs_rho_update_rho,&
+                                              qs_rho_rebuild
    USE qs_rho_types,                    ONLY: qs_rho_create,&
                                               qs_rho_get,&
                                               qs_rho_release,&
@@ -150,8 +148,8 @@ CONTAINS
     TYPE(qs_rho_type), POINTER                         :: rho
     TYPE(dft_control_type), POINTER                    :: dft_control
     INTEGER                                            :: ispin, nspins, nkind
-    TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho_g, rho_r
-!    TYPE(pw_p_type), DIMENSION(:), POINTER             :: old_rho_r, old_rho_g
+!    TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho_g, rho_r
+    TYPE(pw_p_type), DIMENSION(:), POINTER             :: old_rho_r!, old_rho_g
     TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: old_rho_ao
     INTEGER, ALLOCATABLE, DIMENSION(:)                 :: natom_of_kind
     TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
@@ -175,29 +173,24 @@ CONTAINS
     calculate_forces = .TRUE.
     
     ! get qs and kg environment
-    NULLIFY (para_env, rho_ao, old_rho_ao, dft_control)
-    CALL get_qs_env(qs_env=qs_env,& 
-                    kg_env=kg_env,&
-                    dft_control=dft_control,&
+    NULLIFY (atomic_kind_set, para_env, rho_ao, old_rho_ao, dft_control)
+    CALL get_qs_env(qs_env = qs_env,& 
+                    kg_env = kg_env,&
+                    atomic_kind_set = atomic_kind_set,&
+                    dft_control = dft_control,&
                     force = force,&
-                    para_env=para_env)
+                    para_env = para_env,&
+                    particle_set = particle_set,&
+                    rho = rho)
 
-    !shortcut to ec_type
-    ! ec_build_neighborlist has been built during kg_energy_correction call
+    ! shortcut to ec_type
+    !  ec_build_neighborlist has been built during kg_energy_correction call
     ec_env => kg_env%ec_env
     nspins = dft_control%nspins
-
-
-
-
-
 
     ! Introduce new ec_env%force type to store forces and prevent overwriting
     !    especially to rho_elec
     ! get atom mapping
-    NULLIFY (atomic_kind_set)
-    CALL get_qs_env(qs_env, atomic_kind_set=atomic_kind_set, particle_set=particle_set)
-
     IF (.NOT. ASSOCIATED(ec_env%force)) THEN
        nkind = SIZE(atomic_kind_set)
        ALLOCATE (natom_of_kind(nkind))
@@ -208,36 +201,50 @@ CONTAINS
     END IF
     CALL zero_qs_force(ec_env%force)
 
-    ! store old rho (before energy correction)
-    ! after kg_energy_correction rho_structure is not updated
-    ! only new density matrix : ec_env%matrix_p 
-    CALL get_qs_env(qs_env, rho = rho)
-    CALL qs_rho_get(rho, &
-                    rho_ao_kp = rho_ao, &
-                    rho_r = rho_r, &
-                    rho_g = rho_g) 
-    CALL qs_rho_create(ec_env%old_rho)
+!------------------------------------------------------------------------------
+!------------------------------------------------------------------------------
 
+    ! allocate and initialize the old density
+    CALL qs_rho_create(ec_env%old_rho)
+    
     ! copy rho structure, alert, sets density matrix to zero
     CALL duplicate_rho_type(rho_input = rho, &
                             rho_output = ec_env%old_rho, &
                             qs_env = qs_env)
 
-    ! duplicate_rho_types doesnt copy density matrix ...
-    CALL qs_rho_get(ec_env%old_rho, rho_ao_kp=old_rho_ao)
+    CALL qs_rho_get(rho, rho_ao_kp = rho_ao )
+    CALL qs_rho_get(ec_env%old_rho, &
+                    rho_r = old_rho_r, &
+                    rho_ao_kp = old_rho_ao )
+
+    ! change structure of old_rho_ao to HARRIS basis
     DO ispin = 1, nspins
-       CALL dbcsr_copy(old_rho_ao(ispin,1)%matrix, rho_ao(ispin,1)%matrix, keep_sparsity=.FALSE.)
+       CALL dbcsr_copy(old_rho_ao(ispin,1)%matrix, & 
+                         ec_env%matrix_p(ispin,1)%matrix, keep_sparsity=.FALSE.)
+       CALL dbcsr_set(old_rho_ao(ispin, 1)%matrix, 0.0_dp)
+    END DO
+
+    ! integrate old density (old_rho_r) on real space grid 
+    ! to compute its matrix elements (old_rho_ao) in HARRIS basis, 
+    DO ispin = 1, nspins
+       CALL pw_scale(old_rho_r(ispin)%pw, old_rho_r(ispin)%pw%pw_grid%dvol)
+       CALL integrate_v_rspace(v_rspace = old_rho_r(ispin), &
+                               hmat = old_rho_ao(ispin, 1), &
+                               qs_env = qs_env, &
+                               calculate_forces = .FALSE., &
+                               basis_type = "HARRIS", &
+                               task_list_external = ec_env%task_list ) 
     END DO
 
     ! update rho strucutre with new density matrix of energy correction
-    ! 'rho_ao_in'  = ec_env%matrix_p 
-    ! 'rho_ao_out' = rho%rho_ao(:,:) 
+    ! copy ec_env%matrix_p to rho%rho_ao(:,:) 
     DO ispin = 1, nspins
-       CALL dbcsr_copy(rho_ao(ispin,1)%matrix, ec_env%matrix_p(ispin,1)%matrix ,keep_sparsity=.FALSE.)
+       CALL dbcsr_copy(rho_ao(ispin,1)%matrix, ec_env%matrix_p(ispin,1)%matrix, & 
+                         keep_sparsity = .FALSE.)
     END DO
-    
+
     ! updates rho_r and rho_g wrt to new rho%rho_ao
-    CALL qs_rho_update_rho(rho, qs_env=qs_env)
+    CALL qs_rho_update_rho(rho, qs_env = qs_env)
 
     ! calculate matrix_w = matrix_p*matrix_ks*matrix_p
     !IF(para_env%mepos==0) THEN 
@@ -285,8 +292,9 @@ CONTAINS
   END SUBROUTINE ec_forces
 
 ! **************************************************************************************************
-!> \brief  Non self consistent forces (Hartree and XC part)
+!> \brief  Non-self-consistent forces (Hartree and XC part)
 !> \param qs_env ...
+!>  \int (v_hartree[rho_out-rho_in] + (rho_out - rho_in)*\mu'_[rho_in]) \nabla_I rho_in dr
 
 !> \date    03.2018
 !> \author  Fabian Belleflamme
@@ -321,8 +329,6 @@ CONTAINS
     INTEGER                                            :: i, iatom, ikind, natom
     INTEGER, ALLOCATABLE, DIMENSION(:)                 :: atom_of_kind, kind_of
     ! fbelle
-    TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: density_matrix
-    !fbelle
     TYPE(xc_derivative_set_type), POINTER              :: deriv_set
     TYPE(xc_rho_set_type), POINTER                     :: rho_set
     TYPE(pw_p_type), DIMENSION(:), POINTER             :: v_xc, v_rspace_nsc
@@ -330,7 +336,6 @@ CONTAINS
     logger => cp_get_default_logger()
     
     CALL timeset(routineN//"_forces", handle)
-    
     
     CALL get_qs_env(qs_env, &
                     kg_env=kg_env, &
@@ -426,7 +431,7 @@ CONTAINS
     ! main ingredient is xc_rho_set_and_dset_create
     CALL xc_prep_2nd_deriv(deriv_set = deriv_set, &        ! containing potentials
                            rho_set = rho_set, &            ! density at which deriv are calced
-                           rho_r = old_rho_r, &      ! where derivative evaluated 
+                           rho_r = old_rho_r, &            ! where derivative evaluated 
                            pw_pool = auxbas_pw_pool, &     ! OK
                            xc_section = ec_env%xc_section) ! OK 
 
@@ -453,7 +458,6 @@ CONTAINS
         ! *** Calculation of forces due to non-self consistency of energy correction *** ! 
         ! Second, add v_hartree[rho_out-rho_in] to potential we will integrate 
     !!---------------------------------------------------------------------------------------
-
    
     ! + v_hartree[rho_out-rho_in]
 
@@ -476,40 +480,13 @@ CONTAINS
       CALL pw_scale(v_rspace_nsc(ispin)%pw, v_rspace_nsc(ispin)%pw%pw_grid%dvol)
     END DO
     
-!    IF(para_env%mepos==0) THEN
-!    WRITE(*,*) "ec_nsc_force - qs_env%...%force - before  rho_elec"
-!    CALL ec_write_forces(qs_env, force)
-!    WRITE(*,*) "ec_force - ec_env%force before rho_elec "
-!    CALL ec_write_forces(qs_env, ec_env%force)
-!    END IF
+    IF(para_env%mepos==0) THEN
+    WRITE(*,*) "ec_nsc_force - qs_env%...%force - before  rho_elec"
+    CALL ec_write_forces(qs_env, force)
+    WRITE(*,*) "ec_force - ec_env%force before rho_elec "
+    CALL ec_write_forces(qs_env, ec_env%force)
+    END IF
     
-    ! empty qs force 
-    CALL zero_qs_force(force)
-
-    ! Careful, old_rho_ao is sparse, however hmat is not (task_list conflict)
-    ! Allocate dummy matrix (density_matrix) to transform old_rho_ao into non-sparse matrix 
-    NULLIFY (density_matrix)
-    CALL dbcsr_allocate_matrix_set(density_matrix, nspins, 1)
-    DO ispin = 1, nspins
-       ALLOCATE (density_matrix(ispin,1)%matrix)
-       CALL dbcsr_create(density_matrix(ispin, 1)%matrix, name="NON-SPARSE OLD P-MATRIX", &
-                         template=rho_ao(1, 1)%matrix)
-       CALL dbcsr_copy(density_matrix(1,1)%matrix, rho_ao(1,1)%matrix, keep_sparsity = .FALSE.)
-       CALL dbcsr_set(density_matrix(ispin, 1)%matrix, 0.0_dp)
-       CALL dbcsr_copy(density_matrix(1,1)%matrix, old_rho_ao(1,1)%matrix, keep_sparsity = .TRUE.)
-    END DO
-
-!    IF(para_env%mepos==0) THEN
-!    WRITE(*,*) "ec_nsc_force - old_rho_ao"
-!    CALL dbcsr_print(old_rho_ao(1,1)%matrix)
-!
-!    WRITE(*,*) "ec_nsc_force - rho_ao"
-!    CALL dbcsr_print(rho_ao(1,1)%matrix)
-!    
-!    WRITE(*,*) "ec_nsc_force - density_matrix"
-!    CALL dbcsr_print(density_matrix(1,1)%matrix)
-!    END IF 
-
     !!---------------------------------------------------------------------------------------
         ! *** Calculation of forces due to non-self consistency of energy correction *** ! 
         ! \int v_nsc(r) * \grad_I(rho_in) 
@@ -517,42 +494,16 @@ CONTAINS
     DO ispin = 1 , nspins
        ! modifies KS matrix!
        CALL integrate_v_rspace(v_rspace = v_rspace_nsc(ispin), &
-                               pmat = density_matrix(ispin, 1), &
+                               pmat = old_rho_ao(ispin, 1), &
                                hmat = ec_env%matrix_p(ispin, 1), &
                                qs_env = qs_env, &
                                calculate_forces = calculate_forces, &
                                basis_type = "HARRIS", &
                                task_list_external = ec_env%task_list)
-
-!       CALL get_qs_env(qs_env, force = force)
-!       WRITE(*,*) "ec_nsc_force - qs_env%...%force - rho_elec"
-!       CALL ec_write_forces(qs_env, force)
-
     END DO
 
-
-!    IF(para_env%mepos==0) THEN
-!    WRITE(*,*) "ec_nsc_force - old_rho_ao - after integrate_v_rspace"
-!    CALL dbcsr_print(old_rho_ao(1,1)%matrix)
-!    WRITE(*,*) "ec_nsc_force - density_matrix after integrate_v_rspace"
-!    CALL dbcsr_print(density_matrix(1,1)%matrix)
-!    END IF
-
-
-!---------------------------------------------------------------------------------------
-!---------------------------------------------------------------------------------------
-
-    
-!    IF(para_env%mepos==0) THEN
-!    CALL get_qs_env(qs_env, force=force)
-!    WRITE(*,*) "ec_nsc_force - qs_env%...%force - rho_elec - before copy"
-!    CALL ec_write_forces(qs_env, force)
-!    WRITE(*,*) "ec_force - ec_env%force - rho_elec - before copy"
-!    CALL ec_write_forces(qs_env, ec_env%force)
-!    END IF
-
     !---------------------------------------------------------------------------------------
-    ! Need to copy NSC Hartree force contrib from qs_env%...%force to stored forces in ec_env%force
+    ! Need to copy NSC force contrib from qs_env%...%force to stored forces in ec_env%force
     ! acting on rho_elec 
     !---------------------------------------------------------------------------------------
 
@@ -561,12 +512,13 @@ CONTAINS
        ikind = kind_of(iatom)
        i = atom_of_kind(iatom)
        
-       ec_env%force(ikind)%rho_elec(1:3, i) = ec_env%force(ikind)%rho_elec(1:3, i) - force(ikind)%rho_elec(1:3, i)
+       ec_env%force(ikind)%rho_elec(1:3, i) = ec_env%force(ikind)%rho_elec(1:3, i) & 
+                                                - force(ikind)%rho_elec(1:3, i)
     END DO
 
     DEALLOCATE (atom_of_kind, kind_of)
 
-    ! Delete NSC force contribution
+    ! Delete NSC force contribution from qs_env%...%force 
     CALL zero_qs_force(force)
     
 !    IF(para_env%mepos==0) THEN
@@ -589,10 +541,6 @@ CONTAINS
     CALL pw_pool_give_back_pw(auxbas_pw_pool, v_hartree_rspace%pw)
     CALL pw_pool_give_back_pw(auxbas_pw_pool, rho_tot_gspace%pw)
     
-    !NULLIFY(density_matrix)
-    DO ispin = 1 , nspins
-    CALL dbcsr_deallocate_matrix_set(density_matrix)
-    END DO
 
     IF(para_env%mepos==0) WRITE(*,*) "ec_nsc_force - END"
 !    CALL ec_write_forces(qs_env, force, calculate_forces=.TRUE.)
