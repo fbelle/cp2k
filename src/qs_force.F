@@ -113,10 +113,10 @@ CONTAINS
       qs_env%linres_run = linres
       CALL set_qs_env(qs_env)
       IF (calc_force) THEN
-         WRITE(*,*) "qs_calc_energy_force - qs_forces"
+         !WRITE(*,*) "qs_calc_energy_force - qs_forces"
          CALL qs_forces(qs_env)
       ELSE
-         WRITE(*,*) "qs_calc_energy_force - qs_energies"
+         !WRITE(*,*) "qs_calc_energy_force - qs_energies"
          CALL qs_energies(qs_env, calc_forces=.FALSE., &
                           consistent_energies=consistent_energies)
       END IF
@@ -167,23 +167,6 @@ CONTAINS
       CALL timeset(routineN, handle)
       NULLIFY (logger)
       logger => cp_get_default_logger()
-
-
-      !------------------------------------------------------------------------
-      !fbelle 
-      CALL get_qs_env(qs_env=qs_env, rho=rho)
-      CALL qs_rho_get(rho, rho_ao=rho_ao)
-      WRITE(*,*) "qs_forces - BEGINNING - rho_ao "
-      WRITE(*,*) "ASSOCIATED(rho_ao)", ASSOCIATED(rho_ao)
-      WRITE(*,*) "ASSOCIATED(rho)", ASSOCIATED(rho)
-
-      IF(ASSOCIATED(rho_ao)) THEN
-          CALL dbcsr_print(rho_ao(1)%matrix)
-      END IF
-      !------------------------------------------------------------------------
-
-
-
 
 
       ! rebuild plane wave environment
@@ -243,14 +226,14 @@ CONTAINS
 
       ! recalculate energy with forces
       CALL get_qs_env(qs_env,para_env=para_env)
-      IF(para_env%mepos==0) THEN
-         WRITE(*,*) "qs_forces - CALL qs_energies"
-      END IF
+!      IF(para_env%mepos==0) THEN
+!         WRITE(*,*) "qs_forces - CALL qs_energies"
+!      END IF
       CALL qs_energies(qs_env, calc_forces=.TRUE.)
 
-      IF(para_env%mepos==0) THEN
-         WRITE(*,*) "CALCULATING FORCES AFTER ENERGY in qs_forces"
-      END IF
+!      IF(para_env%mepos==0) THEN
+!         WRITE(*,*) "CALCULATING FORCES AFTER ENERGY in qs_forces"
+!      END IF
 
       NULLIFY (para_env)
       CALL get_qs_env(qs_env, &
@@ -320,17 +303,17 @@ CONTAINS
          END DO
       ENDIF
       
-      !------------------------------------------------------------------------
-
-      CALL get_qs_env(qs_env,kg_env=kg_env)
-      
-      ! Check for energy correction
-      IF(para_env%mepos==0) THEN
-         WRITE(*,*) "dft_control%qs_control%do_kg", dft_control%qs_control%do_kg
-         WRITE(*,*) "dft_control%qs_control%do_kg_ec", dft_control%qs_control%do_kg_ec
-      END IF
-      
-      !------------------------------------------------------------------------
+!      !------------------------------------------------------------------------
+!
+!      CALL get_qs_env(qs_env,kg_env=kg_env)
+!      
+!      ! Check for energy correction
+!      IF(para_env%mepos==0) THEN
+!         WRITE(*,*) "dft_control%qs_control%do_kg", dft_control%qs_control%do_kg
+!         WRITE(*,*) "dft_control%qs_control%do_kg_ec", dft_control%qs_control%do_kg_ec
+!      END IF
+!      
+!      !------------------------------------------------------------------------
 
    ! Harris functional energy correction requires different force calculation
    IF (.NOT. dft_control%qs_control%do_kg_ec) THEN
@@ -347,9 +330,9 @@ CONTAINS
                                         calculate_forces=.TRUE.)
       ELSE
 
-         IF(para_env%mepos==0) THEN
-            WRITE(*,*) "Regular force calculation"
-         END IF
+!         IF(para_env%mepos==0) THEN
+!            WRITE(*,*) "Regular force calculation"
+!         END IF
          CALL build_core_hamiltonian_matrix(qs_env=qs_env, calculate_forces=.TRUE.)
          CALL calculate_ecore_self(qs_env)
          CALL calculate_ecore_overlap(qs_env, para_env, calculate_forces=.TRUE.)
@@ -371,9 +354,9 @@ CONTAINS
       CALL qs_ks_update_qs_env(qs_env, calculate_forces=.TRUE.)
       
    ELSE
-      IF(para_env%mepos==0) THEN
-         WRITE(*,*) "About to call ec_force"
-      END IF
+!      IF(para_env%mepos==0) THEN
+!         WRITE(*,*) "About to call ec_force"
+!      END IF
       CALL zero_qs_force(force)
       CALL ec_forces(qs_env)
    ! end of ".NOT. kg_env%_energy_correction"
