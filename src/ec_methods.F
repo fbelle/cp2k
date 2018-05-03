@@ -161,6 +161,7 @@ CONTAINS
       CALL dbcsr_allocate_matrix_set(ec_env%matrix_w, nspins, 1)
       DO ispin = 1, nspins
          ALLOCATE (ec_env%matrix_w(ispin,1)%matrix)
+         ! matrix_w same structure as matrix_s
          CALL dbcsr_copy(ec_env%matrix_w(ispin, 1)%matrix, ec_env%matrix_s(1, 1)%matrix , name="W MATRIX")
          CALL dbcsr_set(ec_env%matrix_w(ispin, 1)%matrix, 0.0_dp)
       END DO
@@ -193,7 +194,7 @@ CONTAINS
                              0.0_dp, matrix_tmp1)
          CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_tmp1, ec_env%matrix_p(ispin,1)%matrix, &
                              0.0_dp, matrix_tmp2)
-         CALL dbcsr_copy(ec_env%matrix_w(1,1)%matrix, matrix_tmp2, name="MATRIX W EC")
+         CALL dbcsr_copy(ec_env%matrix_w(ispin, 1)%matrix, matrix_tmp2, name="MATRIX W EC")
       END DO
       
       DO ispin = 1, nspins
