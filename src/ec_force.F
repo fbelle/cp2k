@@ -10,8 +10,9 @@
 !>                                             gth_ppnl
 !>                       ec_build_ks_matrix:   core_overlap, rho_core, rho_elec
 !>                       ec_nsc_force:         (-1)*rho_elec
-!> F_tot = F_kin[n_out] + F_gth_ppl[n_out] + F_gth_ppnl[n_out] + F_BS_H[n_out] + F_BS_XC[n_out] 
-!>         + F_core[rho_core + n_out] + F_NSC[n_in, n_out]
+!> F_tot = F_kin[n_out] + F_gth_ppl[n_out] + F_gth_ppnl[n_out] 
+!>         + F_BS_H[n_in, n_out] + F_BS_XC[n_in, n_out] 
+!>         + F_core[rho_core + n_in] + F_NSC[n_in, n_out]
 !>
 !> w/ F_NSCF_NSC[n_in, n_out] = F_BS_H + F_BS_XC + F_delta_H + F_delta_XC
 !>                            = \int (v_hartree[rho_out-rho_in] +
@@ -238,7 +239,7 @@ CONTAINS
     CALL ec_build_core_hamiltonian(qs_env, ec_env, calculate_forces)
 
     ! next, all grid based forces : 
-    ! rho_elec : F_BS_XC[n_out] + F_BS_H[n_out]
+    ! rho_elec : F_BS_XC[n_in, n_out] + F_BS_H[n_in, n_out]
     ! rho_core : calculate_ecore_overlap 
     CALL ec_build_ks_matrix(qs_env, ec_env, calculate_forces)
 
@@ -251,7 +252,7 @@ CONTAINS
   
     ! forces from band structure and double counting terms
     ! grid based forces rho_elec
-    CALL ec_nsc_force(qs_env)
+    CALL ec_nsc_force(qs_env, ec_env)
 
     ! copy back forces
     CALL qs_copy_force(force, ec_env%force)
@@ -260,8 +261,8 @@ CONTAINS
        WRITE(*,*) "Forces END of ec_forces"  
        WRITE(*,*) "ec_nsc_force - qs_env%...%force - after  rho_elec"
        CALL ec_write_forces(qs_env, force)
-       WRITE(*,*) "ec_force - ec_env%force after rho_elec "
-       CALL ec_write_forces(qs_env, ec_env%force)
+!       WRITE(*,*) "ec_force - ec_env%force after rho_elec "
+!       CALL ec_write_forces(qs_env, ec_env%force)
     END IF
 
     CALL timestop(handle)
@@ -276,13 +277,13 @@ CONTAINS
 !> \date    03.2018
 !> \author  Fabian Belleflamme
 ! **************************************************************************************************
-  SUBROUTINE ec_nsc_force(qs_env)
+  SUBROUTINE ec_nsc_force(qs_env, ec_env)
 
     TYPE(qs_environment_type), POINTER                 :: qs_env
+    TYPE(energy_correction_type), POINTER              :: ec_env
 
     CHARACTER(len=*), PARAMETER :: routineN = 'ec_nsc', routineP = moduleN//':'//routineN
     
-    TYPE(energy_correction_type), POINTER              :: ec_env
     TYPE(kg_environment_type), POINTER                 :: kg_env
     INTEGER                                            :: handle
     TYPE(cp_logger_type), POINTER                      :: logger
@@ -309,6 +310,7 @@ CONTAINS
     TYPE(xc_derivative_set_type), POINTER              :: deriv_set
     TYPE(xc_rho_set_type), POINTER                     :: rho_set
     TYPE(pw_p_type), DIMENSION(:), POINTER             :: v_xc, v_rspace_nsc
+    TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: my_matrix_ks
 
     logger => cp_get_default_logger()
     
@@ -325,8 +327,6 @@ CONTAINS
        WRITE(*,*) "ec_nsc_force - BEGINNING"
     END IF
     
-    ec_env => kg_env%ec_env
-
     calculate_forces = .TRUE.
     
     nspins = dft_control%nspins
@@ -480,51 +480,26 @@ CONTAINS
     !                           task_list_external = ec_env%task_list)
     !END DO
 
-!      WRITE(*,*) "BEFORE INTEGRATE-V-RSPACE"
-!      WRITE(*,*) "ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
-!      IF(ASSOCIATED(ec_env%matrix_p)) THEN
-!          CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
-!      END IF
-!      WRITE(*,*) "ASSOCIATED(rho_ao)", ASSOCIATED(rho_ao)
-!      IF(ASSOCIATED(rho_ao)) THEN
-!          CALL dbcsr_print(rho_ao(1,1)%matrix)
-!      END IF
-!      WRITE(*,*) "ASSOCIATED(old_rho_ao)", ASSOCIATED(old_rho_ao)
-!      IF(ASSOCIATED(old_rho_ao)) THEN
-!          CALL dbcsr_print(old_rho_ao(1,1)%matrix)
-!      END IF
+    NULLIFY (my_matrix_ks)
     
     DO ispin = 1 , nspins
        ! modifies KS matrix!
+       CALL dbcsr_allocate_matrix_set(my_matrix_ks, nspins, 1)
+       ALLOCATE (my_matrix_ks(ispin,1)%matrix)
+
+       CALL dbcsr_copy(my_matrix_ks(ispin,1)%matrix, ec_env%matrix_ks(ispin,1)%matrix, & 
+                       keep_sparsity = .FALSE., name="DUMMY KS-MATRIX")
+       CALL dbcsr_set(my_matrix_ks(ispin, 1)%matrix, 0.0_dp )
+   
        CALL integrate_v_rspace(v_rspace = v_rspace_nsc(ispin), &
                                pmat = old_rho_ao(ispin, 1), &
-                               hmat = ec_env%matrix_ks(ispin, 1), &
+                               hmat = my_matrix_ks(ispin, 1), &
                                qs_env = qs_env, &
                                calculate_forces = calculate_forces)
+    
+       ! Deallocate dummy ks matrix                         
+       CALL dbcsr_deallocate_matrix_set(my_matrix_ks)
     END DO
-
-!      WRITE(*,*) "AFTER INTEGRATE-V-RSPACE"
-!      WRITE(*,*) "ASSOCIATED(ec_env%matrix_p)", ASSOCIATED(ec_env%matrix_p)
-!      IF(ASSOCIATED(ec_env%matrix_p)) THEN
-!          CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
-!      END IF
-!      WRITE(*,*) "ASSOCIATED(rho_ao)", ASSOCIATED(rho_ao)
-!      IF(ASSOCIATED(rho_ao)) THEN
-!          CALL dbcsr_print(rho_ao(1,1)%matrix)
-!      END IF
-!      WRITE(*,*) "ASSOCIATED(old_rho_ao)", ASSOCIATED(old_rho_ao)
-!      IF(ASSOCIATED(old_rho_ao)) THEN
-!          CALL dbcsr_print(old_rho_ao(1,1)%matrix)
-!      END IF
-
-
-    IF(para_env%mepos==0) THEN
-    WRITE(*,*) "ec_nsc_force - qs_env%...%force - after  rho_elec"
-    CALL ec_write_forces(qs_env, force)
-    WRITE(*,*) "ec_force - ec_env%force after rho_elec "
-    CALL ec_write_forces(qs_env, ec_env%force)
-    END IF
-
 
     !---------------------------------------------------------------------------------------
     ! Need to copy NSC force contrib from qs_env%...%force to stored forces in ec_env%force
