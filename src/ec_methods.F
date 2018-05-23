@@ -27,8 +27,13 @@ MODULE ec_methods
    USE kinds,                           ONLY: dp
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
-   USE qs_force_types,                  ONLY: qs_force_type
+   !USE qs_force_types,                  ONLY: qs_force_type
    
+   USE qs_force_types,                  ONLY: allocate_qs_force,&
+                                              qs_force_type,&
+                                              replicate_qs_force,&
+                                              zero_qs_force,&
+                                              deallocate_qs_force
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -38,7 +43,7 @@ MODULE ec_methods
    LOGICAL, PARAMETER :: debug_this_module = .TRUE.
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'ec_methods'
 
-   PUBLIC :: ec_write_forces, ec_calculate_w_matrix
+   PUBLIC :: ec_write_forces, ec_calculate_w_matrix, ec_write_bs_forces
 
 CONTAINS
 
@@ -206,5 +211,82 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE ec_calculate_w_matrix
+
+
+! **************************************************************************************************
+!> \brief   Calculate and write band structure forces  
+!> \param   qs_env ...
+!> \param   force ...
+!> \date    05.2018
+!> \author  fbelle
+! **************************************************************************************************
+   SUBROUTINE ec_write_bs_forces(qs_env, force)
+
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(qs_force_type), DIMENSION(:), POINTER         :: force
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_write_bs_forces', routineP = moduleN//':'//routineN
+
+      TYPE(qs_force_type), DIMENSION(:), POINTER         :: qs_force
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: atom_of_kind, kind_of, natom_of_kind
+      INTEGER                                            :: i, iatom, ikind, natom, ndigits, nkind
+      CHARACTER(LEN=35)                                  :: fmtstr2
+      CHARACTER(LEN=48)                                  :: fmtstr1
+
+
+      ! get atom mapping
+      NULLIFY (atomic_kind_set , qs_force)
+      CALL get_qs_env(qs_env, atomic_kind_set=atomic_kind_set, natom = natom)
+      ALLOCATE (atom_of_kind(natom), kind_of(natom))
+      CALL get_atomic_kind_set(atomic_kind_set=atomic_kind_set, &
+                               atom_of_kind=atom_of_kind, &
+                               kind_of=kind_of)
+
+      !   *** Allocate the force data structure ***
+      nkind = SIZE(atomic_kind_set)
+      ALLOCATE (natom_of_kind(nkind))
+      CALL get_atomic_kind_set(atomic_kind_set=atomic_kind_set, &
+                               natom_of_kind=natom_of_kind)
+      CALL allocate_qs_force(qs_force, natom_of_kind)
+      DEALLOCATE (natom_of_kind)
+      CALL zero_qs_force(qs_force)
+
+      DO ikind = 1, SIZE(force)
+
+         qs_force(ikind)%total(:, :) = qs_force(ikind)%total(:, :)+ &
+                                       force(ikind)%core_overlap(:, :)+ &
+                                       force(ikind)%gth_ppl(:, :)+ &
+                                       force(ikind)%gth_ppnl(:, :)+ &
+                                       force(ikind)%kinetic(:, :)+ &
+                                       force(ikind)%overlap(:, :)+ &
+                                       force(ikind)%rho_elec(:, :)
+      END DO
+
+      ndigits=6
+
+      fmtstr1 = "(/,/,T2,A,/,/,T3,A,T11,A,T23,A,T40,A1,2(  X,A1))"
+      WRITE (UNIT=fmtstr1(41:42), FMT="(I2)") ndigits+5
+
+      fmtstr2 = "(/,(T2,I5,4X,I4,T18,A,T34,3F  .  ))"
+      WRITE (UNIT=fmtstr2(32:33), FMT="(I2)") ndigits
+      WRITE (UNIT=fmtstr2(29:30), FMT="(I2)") ndigits+6
+
+      WRITE (UNIT=6, FMT=fmtstr1) &
+         "FORCES [a.u.]", "Atom", "Kind", "Component", "X", "Y", "Z"
+
+      DO iatom = 1, natom
+         ikind = kind_of(iatom)
+         i = atom_of_kind(iatom)
+         WRITE (UNIT=6, FMT=fmtstr2) &
+            iatom, ikind, "         f_trace", qs_force(ikind)%total(1:3, i)
+      END DO
+
+      DEALLOCATE (atom_of_kind)
+      DEALLOCATE (kind_of)
+
+      CALL deallocate_qs_force(qs_force)
+
+   END SUBROUTINE ec_write_bs_forces
 
 END MODULE ec_methods
