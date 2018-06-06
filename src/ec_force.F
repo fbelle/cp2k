@@ -195,6 +195,10 @@ CONTAINS
     ec_env => kg_env%ec_env
     nspins = dft_control%nspins
 
+!!---------------------------------------------------------------------------------------
+!!  storage force environment
+!!---------------------------------------------------------------------------------------
+
     ! Introduce new ec_env%force type to store forces and prevent overwriting
     !    especially to rho_elec
     IF (.NOT. ASSOCIATED(ec_env%force)) THEN
@@ -209,6 +213,9 @@ CONTAINS
     END IF
     CALL zero_qs_force(ec_env%force)
 
+!!---------------------------------------------------------------------------------------
+!!  storage old density
+!!---------------------------------------------------------------------------------------
 
     ! allocate and initialize the old density
     CALL qs_rho_create(ec_env%old_rho)
@@ -234,10 +241,32 @@ CONTAINS
     ! updates rho_r and rho_g wrt to new rho%rho_ao
     CALL qs_rho_update_rho(rho, qs_env = qs_env)
 
+!!---------------------------------------------------------------------------------------
+!!  matrix_w
+!!---------------------------------------------------------------------------------------
+
 
     ! calculate matrix_w = matrix_p*matrix_ks*matrix_p
     CALL ec_calculate_w_matrix(qs_env, ec_env)
 
+      IF(para_env%mepos==0) THEN
+!         WRITE(*,*) " ec_forces", ASSOCIATED(ec_env%matrix_s)
+!         IF(ASSOCIATED(ec_env%matrix_s)) THEN
+!               CALL dbcsr_print(ec_env%matrix_s(1,1)%matrix)
+!         END IF
+!         WRITE(*,*) " ec_forces", ASSOCIATED(ec_env%matrix_p)
+!         IF(ASSOCIATED(ec_env%matrix_p)) THEN
+!               CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
+!         END IF
+!         WRITE(*,*) " ec_forces", ASSOCIATED(ec_env%matrix_t)
+!         IF(ASSOCIATED(ec_env%matrix_t)) THEN
+!               CALL dbcsr_print(ec_env%matrix_t(1,1)%matrix)
+!         END IF
+         WRITE(*,*) " ec_forces - ec_env%matrix_w", ASSOCIATED(ec_env%matrix_w)
+         IF(ASSOCIATED(ec_env%matrix_w)) THEN
+               CALL dbcsr_print(ec_env%matrix_w(1,1)%matrix)
+         END IF
+      END IF
 
     ! d/dR[Sum of eigenvalues] = d/dR[trace(matrix_ks[n_in] * n_out)] 
     ! core hamiltonian force contribution: 
@@ -264,12 +293,9 @@ CONTAINS
        CALL ec_write_forces(qs_env, force)
        WRITE(*,*) "ec_forces - ec_env%force - after ec_bs_forces"
        CALL ec_write_forces(qs_env, ec_env%force)
+    !CALL ec_write_bs_forces(qs_env, force)
        WRITE(*,*) repeat("-",80)  
     END IF
-
-
-    CALL ec_write_bs_forces(qs_env, force)
-
 
 
 
@@ -310,8 +336,6 @@ CONTAINS
     CALL timestop(handle)
 
   END SUBROUTINE ec_forces
-
-
 
 ! **************************************************************************************************
 !> \brief  Band structure forces (Hartree and XC part)

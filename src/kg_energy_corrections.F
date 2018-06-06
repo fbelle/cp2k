@@ -1080,7 +1080,7 @@ CONTAINS
       CALL qs_rho_get(rho, rho_ao_kp = rho_ao)
       CALL get_qs_env(qs_env=qs_env, matrix_ks_kp=matrix_ks)     
       
-!      IF(para_env%mepos==0) THEN
+      IF(para_env%mepos==0) THEN
 !         WRITE(*,*) " ec_energy matrix_ks", ASSOCIATED(matrix_ks)
 !         IF(ASSOCIATED(matrix_ks)) THEN
 !               CALL dbcsr_print(matrix_ks(1,1)%matrix)
@@ -1093,11 +1093,15 @@ CONTAINS
 !         IF(ASSOCIATED(ec_env%matrix_t)) THEN
 !               CALL dbcsr_print(ec_env%matrix_t(1,1)%matrix)
 !         END IF
-!         WRITE(*,*) " ec_energy -  rho_ao", ASSOCIATED(rho_ao)
-!         IF(ASSOCIATED(rho_ao)) THEN
-!               CALL dbcsr_print(rho_ao(1,1)%matrix)
-!         END IF
-!      END IF
+         WRITE(*,*) " ec_energy ec_env%matrix_p", ASSOCIATED(ec_env%matrix_p)
+         IF(ASSOCIATED(ec_env%matrix_p)) THEN
+               CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
+         END IF
+         WRITE(*,*) " ec_energy -  rho_ao", ASSOCIATED(rho_ao)
+         IF(ASSOCIATED(rho_ao)) THEN
+               CALL dbcsr_print(rho_ao(1,1)%matrix)
+         END IF
+      END IF
       
       
       ! core matrix trace

@@ -173,9 +173,12 @@ CONTAINS
 
       ! initialize temp matrices for multiplication
       DO ispin = 1, nspins
-         CALL dbcsr_create(matrix_tmp1, template=ec_env%matrix_s(ispin, 1)%matrix, name="TMP1 MATRIX")
-         CALL dbcsr_create(matrix_tmp2, template=ec_env%matrix_s(ispin, 1)%matrix, name="TMP2 MATRIX")
-         CALL dbcsr_create(matrix_tmp3, template=ec_env%matrix_s(ispin, 1)%matrix, name="TMP3 MATRIX")
+         CALL dbcsr_create(matrix_tmp1, template=ec_env%matrix_s(ispin, 1)%matrix, &
+            name="TMP1 MATRIX", matrix_type=dbcsr_type_no_symmetry)
+         CALL dbcsr_create(matrix_tmp2, template=ec_env%matrix_s(ispin, 1)%matrix, &
+            name="TMP2 MATRIX",  matrix_type=dbcsr_type_no_symmetry)
+         CALL dbcsr_create(matrix_tmp3, template=ec_env%matrix_s(ispin, 1)%matrix, &
+            name="TMP3 MATRIX", matrix_type=dbcsr_type_no_symmetry)
       END DO
 
          CALL dbcsr_set(matrix_tmp1, 0.0_dp)
@@ -199,7 +202,7 @@ CONTAINS
                              0.0_dp, matrix_tmp1)
          CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_tmp1, ec_env%matrix_p(ispin,1)%matrix, &
                              0.0_dp, matrix_tmp2)
-         CALL dbcsr_copy(ec_env%matrix_w(ispin, 1)%matrix, matrix_tmp2, name="MATRIX W EC")
+         CALL dbcsr_copy(ec_env%matrix_w(ispin, 1)%matrix, matrix_tmp2, name="MATRIX W EC", keep_sparsity = .TRUE.)
       END DO
       
       DO ispin = 1, nspins
