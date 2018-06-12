@@ -25,6 +25,20 @@ MODULE qs_energy
                                               qs_environment_type
    USE qs_ks_methods,                   ONLY: qs_ks_update_qs_env
    USE qs_scf,                          ONLY: scf
+   USE cp_para_types,                   ONLY: cp_para_env_type
+   USE dbcsr_api,                       ONLY: &
+        dbcsr_add, dbcsr_allocate_matrix_set, dbcsr_copy, dbcsr_create, &
+        dbcsr_deallocate_matrix_set, dbcsr_desymmetrize, dbcsr_distribution_type, dbcsr_filter, &
+        dbcsr_get_info, dbcsr_init_p, dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_set, &
+        dbcsr_trace, dbcsr_type, dbcsr_type_no_symmetry, dbcsr_type_symmetric, dbcsr_print, dbcsr_finalize
+   USE qs_rho_types,                    ONLY: qs_rho_create,&
+                                              qs_rho_get,&
+                                              qs_rho_release,&
+                                              qs_rho_set,&
+                                              qs_rho_type
+   USE ec_energy_corrections,           ONLY: ec_energy_correction
+   USE ec_methods,                      ONLY: ec_calculate_w_matrix
+
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -62,6 +76,14 @@ CONTAINS
       LOGICAL                                            :: my_calc_forces, run_rtp
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(qs_energy_type), POINTER                      :: energy
+      !fbelle
+      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: rho_ao
+      TYPE(qs_rho_type), POINTER                         :: rho
+      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_ks
+      TYPE(cp_para_env_type), POINTER                    :: para_env
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_w
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_h
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s,  kinetic
 
       CALL timeset(routineN, handle)
 
@@ -90,17 +112,100 @@ CONTAINS
 
             ! if calculate forces, time to compute the w matrix
             CALL qs_energies_compute_matrix_w(qs_env, my_calc_forces)
-
          END IF
 
-         IF (dft_control%qs_control%do_kg) THEN
+      !--------------------------------------------------------------------------
+ 
+      CALL get_qs_env(qs_env,para_env=para_env)
+!      IF(para_env%mepos==0) THEN
+!        WRITE(*,*) "qs_energies - after KG" 
+!        
+!        WRITE(*,*) "core        "  , energy%core
+!        WRITE(*,*) "core_overlap " , energy%core_overlap
+!        WRITE(*,*) "core_self   "  , energy%core_self
+!        WRITE(*,*) "exc         "  , energy%exc
+!        WRITE(*,*) "hartree     "  , energy%hartree
+!        WRITE(*,*) "e_hartree,  "  , energy%e_hartree
+!        WRITE(*,*) "total       "  , energy%total
+!        WRITE(*,*) "tot_old     "  , energy%tot_old
+!        WRITE(*,*) "kinetic     "  , energy%kinetic
+!      END IF
+ 
+      ! fbelle 
+      CALL get_qs_env(qs_env, rho=rho, para_env = para_env)
+      CALL qs_rho_get(rho, rho_ao_kp = rho_ao)
+      CALL get_qs_env(qs_env=qs_env, matrix_ks_kp=matrix_ks)     
+      CALL get_qs_env(qs_env=qs_env, matrix_w=matrix_w)     
+      CALL get_qs_env(qs_env=qs_env, matrix_h=matrix_h)     
+      CALL get_qs_env(qs_env, matrix_s=matrix_s)
+      CALL get_qs_env(qs_env, kinetic=kinetic)
+     
+
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) " qs_energies - matrix_h", ASSOCIATED(matrix_h)
+         IF(ASSOCIATED(matrix_h)) THEN
+               CALL dbcsr_print(matrix_h(1)%matrix)
+         END IF
+         WRITE(*,*) " qs_energies - matrix_ks", ASSOCIATED(matrix_ks)
+         IF(ASSOCIATED(matrix_ks)) THEN
+               CALL dbcsr_print(matrix_ks(1,1)%matrix)
+         END IF
+         WRITE(*,*) " qs_energies - matrix_w", ASSOCIATED(matrix_w)
+         IF(ASSOCIATED(matrix_w)) THEN
+               CALL dbcsr_print(matrix_w(1)%matrix)
+         END IF
+         WRITE(*,*) " qs_energies - rho_ao", ASSOCIATED(rho_ao)
+         IF(ASSOCIATED(rho_ao)) THEN
+               CALL dbcsr_print(rho_ao(1,1)%matrix)
+         END IF
+         WRITE(*,*) " qs_energies - matrix_s", ASSOCIATED(matrix_s)
+         IF(ASSOCIATED(matrix_s)) THEN
+               CALL dbcsr_print(matrix_s(1)%matrix)
+         END IF
+         WRITE(*,*) " qs_energies - kinetic", ASSOCIATED(kinetic)
+         IF(ASSOCIATED(kinetic)) THEN
+               CALL dbcsr_print(kinetic(1)%matrix)
+         END IF
+      END IF
+     !--------------------------------------------------------------------------
+    
+
+
+
+
+
+
+
+
+         ! enrgy correction after KS
+         IF (dft_control%qs_control%do_kg_ec) THEN
+            
             ! Check for energy correction
-            CALL kg_energy_correction(qs_env, calculate_forces=my_calc_forces)
+            CALL ec_energy_correction(qs_env, calculate_forces=my_calc_forces)
+
          END IF
+      !--------------------------------------------------------------------------
+ 
+!      IF(para_env%mepos==0) THEN
+!        WRITE(*,*) "qs_energies - after Harris" 
+!        WRITE(*,*) "core        "  , energy%core
+!        WRITE(*,*) "core_overlap " , energy%core_overlap
+!        WRITE(*,*) "core_self   "  , energy%core_self
+!        WRITE(*,*) "exc         "  , energy%exc
+!        WRITE(*,*) "hartree     "  , energy%hartree
+!        WRITE(*,*) "e_hartree,  "  , energy%e_hartree
+!        WRITE(*,*) "total       "  , energy%total
+!        WRITE(*,*) "tot_old     "  , energy%tot_old
+!        WRITE(*,*) "kinetic     "  , energy%kinetic
+!        WRITE(*,*) "qs_energy - consistent_energies", consistent_energies
+!     END IF
+     !--------------------------------------------------------------------------
+
 
          IF (PRESENT(consistent_energies)) THEN
             IF (consistent_energies) THEN
-               CALL qs_ks_update_qs_env(qs_env, calculate_forces=.FALSE., just_energy=.TRUE.)
+!               CALL qs_ks_update_qs_env(qs_env, calculate_forces=.FALSE., just_energy=.TRUE.)
+
                ! add MP2 energy if necessary
                IF (ASSOCIATED(qs_env%mp2_env)) THEN
                   energy%total = energy%total+energy%mp2
@@ -109,6 +214,26 @@ CONTAINS
          END IF
 
          CALL qs_energies_properties(qs_env)
+
+
+
+
+      !--------------------------------------------------------------------------
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) "qs_energies - end - (after qs_ks_update_qs_env)" 
+        
+        WRITE(*,*) "core        "  , energy%core
+        WRITE(*,*) "core_overlap " , energy%core_overlap
+        WRITE(*,*) "core_self   "  , energy%core_self
+        WRITE(*,*) "exc         "  , energy%exc
+        WRITE(*,*) "hartree     "  , energy%hartree
+        WRITE(*,*) "e_hartree,  "  , energy%e_hartree
+        WRITE(*,*) "total       "  , energy%total
+        WRITE(*,*) "tot_old     "  , energy%tot_old
+        WRITE(*,*) "kinetic     "  , energy%kinetic
+      END IF
+     !--------------------------------------------------------------------------
+
 
          IF (dft_control%qs_control%lrigpw) THEN
             CALL lri_print_stat(qs_env)

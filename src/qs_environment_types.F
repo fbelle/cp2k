@@ -65,6 +65,8 @@ MODULE qs_environment_types
                                               section_vals_type
    USE kg_environment_types,            ONLY: kg_env_release,&
                                               kg_environment_type
+   USE ec_environment_types,            ONLY: ec_env_release,&
+                                              energy_correction_type
    USE kinds,                           ONLY: dp
    USE kpoint_types,                    ONLY: kpoint_type
    USE lri_environment_types,           ONLY: lri_density_release,&
@@ -291,6 +293,7 @@ MODULE qs_environment_types
       REAL(KIND=dp)                                         :: broyden_adaptive_sigma
       TYPE(mp2_type), POINTER                               :: mp2_env
       TYPE(kg_environment_type), POINTER                    :: kg_env
+      TYPE(energy_correction_type), POINTER                 :: ec_env
       TYPE(wannier_centres_type), POINTER, DIMENSION(:)     :: WannierCentres => NULL()
       TYPE(molecular_scf_guess_env_type)                    :: molecular_scf_guess_env
       ! Subsystem densities
@@ -505,7 +508,8 @@ CONTAINS
                          outer_scf_history, outer_scf_ihistory, x_data, et_coupling, dftb_potential, results, &
                          se_taper, se_store_int_env, se_nddo_mpole, se_nonbond_env, admm_env, admm_dm, &
                          lri_env, lri_density, dispersion_env, vee, rho_external, external_vxc, mask, &
-                         mp2_env, kg_env, WannierCentres, atprop, ls_scf_env, do_transport, transport_env, v_hartree_rspace, &
+                         mp2_env, kg_env, ec_env, WannierCentres,&
+                         atprop, ls_scf_env, do_transport, transport_env, v_hartree_rspace, &
                          s_mstruct_changed, rho_changed, potential_changed, forces_up_to_date, mscfg_env, almo_scf_env, &
                          gradient_history, variable_history, embed_pot, spin_embed_pot, polar_env)
       TYPE(qs_environment_type), POINTER                 :: qs_env
@@ -625,6 +629,7 @@ CONTAINS
       TYPE(pw_p_type), OPTIONAL, POINTER                 :: external_vxc, mask
       TYPE(mp2_type), OPTIONAL, POINTER                  :: mp2_env
       TYPE(kg_environment_type), OPTIONAL, POINTER       :: kg_env
+      TYPE(energy_correction_type), OPTIONAL, POINTER    :: ec_env
       TYPE(wannier_centres_type), DIMENSION(:), &
          OPTIONAL, POINTER                               :: WannierCentres
       TYPE(atprop_type), OPTIONAL, POINTER               :: atprop
@@ -656,6 +661,7 @@ CONTAINS
       IF (PRESENT(variable_history)) variable_history => qs_env%variable_history
       IF (PRESENT(mp2_env)) mp2_env => qs_env%mp2_env
       IF (PRESENT(kg_env)) kg_env => qs_env%kg_env
+      IF (PRESENT(ec_env)) ec_env => qs_env%ec_env
       IF (PRESENT(super_cell)) super_cell => qs_env%super_cell
       IF (PRESENT(qmmm)) qmmm = qs_env%qmmm
       IF (PRESENT(qmmm_periodic)) qmmm_periodic = qs_env%qmmm_periodic
@@ -908,6 +914,7 @@ CONTAINS
       NULLIFY (qs_env%rtp)
       NULLIFY (qs_env%mp2_env)
       NULLIFY (qs_env%kg_env)
+      NULLIFY (qs_env%ec_env)
       NULLIFY (qs_env%WannierCentres)
 
       qs_env%outer_scf_ihistory = 0
@@ -1033,7 +1040,7 @@ CONTAINS
                          linres_control, xas_env, cp_ddapc_env, cp_ddapc_ewald, &
                          outer_scf_history, outer_scf_ihistory, x_data, et_coupling, dftb_potential, &
                          se_taper, se_store_int_env, se_nddo_mpole, se_nonbond_env, admm_env, ls_scf_env, &
-                         do_transport, transport_env, lri_env, lri_density, dispersion_env, mp2_env, kg_env, &
+                         do_transport, transport_env, lri_env, lri_density, dispersion_env, mp2_env, kg_env, ec_env,  &
                          kpoints, WannierCentres, almo_scf_env, gradient_history, variable_history, embed_pot, &
                          spin_embed_pot, polar_env)
 
@@ -1097,6 +1104,7 @@ CONTAINS
       TYPE(qs_dispersion_type), OPTIONAL, POINTER        :: dispersion_env
       TYPE(mp2_type), OPTIONAL, POINTER                  :: mp2_env
       TYPE(kg_environment_type), OPTIONAL, POINTER       :: kg_env
+      TYPE(energy_correction_type), OPTIONAL, POINTER       :: ec_env
       TYPE(kpoint_type), OPTIONAL, POINTER               :: kpoints
       TYPE(wannier_centres_type), DIMENSION(:), &
          OPTIONAL, POINTER                               :: WannierCentres
@@ -1112,6 +1120,7 @@ CONTAINS
       CPASSERT(qs_env%ref_count > 0)
       IF (PRESENT(mp2_env)) qs_env%mp2_env => mp2_env
       IF (PRESENT(kg_env)) qs_env%kg_env => kg_env
+      IF (PRESENT(ec_env)) qs_env%ec_env => ec_env
       IF (PRESENT(super_cell)) THEN
          CALL cell_retain(super_cell)
          CALL cell_release(qs_env%super_cell)
@@ -1496,6 +1505,9 @@ CONTAINS
             END IF
             IF (ASSOCIATED(qs_env%kg_env)) THEN
                CALL kg_env_release(qs_env%kg_env)
+            END IF
+            IF (ASSOCIATED(qs_env%ec_env)) THEN
+               CALL ec_env_release(qs_env%ec_env)
             END IF
 
             ! dispersion

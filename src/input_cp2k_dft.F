@@ -148,6 +148,10 @@ MODULE input_cp2k_dft
    PUBLIC :: create_interp_section, create_localize_section
    PUBLIC :: create_ddapc_restraint_section
    PUBLIC :: create_mgrid_section
+   ! fbelle
+   PUBLIC :: create_ec_section
+
+
 
 CONTAINS
 
@@ -333,6 +337,11 @@ CONTAINS
       CALL section_release(subsection)
 
       CALL create_kg_section(subsection)
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+
+      !fbelle      
+      CALL create_ec_section(subsection)
       CALL section_add_subsection(section, subsection)
       CALL section_release(subsection)
 
@@ -5241,7 +5250,7 @@ CONTAINS
          routineP = moduleN//':'//routineN
 
       TYPE(keyword_type), POINTER                        :: keyword
-      TYPE(section_type), POINTER                        :: print_key, subsection, subsubsection
+      TYPE(section_type), POINTER                        :: print_key, subsection!, subsubsection
 
       CPASSERT(.NOT. ASSOCIATED(section))
       CALL section_create(section, "KG_METHOD", &
@@ -5336,23 +5345,124 @@ CONTAINS
 
       !!!!!!!!!!!!!!!  ENERGY_CORRECTION SECTION !!!!!!!!!!!!!!!!!!!
       NULLIFY (keyword, subsection, print_key)
-      CALL section_create(subsection, name="ENERGY_CORRECTION", &
+!      CALL section_create(subsection, name="ENERGY_CORRECTION", &
+!                          description="Sets the various options for the Energy Correction", &
+!                          n_keywords=0, n_subsections=1, repeats=.FALSE.)
+!
+!      CALL keyword_create(keyword, name="_SECTION_PARAMETERS_", &
+!                          description="Controls the activation of the energy_correction", &
+!                          usage="&ENERGY_CORRECTION T", &
+!                          default_l_val=.FALSE., &
+!                          lone_keyword_l_val=.TRUE.)
+!      CALL section_add_keyword(subsection, keyword)
+!      CALL keyword_release(keyword)
+!
+!      ! add a special XC section
+!      NULLIFY (subsubsection)
+!      CALL create_xc_section(subsubsection)
+!      CALL section_add_subsection(subsection, subsubsection)
+!      CALL section_release(subsubsection)
+!
+!      CALL keyword_create(keyword, name="ENERGY_FUNCTIONAL", &
+!                          description="Functional used in energy correction", &
+!                          usage="ENERGY_FUNCTIONAL HARRIS", &
+!                          default_i_val=kg_ec_functional_harris, &
+!                          enum_c_vals=s2a("HARRIS"), &
+!                          enum_desc=s2a("Harris functional"), &
+!                          enum_i_vals=(/kg_ec_functional_harris/))
+!      CALL section_add_keyword(subsection, keyword)
+!      CALL keyword_release(keyword)
+!
+!      CALL keyword_create(keyword, name="HARRIS_BASIS", &
+!                          description="Specifies the type of basis to be used for the KG energy correction."// &
+!                          "Options are: (1) the default orbital basis (ORBITAL);"// &
+!                          "(2) the primitive functions of the default orbital basis (PRIMITIVE);"// &
+!                          "(3) the basis set labeled in Kind section (HARRIS)", &
+!                          usage="HARRIS_BASIS ORBITAL", &
+!                          type_of_var=char_t, default_c_val="ORBITAL", n_var=-1)
+!      CALL section_add_keyword(subsection, keyword)
+!      CALL keyword_release(keyword)
+!
+!      CALL keyword_create(keyword, name="MAO", &
+!                          description="Use modified atomic orbitals (MAO) to solve Harris equation", &
+!                          usage="MAO T", default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+!      CALL section_add_keyword(subsection, keyword)
+!      CALL keyword_release(keyword)
+!
+!      CALL keyword_create(keyword, name="MAO_MAX_ITER", &
+!                          description="Maximum iterations in MAO optimization. ", &
+!                          usage="MAO_MAX_ITER 100 ", default_i_val=0)
+!      CALL section_add_keyword(subsection, keyword)
+!      CALL keyword_release(keyword)
+!
+!      CALL keyword_create(keyword, name="MAO_EPS_GRAD", &
+!                          description="Threshold used for MAO iterations. ", &
+!                          usage="MAO_EPS_GRAD 1.0E-4 ", default_r_val=1.0E-5_dp)
+!      CALL section_add_keyword(subsection, keyword)
+!      CALL keyword_release(keyword)
+!
+!      CALL keyword_create(keyword, name="ALGORITHM", &
+!                          description="Algorithm used to solve KS equation", &
+!                          usage="ALGORITHM DIAGONALIZATION", &
+!                          default_i_val=kg_ec_diagonalization, &
+!                          enum_c_vals=s2a("DIAGONALIZATION"), &
+!                          enum_desc=s2a("Diagonalization of KS matrix."), &
+!                          enum_i_vals=(/kg_ec_diagonalization/))
+!      CALL section_add_keyword(subsection, keyword)
+!      CALL keyword_release(keyword)
+!
+!      CALL keyword_create(keyword, name="FACTORIZATION", &
+!                          description="Algorithm used to calculate factorization of overlap matrix", &
+!                          usage="FACTORIZATION CHOLESKY", &
+!                          default_i_val=kg_cholesky, &
+!                          enum_c_vals=s2a("CHOLESKY"), &
+!                          enum_desc=s2a("Cholesky factorization of overlap matrix"), &
+!                          enum_i_vals=(/kg_cholesky/))
+!      CALL section_add_keyword(subsection, keyword)
+!      CALL keyword_release(keyword)
+!
+!      CALL keyword_create(keyword, name="EPS_DEFAULT", &
+!                          description="Threshold used for accuracy estimates within energy correction algorithms. ", &
+!                          usage="EPS_DEFAULT 1.0E-6 ", default_r_val=1.0E-12_dp)
+!      CALL section_add_keyword(subsection, keyword)
+!      CALL keyword_release(keyword)
+
+      CALL create_ec_section(subsection)
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+
+   END SUBROUTINE create_kg_section
+
+! fbelle------------------------------------------------------------------------
+! fbelle------------------------------------------------------------------------
+! fbelle------------------------------------------------------------------------
+
+! **************************************************************************************************
+!> \brief creates the energy_correction section
+!> \param section ...
+!> \author Fabian Belleflamme [2018.05]
+! **************************************************************************************************
+   SUBROUTINE create_ec_section(section)
+      TYPE(section_type), POINTER                        :: section
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'create_ec_section', &
+         routineP = moduleN//':'//routineN
+
+      TYPE(keyword_type), POINTER                        :: keyword
+      TYPE(section_type), POINTER                        :: print_key, subsection
+
+
+      CPASSERT(.NOT. ASSOCIATED(section))
+      CALL section_create(section, name="ENERGY_CORRECTION", &
                           description="Sets the various options for the Energy Correction", &
                           n_keywords=0, n_subsections=1, repeats=.FALSE.)
 
-      CALL keyword_create(keyword, name="_SECTION_PARAMETERS_", &
-                          description="Controls the activation of the energy_correction", &
-                          usage="&ENERGY_CORRECTION T", &
-                          default_l_val=.FALSE., &
-                          lone_keyword_l_val=.TRUE.)
-      CALL section_add_keyword(subsection, keyword)
-      CALL keyword_release(keyword)
+      NULLIFY (keyword, subsection, print_key)
 
       ! add a special XC section
-      NULLIFY (subsubsection)
-      CALL create_xc_section(subsubsection)
-      CALL section_add_subsection(subsection, subsubsection)
-      CALL section_release(subsubsection)
+      CALL create_xc_section(subsection)
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
 
       CALL keyword_create(keyword, name="ENERGY_FUNCTIONAL", &
                           description="Functional used in energy correction", &
@@ -5361,9 +5471,9 @@ CONTAINS
                           enum_c_vals=s2a("HARRIS"), &
                           enum_desc=s2a("Harris functional"), &
                           enum_i_vals=(/kg_ec_functional_harris/))
-      CALL section_add_keyword(subsection, keyword)
+      CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
-
+      
       CALL keyword_create(keyword, name="HARRIS_BASIS", &
                           description="Specifies the type of basis to be used for the KG energy correction."// &
                           "Options are: (1) the default orbital basis (ORBITAL);"// &
@@ -5371,25 +5481,25 @@ CONTAINS
                           "(3) the basis set labeled in Kind section (HARRIS)", &
                           usage="HARRIS_BASIS ORBITAL", &
                           type_of_var=char_t, default_c_val="ORBITAL", n_var=-1)
-      CALL section_add_keyword(subsection, keyword)
+      CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, name="MAO", &
                           description="Use modified atomic orbitals (MAO) to solve Harris equation", &
                           usage="MAO T", default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
-      CALL section_add_keyword(subsection, keyword)
+      CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, name="MAO_MAX_ITER", &
                           description="Maximum iterations in MAO optimization. ", &
                           usage="MAO_MAX_ITER 100 ", default_i_val=0)
-      CALL section_add_keyword(subsection, keyword)
+      CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, name="MAO_EPS_GRAD", &
                           description="Threshold used for MAO iterations. ", &
                           usage="MAO_EPS_GRAD 1.0E-4 ", default_r_val=1.0E-5_dp)
-      CALL section_add_keyword(subsection, keyword)
+      CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, name="ALGORITHM", &
@@ -5399,7 +5509,7 @@ CONTAINS
                           enum_c_vals=s2a("DIAGONALIZATION"), &
                           enum_desc=s2a("Diagonalization of KS matrix."), &
                           enum_i_vals=(/kg_ec_diagonalization/))
-      CALL section_add_keyword(subsection, keyword)
+      CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, name="FACTORIZATION", &
@@ -5409,19 +5519,22 @@ CONTAINS
                           enum_c_vals=s2a("CHOLESKY"), &
                           enum_desc=s2a("Cholesky factorization of overlap matrix"), &
                           enum_i_vals=(/kg_cholesky/))
-      CALL section_add_keyword(subsection, keyword)
+      CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, name="EPS_DEFAULT", &
                           description="Threshold used for accuracy estimates within energy correction algorithms. ", &
                           usage="EPS_DEFAULT 1.0E-6 ", default_r_val=1.0E-12_dp)
-      CALL section_add_keyword(subsection, keyword)
+      CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL section_add_subsection(section, subsection)
-      CALL section_release(subsection)
+   END SUBROUTINE create_ec_section
 
-   END SUBROUTINE create_kg_section
+! fbelle------------------------------------------------------------------------
+! fbelle------------------------------------------------------------------------
+! fbelle------------------------------------------------------------------------
+
+
 
 ! **************************************************************************************************
 !> \brief creates the structure of the section with SCF parameters

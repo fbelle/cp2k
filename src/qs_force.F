@@ -80,6 +80,7 @@ MODULE qs_force
    !fbelle
    USE kg_environment_types,            ONLY: kg_environment_type
    USE ec_force,                        ONLY: ec_forces
+   USE ec_methods,                      ONLY: ec_write_forces
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -161,8 +162,7 @@ CONTAINS
       TYPE(qs_subsys_type), POINTER                      :: subsys
       TYPE(section_vals_type), POINTER                   :: dft_section, input, print_section
       TYPE(virial_type), POINTER                         :: virial
-!fbelle
-      TYPE(kg_environment_type), POINTER                 :: kg_env
+    TYPE(kg_environment_type), POINTER                 :: kg_env
 
       CALL timeset(routineN, handle)
       NULLIFY (logger)
@@ -213,27 +213,9 @@ CONTAINS
       ! Set parameter for P screening with MP2
       IF (ASSOCIATED(qs_env%mp2_env)) qs_env%mp2_env%not_last_hfx = .TRUE.
 
-!      !------------------------------------------------------------------------
-!      !fbelle 
-!      WRITE(*,*) "qs_forces - before qs_energies - matrix_w"
-!      CALL get_qs_env(qs_env,ks_env=ks_env,matrix_w=matrix_w,dft_control=dft_control)
-!      WRITE(*,*) "ASSOCIATED(matrix_w)", ASSOCIATED(matrix_w)
-!      
-!      IF(ASSOCIATED(matrix_w)) THEN
-!         CALL dbcsr_print(matrix_w(1)%matrix)
-!      END IF
-!      !------------------------------------------------------------------------
-
       ! recalculate energy with forces
       CALL get_qs_env(qs_env,para_env=para_env)
-!      IF(para_env%mepos==0) THEN
-!         WRITE(*,*) "qs_forces - CALL qs_energies"
-!      END IF
       CALL qs_energies(qs_env, calc_forces=.TRUE.)
-
-!      IF(para_env%mepos==0) THEN
-!         WRITE(*,*) "CALCULATING FORCES AFTER ENERGY in qs_forces"
-!      END IF
 
       NULLIFY (para_env)
       CALL get_qs_env(qs_env, &
@@ -303,17 +285,17 @@ CONTAINS
          END DO
       ENDIF
       
-!      !------------------------------------------------------------------------
-!
-!      CALL get_qs_env(qs_env,kg_env=kg_env)
-!      
-!      ! Check for energy correction
-!      IF(para_env%mepos==0) THEN
-!         WRITE(*,*) "dft_control%qs_control%do_kg", dft_control%qs_control%do_kg
-!         WRITE(*,*) "dft_control%qs_control%do_kg_ec", dft_control%qs_control%do_kg_ec
-!      END IF
-!      
-!      !------------------------------------------------------------------------
+      !------------------------------------------------------------------------
+
+      CALL get_qs_env(qs_env,kg_env=kg_env)
+      
+      ! Check for energy correction
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) "dft_control%qs_control%do_kg", dft_control%qs_control%do_kg
+         WRITE(*,*) "dft_control%qs_control%do_kg_ec", dft_control%qs_control%do_kg_ec
+      END IF
+      
+      !------------------------------------------------------------------------
 
    ! Harris functional energy correction requires different force calculation
    IF (.NOT. dft_control%qs_control%do_kg_ec) THEN
@@ -330,9 +312,9 @@ CONTAINS
                                         calculate_forces=.TRUE.)
       ELSE
 
-!         IF(para_env%mepos==0) THEN
-!            WRITE(*,*) "Regular force calculation"
-!         END IF
+         IF(para_env%mepos==0) THEN
+            WRITE(*,*) "Regular force calculation"
+         END IF
          CALL build_core_hamiltonian_matrix(qs_env=qs_env, calculate_forces=.TRUE.)
          CALL calculate_ecore_self(qs_env)
          CALL calculate_ecore_overlap(qs_env, para_env, calculate_forces=.TRUE.)
@@ -354,13 +336,24 @@ CONTAINS
       CALL qs_ks_update_qs_env(qs_env, calculate_forces=.TRUE.)
       
    ELSE
-!      IF(para_env%mepos==0) THEN
-!         WRITE(*,*) "About to call ec_force"
-!      END IF
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) " qs_force - about to call ec_force"
+      END IF
       CALL zero_qs_force(force)
       CALL ec_forces(qs_env)
    ! end of ".NOT. kg_env%_energy_correction"
    END IF
+
+
+!    IF(para_env%mepos==0) THEN
+!       CALL get_qs_env(qs_env, force = force)
+!       WRITE(*,*) "qs_forces - qs_env%...%force - BACK in qs_forces "
+!       CALL ec_write_forces(qs_env, force)
+!    END IF
+
+
+     !--------------------------------------------------------------------------
+
 
 !   !------------------------------------------------------------------------
 !   !fbelle 
@@ -510,6 +503,13 @@ CONTAINS
          END IF
       END IF
 
+    IF(para_env%mepos==0) THEN
+       CALL get_qs_env(qs_env, force = force)
+       WRITE(*,*) "qs_forces - qs_env%...%force - after replicate "
+       CALL ec_write_forces(qs_env, force)
+    END IF
+
+
       output_unit = cp_print_key_unit_nr(logger, qs_env%input, "DFT%PRINT%DERIVATIVES", &
                                          extension=".Log")
       print_section => section_vals_get_subs_vals(qs_env%input, "DFT%PRINT%DERIVATIVES")
@@ -528,6 +528,22 @@ CONTAINS
       END IF
       CALL cp_print_key_finished_output(output_unit, logger, qs_env%input, &
                                         "DFT%PRINT%DERIVATIVES")
+
+
+      IF(para_env%mepos==0) THEN
+        WRITE(*,*) "qs_force - END" 
+        
+        WRITE(*,*) "core        "  , energy%core
+        WRITE(*,*) "core_overlap " , energy%core_overlap
+        WRITE(*,*) "core_self   "  , energy%core_self
+        WRITE(*,*) "exc         "  , energy%exc
+        WRITE(*,*) "hartree     "  , energy%hartree
+        WRITE(*,*) "e_hartree,  "  , energy%e_hartree
+        WRITE(*,*) "total       "  , energy%total
+        WRITE(*,*) "tot_old     "  , energy%tot_old
+        WRITE(*,*) "kinetic     "  , energy%kinetic
+      END IF
+
 
 
       ! deallocate W Matrix:

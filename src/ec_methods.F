@@ -22,13 +22,37 @@ MODULE ec_methods
         dbcsr_add, dbcsr_allocate_matrix_set, dbcsr_copy, dbcsr_create, &
         dbcsr_deallocate_matrix_set, dbcsr_desymmetrize, dbcsr_distribution_type, dbcsr_filter, &
         dbcsr_get_info, dbcsr_init_p, dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_set, &
-        dbcsr_trace, dbcsr_type, dbcsr_type_no_symmetry, dbcsr_type_symmetric, dbcsr_print, dbcsr_finalize
-   USE kg_environment_types,            ONLY: energy_correction_type
+        dbcsr_trace, dbcsr_type, dbcsr_type_no_symmetry, dbcsr_type_symmetric, dbcsr_print, dbcsr_finalize,& 
+        dbcsr_copy_into_existing
+   USE ec_environment_types,            ONLY: energy_correction_type
    USE kinds,                           ONLY: dp
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
-   USE qs_force_types,                  ONLY: qs_force_type
+   !USE qs_force_types,                  ONLY: qs_force_type
    
+   USE qs_force_types,                  ONLY: allocate_qs_force,&
+                                              qs_force_type,&
+                                              replicate_qs_force,&
+                                              zero_qs_force,&
+                                              deallocate_qs_force
+
+                                           
+   !fbelle - ec_mos
+   USE qs_mo_types,                     ONLY: deallocate_mo_set,&
+                                              duplicate_mo_set,&
+                                              allocate_mo_set,&
+                                              get_mo_set,&
+                                              mo_set_p_type,&
+                                              mo_set_type
+   USE qs_ks_methods,                   ONLY: calculate_w_matrix
+   USE qs_rho_types,                    ONLY: qs_rho_create,&
+                                              qs_rho_get,&
+                                              qs_rho_release,&
+                                              qs_rho_set,&
+                                              qs_rho_type,&
+                                              qs_rho_clear
+
+
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -38,7 +62,9 @@ MODULE ec_methods
    LOGICAL, PARAMETER :: debug_this_module = .TRUE.
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'ec_methods'
 
-   PUBLIC :: ec_write_forces, ec_calculate_w_matrix
+   PUBLIC :: ec_write_forces, ec_calculate_w_matrix, ec_write_bs_forces, ec_w_matrix
+   PUBLIC :: ec_mos, ec_ks_w_matrix, ec_w_test_matrix
+
 
 CONTAINS
 
@@ -206,5 +232,379 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE ec_calculate_w_matrix
+
+
+
+! **************************************************************************************************
+!> \brief Compute matrix_w as needed for the forces
+!>        W = P*KS*P
+!> \param matrix_w ...
+!> \par History
+!>       2018.2 created [Fabian Belleflamme]
+!> \author Fabian Belleflamme - heavily influenced by calculate_w_matrix in dm_ls_scf 
+! **************************************************************************************************
+   SUBROUTINE ec_w_matrix(qs_env, ec_env)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(energy_correction_type), POINTER              :: ec_env
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_w_matrix', &
+         routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: handle, ispin, nspins
+      REAL(KIND=dp)                                      :: scaling
+      TYPE(dbcsr_type)                                   :: matrix_tmp1, matrix_tmp2, matrix_tmp3, &
+                                                            ref_matrix
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      REAL(KIND=dp)                                      :: eps_filter
+
+      CALL timeset(routineN, handle)
+
+      CALL get_qs_env(qs_env = qs_env, dft_control = dft_control)
+      
+      nspins = dft_control%nspins
+      eps_filter = dft_control%qs_control%eps_filter_matrix
+
+      ! allocate ec_env%matrix_w
+      CALL dbcsr_allocate_matrix_set(ec_env%matrix_w, nspins, 1)
+      DO ispin = 1, nspins
+         ALLOCATE (ec_env%matrix_w(ispin,1)%matrix)
+         ! matrix_w same structure as matrix_s
+         CALL dbcsr_copy(ec_env%matrix_w(ispin, 1)%matrix, ec_env%matrix_s(1, 1)%matrix)
+         CALL dbcsr_set(ec_env%matrix_w(ispin, 1)%matrix, 0.0_dp)
+      END DO
+
+      ! init temp matrices
+      ref_matrix = ec_env%matrix_s(1, 1)%matrix
+      CALL dbcsr_create(matrix_tmp1, template=ref_matrix, matrix_type=dbcsr_type_no_symmetry )
+      CALL dbcsr_create(matrix_tmp2, template=ref_matrix, matrix_type=dbcsr_type_no_symmetry)
+      CALL dbcsr_create(matrix_tmp3, template=ref_matrix, matrix_type=dbcsr_type_no_symmetry)
+
+      IF (nspins == 1) THEN
+         scaling = 0.5_dp
+      ELSE
+         scaling = 1.0_dp
+      ENDIF
+
+      ! perform multiplication W = P*KS*P
+      DO ispin = 1, nspins
+         CALL dbcsr_copy(matrix_tmp3, ec_env%matrix_ks(ispin, 1)%matrix)
+         CALL dbcsr_filter(matrix_tmp3, eps_filter)
+         CALL dbcsr_multiply("N", "N", scaling, ec_env%matrix_p(ispin, 1)%matrix, matrix_tmp3, &
+                             0.0_dp, matrix_tmp1, filter_eps = eps_filter)
+         CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_tmp1, ec_env%matrix_p(ispin, 1)%matrix, &
+                             0.0_dp, matrix_tmp2, filter_eps = eps_filter)
+         CALL dbcsr_copy(ec_env%matrix_w(ispin,1)%matrix, matrix_tmp2, name="EC W MATRIX", keep_sparsity = .TRUE.)
+      ENDDO
+
+      CALL dbcsr_release(matrix_tmp1)
+      CALL dbcsr_release(matrix_tmp2)
+      CALL dbcsr_release(matrix_tmp3)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE ec_w_matrix
+
+! **************************************************************************************************
+!> \brief TEST ROUTINE TO CHECK MATRIX W CALCULATION 
+!>        W = P*KS*P
+!> \param matrix_w ...
+!> \par History
+!>       2018.2 created [Fabian Belleflamme]
+!> \author Fabian Belleflamme 
+! **************************************************************************************************
+   SUBROUTINE ec_w_test_matrix(qs_env, ec_env)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(energy_correction_type), POINTER              :: ec_env
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_w_test_matrix', &
+         routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: handle, ispin, nspins
+      REAL(KIND=dp)                                      :: scaling
+      TYPE(dbcsr_type)                                   :: matrix_tmp1, matrix_tmp2, matrix_tmp3, &
+                                                            ref_matrix
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      REAL(KIND=dp)                                      :: eps_filter
+      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_s, matrix_ks 
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: rho_ao
+      TYPE(qs_rho_type), POINTER                         :: rho
+
+      CALL timeset(routineN, handle)
+
+      CALL get_qs_env(qs_env = qs_env, dft_control = dft_control)
+      
+      nspins = dft_control%nspins
+      eps_filter = dft_control%qs_control%eps_filter_matrix
+
+      
+      CALL get_qs_env(qs_env=qs_env, rho = rho, matrix_ks_kp=matrix_ks, matrix_s_kp = matrix_s)
+      CALL qs_rho_get(rho, rho_ao_kp = rho_ao )
+
+      ! allocate ec_env%matrix_w
+      CALL dbcsr_allocate_matrix_set(ec_env%matrix_w, nspins, 1)
+      DO ispin = 1, nspins
+         ALLOCATE (ec_env%matrix_w(ispin,1)%matrix)
+         ! matrix_w same structure as matrix_s
+         CALL dbcsr_copy(ec_env%matrix_w(ispin, 1)%matrix, matrix_s(1, 1)%matrix)
+         CALL dbcsr_set(ec_env%matrix_w(ispin, 1)%matrix, 0.0_dp)
+      END DO
+
+      ! init temp matrices
+      ref_matrix = matrix_s(1, 1)%matrix
+      CALL dbcsr_create(matrix_tmp1, template=ref_matrix, matrix_type=dbcsr_type_no_symmetry,&
+         name = "temp1")
+      CALL dbcsr_create(matrix_tmp2, template=ref_matrix, matrix_type=dbcsr_type_no_symmetry,&
+         name = "temp2")
+      CALL dbcsr_create(matrix_tmp3, template=ref_matrix, matrix_type=dbcsr_type_no_symmetry,&
+         name = "temp3")
+
+      IF (nspins == 1) THEN
+         scaling = 0.5_dp
+      ELSE
+         scaling = 1.0_dp
+      ENDIF
+
+      ! perform multiplication W = P*KS*P
+      DO ispin = 1, nspins
+         CALL dbcsr_copy(matrix_tmp3, matrix_ks(ispin, 1)%matrix)
+         CALL dbcsr_filter(matrix_tmp3, eps_filter)
+         CALL dbcsr_multiply("N", "N", scaling, rho_ao(ispin, 1)%matrix, matrix_tmp3, &
+                             0.0_dp, matrix_tmp1, filter_eps = eps_filter)
+         CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_tmp1, rho_ao(ispin, 1)%matrix, &
+                             0.0_dp, matrix_tmp2, filter_eps = eps_filter)
+     
+       ! overwrite sparsity of matrix_tmp2
+       CALL dbcsr_copy(ec_env%matrix_w(ispin,1)%matrix, matrix_tmp2, name="EC W MATRIX", keep_sparsity = .TRUE.)
+      ENDDO
+
+      CALL dbcsr_print(matrix_tmp3)
+      CALL dbcsr_print(matrix_tmp1)
+      CALL dbcsr_print(matrix_tmp2)
+      CALL dbcsr_print(ec_env%matrix_w(1,1)%matrix)
+
+      CALL dbcsr_release(matrix_tmp1)
+      CALL dbcsr_release(matrix_tmp2)
+      CALL dbcsr_release(matrix_tmp3)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE ec_w_test_matrix
+
+
+! **************************************************************************************************
+!> \brief   Calculate and write band structure forces  
+!> \param   qs_env ...
+!> \param   force ...
+!> \date    05.2018
+!> \author  fbelle
+! **************************************************************************************************
+   SUBROUTINE ec_write_bs_forces(qs_env, force)
+
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(qs_force_type), DIMENSION(:), POINTER         :: force
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_write_bs_forces', routineP = moduleN//':'//routineN
+
+      TYPE(qs_force_type), DIMENSION(:), POINTER         :: qs_force
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: atom_of_kind, kind_of, natom_of_kind
+      INTEGER                                            :: i, iatom, ikind, natom, ndigits, nkind
+      CHARACTER(LEN=35)                                  :: fmtstr2
+      CHARACTER(LEN=48)                                  :: fmtstr1
+
+
+      ! get atom mapping
+      NULLIFY (atomic_kind_set , qs_force)
+      CALL get_qs_env(qs_env, atomic_kind_set=atomic_kind_set, natom = natom)
+      ALLOCATE (atom_of_kind(natom), kind_of(natom))
+      CALL get_atomic_kind_set(atomic_kind_set=atomic_kind_set, &
+                               atom_of_kind=atom_of_kind, &
+                               kind_of=kind_of)
+
+      !   *** Allocate the force data structure ***
+      nkind = SIZE(atomic_kind_set)
+      ALLOCATE (natom_of_kind(nkind))
+      CALL get_atomic_kind_set(atomic_kind_set=atomic_kind_set, &
+                               natom_of_kind=natom_of_kind)
+      CALL allocate_qs_force(qs_force, natom_of_kind)
+      DEALLOCATE (natom_of_kind)
+      CALL zero_qs_force(qs_force)
+
+      DO ikind = 1, SIZE(force)
+
+         qs_force(ikind)%total(:, :) = qs_force(ikind)%total(:, :)+ &
+                                       force(ikind)%core_overlap(:, :)+ &
+                                       force(ikind)%gth_ppl(:, :)+ &
+                                       force(ikind)%gth_ppnl(:, :)+ &
+                                       force(ikind)%kinetic(:, :)+ &
+                                       force(ikind)%overlap(:, :)+ &
+                                       force(ikind)%rho_elec(:, :)
+      END DO
+
+      ndigits=6
+
+      fmtstr1 = "(/,/,T2,A,/,/,T3,A,T11,A,T23,A,T40,A1,2(  X,A1))"
+      WRITE (UNIT=fmtstr1(41:42), FMT="(I2)") ndigits+5
+
+      fmtstr2 = "(/,(T2,I5,4X,I4,T18,A,T34,3F  .  ))"
+      WRITE (UNIT=fmtstr2(32:33), FMT="(I2)") ndigits
+      WRITE (UNIT=fmtstr2(29:30), FMT="(I2)") ndigits+6
+
+      WRITE (UNIT=6, FMT=fmtstr1) &
+         "FORCES [a.u.]", "Atom", "Kind", "Component", "X", "Y", "Z"
+
+      DO iatom = 1, natom
+         ikind = kind_of(iatom)
+         i = atom_of_kind(iatom)
+         WRITE (UNIT=6, FMT=fmtstr2) &
+            iatom, ikind, "         f_trace", qs_force(ikind)%total(1:3, i)
+      END DO
+
+      DEALLOCATE (atom_of_kind)
+      DEALLOCATE (kind_of)
+
+      CALL deallocate_qs_force(qs_force)
+
+   END SUBROUTINE ec_write_bs_forces
+
+
+! **************************************************************************************************
+!> \brief   Allocation and initialization of mo set
+!> \param qs_env ...
+!> \param qs_force ...
+!> \date    05.2018
+!> \author  fbelle
+! **************************************************************************************************
+
+   SUBROUTINE ec_mos(qs_env)
+   
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_mos', routineP = moduleN//':'//routineN
+      
+!      TYPE(cp_para_env_type), POINTER                    :: para_env
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+      INTEGER                                            :: ispin, nspins
+   
+      CALL get_qs_env(qs_env, dft_control = dft_control )
+      nspins = dft_control%nspins
+     
+
+
+
+      ! IF LS-DFT : mos not allocated yet 
+      IF (dft_control%qs_control%do_ls_scf) THEN
+         WRITE(*,*) "ec_mos - ls_scf" 
+ 
+         ALLOCATE (mos(nspins))
+         DO ispin = 1, nspins
+            NULLIFY (mos(ispin)%mo_set)
+!            CALL allocate_mo_set(mo_set=mos(ispin)%mo_set, &
+!                                 nao=n_ao, &
+!                                 nmo=n_mo(ispin), &
+!                                 nelectron=nelectron_spin(ispin), &
+!                                 n_el_f=REAL(nelectron_spin(ispin), dp), &
+!                                 maxocc=maxocc, &
+!                                 flexible_electron_count=dft_control%relax_multiplicity)
+!   
+!   
+!         CALL set_qs_env(qs_env, mos=mos)
+   
+         END DO
+      
+      ! If KS-DFT : mos allocated and filled 
+      ELSE
+         WRITE(*,*) "ec_mos - ks_scf" 
+       
+      END IF
+   
+   
+   
+   
+  !    CALL get_qs_env(qs_env=qs_env, &
+  !                    dft_control=dft_control, &
+  !                    mos=mos, &
+  !                    matrix_s_kp=matrix_s, &
+  !                    mos_aux_fit=mos_aux_fit, &
+  !                    xas_env=xas_env)
+  !    CALL mpools_get(qs_env%mpools, ao_mo_fm_pools=ao_mo_fm_pools)
+  ! 
+  !    nmo_mat = dft_control%nspins
+  !    IF (dft_control%restricted) nmo_mat = 1 ! right now, there might be more mos than needed derivs
+  ! 
+  ! !   *** finish initialization of the MOs ***
+  !       CPASSERT(ASSOCIATED(mos))
+  !       DO ispin = 1, SIZE(mos)
+  !          CALL get_mo_set(mos(ispin)%mo_set, mo_coeff=mo_coeff, mo_coeff_b=mo_coeff_b)
+  !          IF (.NOT. ASSOCIATED(mo_coeff)) THEN
+  !             CALL init_mo_set(mos(ispin)%mo_set, &
+  !                              fm_pool=ao_mo_fm_pools(ispin)%pool, &
+  !                              name="qs_env"//TRIM(ADJUSTL(cp_to_string(qs_env%id_nr)))// &
+  !                              "%mo"//TRIM(ADJUSTL(cp_to_string(ispin))))
+  !          END IF
+  !          IF (.NOT. ASSOCIATED(mo_coeff_b)) THEN
+  !             CALL cp_fm_get_info(mos(ispin)%mo_set%mo_coeff, ncol_global=nmo)
+  !             CALL dbcsr_init_p(mos(ispin)%mo_set%mo_coeff_b)
+  !             CALL cp_dbcsr_m_by_n_from_row_template(mos(ispin)%mo_set%mo_coeff_b, template=matrix_s(1, 1)%matrix, n=nmo, &
+  !                                                    sym=dbcsr_type_no_symmetry)
+  !          ENDIF
+  !       END DO
+   
+
+   END SUBROUTINE ec_mos 
+
+! **************************************************************************************************
+!> \brief Compute matrix_w from mos
+!>        
+!> \param matrix_w ...
+!> \par History
+!>       2018.5 created [Fabian Belleflamme]
+!> \author Fabian Belleflamme 
+! **************************************************************************************************
+   SUBROUTINE ec_ks_w_matrix(qs_env, ec_env)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(energy_correction_type), POINTER              :: ec_env
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_ks_w_matrix', &
+         routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: handle, ispin, nspins
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      REAL(KIND=dp)                                      :: eps_filter
+      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+
+      CALL timeset(routineN, handle)
+
+      WRITE(*,*) "ec_ks_w_matrix"
+
+      CALL get_qs_env(qs_env = qs_env, dft_control = dft_control)
+      
+      ! To iterate over matrices
+      nspins = dft_control%nspins
+      eps_filter = dft_control%qs_control%eps_filter_matrix
+
+      ! allocate ec_env%matrix_w
+      CALL dbcsr_allocate_matrix_set(ec_env%matrix_w, nspins, 1)
+      DO ispin = 1, nspins
+         ALLOCATE (ec_env%matrix_w(ispin,1)%matrix)
+         ! matrix_w same structure as matrix_s
+         CALL dbcsr_copy(ec_env%matrix_w(ispin, 1)%matrix, ec_env%matrix_s(1, 1)%matrix , name="W MATRIX")
+         CALL dbcsr_set(ec_env%matrix_w(ispin, 1)%matrix, 0.0_dp)
+      END DO
+
+      
+      CALL get_qs_env(qs_env, mos=mos)
+
+      DO ispin = 1, nspins
+       
+         CALL calculate_w_matrix(mos(ispin)%mo_set, ec_env%matrix_w(ispin,1)%matrix)
+
+      END DO
+
+
+      CALL timestop(handle)
+
+   END SUBROUTINE ec_ks_w_matrix
 
 END MODULE ec_methods

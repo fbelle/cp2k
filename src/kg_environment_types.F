@@ -37,6 +37,9 @@ MODULE kg_environment_types
                                               qs_rho_type
    USE qs_force_types,                  ONLY: deallocate_qs_force,&
                                               qs_force_type
+
+   USE ec_environment_types,            ONLY: energy_correction_type,&
+                                              ec_env_release
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -45,62 +48,12 @@ MODULE kg_environment_types
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'kg_environment_types'
 
-   PUBLIC :: kg_environment_type, kg_env_release, energy_correction_type
+   PUBLIC :: kg_environment_type, kg_env_release
 
    TYPE subset_type
       TYPE(neighbor_list_set_p_type), DIMENSION(:), POINTER :: sab_orb
       TYPE(task_list_type), POINTER :: task_list
    END TYPE subset_type
-
-! *****************************************************************************
-!> \brief Contains information on the energy correction functional for KG
-!> \par History
-!>       03.2014 created
-!> \author JGH
-! *****************************************************************************
-   TYPE energy_correction_type
-      CHARACTER(len=20)                                :: ec_name
-      INTEGER                                          :: energy_functional
-      INTEGER                                          :: ks_solver
-      INTEGER                                          :: factorization
-      REAL(KIND=dp)                                    :: eps_default
-      ! basis set
-      CHARACTER(len=20)                                :: basis
-      LOGICAL                                          :: mao
-      INTEGER                                          :: mao_max_iter
-      REAL(KIND=dp)                                    :: mao_eps_grad
-      ! energy components
-      REAL(KIND=dp)                                    :: etotal
-      REAL(KIND=dp)                                    :: eband, exc, ehartree, vhxc
-      REAL(KIND=dp)                                    :: edispersion
-      
-      ! full neighbor lists and corresponding task list
-      TYPE(neighbor_list_set_p_type), &
-         DIMENSION(:), POINTER                         :: sab_orb, sac_ppl, sap_ppnl
-      TYPE(task_list_type), POINTER                    :: task_list
-      ! the XC function to be used for the correction, dispersion info
-      TYPE(section_vals_type), POINTER                 :: xc_section
-      TYPE(qs_dispersion_type), POINTER                :: dispersion_env
-      ! matrices in complete basis
-      ! KS: Kohn-Sham; H: Core; S: overlap; T: kinetic energy, W: wheighed density;
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_ks
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_h
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_s
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_t
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_p
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_w
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_delta
-      
-      ! reduce basis
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER     :: mao_coef
-      
-      ! store old rho
-      TYPE(qs_rho_type), POINTER                    :: old_rho
-
-      ! store force environment 
-      TYPE(qs_force_type), DIMENSION(:), POINTER    :: force
-
-   END TYPE energy_correction_type
 
 ! **************************************************************************************************
 !> \brief Contains all the info needed for KG runs...
@@ -135,7 +88,7 @@ MODULE kg_environment_types
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER       :: tnadd_mat
       !
       LOGICAL                                         :: energy_correction
-      TYPE(energy_correction_type)                    :: ec_env
+      TYPE(energy_correction_type), POINTER           :: ec_env
       ! LRI
       TYPE(lri_environment_type), POINTER             :: lri_env
       TYPE(lri_density_type), POINTER                 :: lri_density
@@ -212,48 +165,7 @@ CONTAINS
 
       ! energy correction
       IF (kg_env%energy_correction) THEN
-         ! neighbor lists
-         IF (ASSOCIATED(kg_env%ec_env%sab_orb)) THEN
-            DO iab = 1, SIZE(kg_env%ec_env%sab_orb)
-               CALL deallocate_neighbor_list_set(kg_env%ec_env%sab_orb(iab)%neighbor_list_set)
-            END DO
-            DEALLOCATE (kg_env%ec_env%sab_orb)
-         END IF
-         IF (ASSOCIATED(kg_env%ec_env%sac_ppl)) THEN
-            DO iab = 1, SIZE(kg_env%ec_env%sac_ppl)
-               CALL deallocate_neighbor_list_set(kg_env%ec_env%sac_ppl(iab)%neighbor_list_set)
-            END DO
-            DEALLOCATE (kg_env%ec_env%sac_ppl)
-         END IF
-         IF (ASSOCIATED(kg_env%ec_env%sap_ppnl)) THEN
-            DO iab = 1, SIZE(kg_env%ec_env%sap_ppnl)
-               CALL deallocate_neighbor_list_set(kg_env%ec_env%sap_ppnl(iab)%neighbor_list_set)
-            END DO
-            DEALLOCATE (kg_env%ec_env%sap_ppnl)
-         END IF
-         ! operator matrices
-         IF (ASSOCIATED(kg_env%ec_env%matrix_ks)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_ks)
-         IF (ASSOCIATED(kg_env%ec_env%matrix_h)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_h)
-         IF (ASSOCIATED(kg_env%ec_env%matrix_s)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_s)
-         IF (ASSOCIATED(kg_env%ec_env%matrix_t)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_t)
-         IF (ASSOCIATED(kg_env%ec_env%matrix_p)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_p)
-         IF (ASSOCIATED(kg_env%ec_env%matrix_w)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_w)
-         IF (ASSOCIATED(kg_env%ec_env%matrix_delta)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_delta)
-         IF (ASSOCIATED(kg_env%ec_env%task_list)) THEN
-            CALL deallocate_task_list(kg_env%ec_env%task_list)
-         END IF
-         ! reduced basis
-         IF (ASSOCIATED(kg_env%ec_env%mao_coef)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%mao_coef)
-         ! dispersion environment
-         IF (ASSOCIATED(kg_env%ec_env%dispersion_env)) THEN
-            CALL qs_dispersion_release(kg_env%ec_env%dispersion_env)
-         END IF
-         IF (ASSOCIATED(kg_env%ec_env%old_rho)) THEN
-            CALL qs_rho_release(kg_env%ec_env%old_rho)
-         END IF
-
-         ! force environment 
-         IF (ASSOCIATED(kg_env%ec_env%force)) CALL deallocate_qs_force(kg_env%ec_env%force)
+         CALL ec_env_release(kg_env%ec_env)
       END IF
 
       DEALLOCATE (kg_env)

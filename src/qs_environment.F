@@ -94,6 +94,7 @@ MODULE qs_environment
                                               section_vals_type,&
                                               section_vals_val_get
    USE kg_environment,                  ONLY: kg_env_create
+   USE ec_environment,                  ONLY: ec_env_create
    USE kinds,                           ONLY: dp
    USE kpoint_methods,                  ONLY: kpoint_env_initialize,&
                                               kpoint_initialize,&
@@ -401,6 +402,9 @@ CONTAINS
       IF (dft_control%qs_control%do_kg) THEN
          CALL cite_reference(Iannuzzi2006)
          CALL kg_env_create(qs_env, qs_env%kg_env, qs_kind_set, qs_env%input)
+      END IF
+      IF (dft_control%qs_control%do_kg_ec) THEN
+         CALL ec_env_create(qs_env, qs_env%ec_env, qs_kind_set, qs_env%input)
       END IF
 
       et_coupling_section => section_vals_get_subs_vals(qs_env%input, &
