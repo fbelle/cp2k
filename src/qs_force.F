@@ -362,6 +362,28 @@ CONTAINS
       CALL ec_forces(qs_env)
    ! end of ".NOT. kg_env%_energy_correction"
    END IF
+
+!   !------------------------------------------------------------------------
+!   !fbelle 
+!   IF(para_env%mepos==0) THEN
+!      WRITE(*,*) "matrix_w in qs_forces after normal and Harris"
+!      CALL get_qs_env(qs_env,ks_env=ks_env,matrix_w=matrix_w)
+!      WRITE(*,*) "ASSOCIATED(matrix_w)", ASSOCIATED(matrix_w)
+!
+!      IF(ASSOCIATED(matrix_w)) THEN
+!            CALL dbcsr_print(matrix_w(1)%matrix)
+!      END IF
+!   END IF
+!   !------------------------------------------------------------------------
+
+!     !---------------------------------------------------------------------------------------
+!     
+!     WRITE(*,*) "Forces after back in qs_forces"
+!     output_unit = 6 
+!     print_section => section_vals_get_subs_vals(qs_env%input, "DFT%PRINT%DERIVATIVES")
+!     CALL write_forces(force, atomic_kind_set, 0, output_unit=output_unit, &
+!                       print_section=print_section)
+!     !---------------------------------------------------------------------------------------
      
      ! ALMO Code (in the spirit of the MP2 modifications below)
       IF (ASSOCIATED(qs_env%almo_scf_env)) THEN
