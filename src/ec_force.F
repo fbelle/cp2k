@@ -173,7 +173,7 @@ CONTAINS
     
     CALL get_qs_env(qs_env,para_env=para_env)
     IF(para_env%mepos==0) THEN
-       WRITE(*,*) "ec_forces - BEGINNING"
+!       WRITE(*,*) "ec_forces - BEGINNING"
     END IF
 
     ! obviously 
@@ -249,36 +249,44 @@ CONTAINS
     ! calculate matrix_w = matrix_p*matrix_ks*matrix_p
     CALL ec_calculate_w_matrix(qs_env, ec_env)
 
-      IF(para_env%mepos==0) THEN
-!         WRITE(*,*) " ec_forces", ASSOCIATED(ec_env%matrix_s)
-!         IF(ASSOCIATED(ec_env%matrix_s)) THEN
-!               CALL dbcsr_print(ec_env%matrix_s(1,1)%matrix)
-!         END IF
-!         WRITE(*,*) " ec_forces", ASSOCIATED(ec_env%matrix_p)
-!         IF(ASSOCIATED(ec_env%matrix_p)) THEN
-!               CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
-!         END IF
-!         WRITE(*,*) " ec_forces", ASSOCIATED(ec_env%matrix_t)
-!         IF(ASSOCIATED(ec_env%matrix_t)) THEN
-!               CALL dbcsr_print(ec_env%matrix_t(1,1)%matrix)
-!         END IF
-         WRITE(*,*) " ec_forces - ec_env%matrix_w", ASSOCIATED(ec_env%matrix_w)
-         IF(ASSOCIATED(ec_env%matrix_w)) THEN
-               CALL dbcsr_print(ec_env%matrix_w(1,1)%matrix)
-         END IF
-      END IF
+!      IF(para_env%mepos==0) THEN
+!       WRITE(*,*) " ec_forces - ec_env%matrix_s", ASSOCIATED(ec_env%matrix_s)
+!       IF(ASSOCIATED(ec_env%matrix_s)) THEN
+!             CALL dbcsr_print(ec_env%matrix_s(1,1)%matrix)
+!       END IF
+!       WRITE(*,*) " ec_forces - ec_env%matrix_t", ASSOCIATED(ec_env%matrix_t)
+!       IF(ASSOCIATED(ec_env%matrix_t)) THEN
+!             CALL dbcsr_print(ec_env%matrix_t(1,1)%matrix)
+!       END IF
+!       WRITE(*,*) " ec_forces - ec_env%matrix_h", ASSOCIATED(ec_env%matrix_h)
+!       IF(ASSOCIATED(ec_env%matrix_h)) THEN
+!             CALL dbcsr_print(ec_env%matrix_h(1,1)%matrix)
+!       END IF
+!       WRITE(*,*) " ec_forces -  ec_env%matrix_ks", ASSOCIATED(ec_env%matrix_ks)
+!       IF(ASSOCIATED(ec_env%matrix_ks)) THEN
+!             CALL dbcsr_print(ec_env%matrix_ks(1,1)%matrix)
+!       END IF
+!       WRITE(*,*) " ec_forces -  ec_env%matrix_p", ASSOCIATED(ec_env%matrix_p)
+!       IF(ASSOCIATED(ec_env%matrix_p)) THEN
+!             CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
+!       END IF
+!       WRITE(*,*) " ec_forces - ec_env%matrix_w", ASSOCIATED(ec_env%matrix_w)
+!       IF(ASSOCIATED(ec_env%matrix_w)) THEN
+!             CALL dbcsr_print(ec_env%matrix_w(1,1)%matrix)
+!       END IF
+!      END IF
 
     ! d/dR[Sum of eigenvalues] = d/dR[trace(matrix_ks[n_in] * n_out)] 
     ! core hamiltonian force contribution: 
     ! kinetic, overlap, gth_ppl, gth_ppnl 
     CALL ec_build_core_hamiltonian(qs_env, ec_env, calculate_forces)
 
-    IF(para_env%mepos==0) THEN
-       WRITE(*,*) "ec_forces - qs_env%...%force - after ec_build_core_hamiltonian"
-       CALL ec_write_forces(qs_env, force)
-       WRITE(*,*) "ec_forces - ec_env%force after - ec_build_core_hamiltonian "
-       CALL ec_write_forces(qs_env, ec_env%force)
-    END IF
+!    IF(para_env%mepos==0) THEN
+!       WRITE(*,*) "ec_forces - qs_env%...%force - after ec_build_core_hamiltonian"
+!       CALL ec_write_forces(qs_env, force)
+!       WRITE(*,*) "ec_forces - ec_env%force after - ec_build_core_hamiltonian "
+!       CALL ec_write_forces(qs_env, ec_env%force)
+!    END IF
 
     ! next, grid based forces of band structure: 
     ! rho_elec : F_BS_XC[n_in, n_out] + F_BS_H[n_in, n_out]
@@ -287,15 +295,15 @@ CONTAINS
 !    CALL ec_build_ks_matrix(qs_env, ec_env, calculate_forces)
     CALL ec_bs_forces(qs_env, ec_env)
     
-    IF(para_env%mepos==0) THEN
-       WRITE(*,*) repeat("-",80)  
-       WRITE(*,*) "ec_forces - qs_env%...%force - after ec_bs_forces"
-       CALL ec_write_forces(qs_env, force)
-       WRITE(*,*) "ec_forces - ec_env%force - after ec_bs_forces"
-       CALL ec_write_forces(qs_env, ec_env%force)
-    !CALL ec_write_bs_forces(qs_env, force)
-       WRITE(*,*) repeat("-",80)  
-    END IF
+!    IF(para_env%mepos==0) THEN
+!       WRITE(*,*) repeat("-",80)  
+!       WRITE(*,*) "ec_forces - qs_env%...%force - after ec_bs_forces"
+!       CALL ec_write_forces(qs_env, force)
+!       WRITE(*,*) "ec_forces - ec_env%force - after ec_bs_forces"
+!       CALL ec_write_forces(qs_env, ec_env%force)
+!    !CALL ec_write_bs_forces(qs_env, force)
+!       WRITE(*,*) repeat("-",80)  
+!    END IF
 
 
 
@@ -310,7 +318,37 @@ CONTAINS
     ! forces from band structure and double counting terms
     ! grid based forces rho_elec
     CALL ec_nsc_force(qs_env, ec_env)
-    
+
+!      IF(para_env%mepos==0) THEN
+!       WRITE(*,*) " ENF OF EC FORCES"
+!       WRITE(*,*) " ec_forces - ec_env%matrix_s", ASSOCIATED(ec_env%matrix_s)
+!       IF(ASSOCIATED(ec_env%matrix_s)) THEN
+!             CALL dbcsr_print(ec_env%matrix_s(1,1)%matrix)
+!       END IF
+!       WRITE(*,*) " ec_forces - ec_env%matrix_t", ASSOCIATED(ec_env%matrix_t)
+!       IF(ASSOCIATED(ec_env%matrix_t)) THEN
+!             CALL dbcsr_print(ec_env%matrix_t(1,1)%matrix)
+!       END IF
+!       WRITE(*,*) " ec_forces - ec_env%matrix_h", ASSOCIATED(ec_env%matrix_h)
+!       IF(ASSOCIATED(ec_env%matrix_h)) THEN
+!             CALL dbcsr_print(ec_env%matrix_h(1,1)%matrix)
+!       END IF
+!       WRITE(*,*) " ec_forces -  ec_env%matrix_ks", ASSOCIATED(ec_env%matrix_ks)
+!       IF(ASSOCIATED(ec_env%matrix_ks)) THEN
+!             CALL dbcsr_print(ec_env%matrix_ks(1,1)%matrix)
+!       END IF
+!       WRITE(*,*) " ec_forces -  ec_env%matrix_p", ASSOCIATED(ec_env%matrix_p)
+!       IF(ASSOCIATED(ec_env%matrix_p)) THEN
+!             CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
+!       END IF
+!       WRITE(*,*) " ec_forces - ec_env%matrix_w", ASSOCIATED(ec_env%matrix_w)
+!       IF(ASSOCIATED(ec_env%matrix_w)) THEN
+!             CALL dbcsr_print(ec_env%matrix_w(1,1)%matrix)
+!       END IF
+!      END IF
+
+
+
 !    IF(para_env%mepos==0) THEN
 !       WRITE(*,*) repeat("-",80)  
 !       WRITE(*,*) "ec_forces - qs_env%...%force - after ec_nsc_force"
@@ -542,9 +580,9 @@ CONTAINS
                     force=force, &
                     para_env=para_env)
 
-    IF(para_env%mepos==0) THEN
-       WRITE(*,*) "ec_nsc_force - BEGINNING"
-    END IF
+!    IF(para_env%mepos==0) THEN
+!       WRITE(*,*) "ec_nsc_force - BEGINNING"
+!    END IF
     
     calculate_forces = .TRUE.
     
@@ -668,7 +706,7 @@ CONTAINS
     CALL pw_poisson_solve(poisson_env, rho_tot_gspace%pw, &
                            vhartree = v_hartree_gspace%pw)
     CALL pw_transfer(v_hartree_gspace%pw, v_hartree_rspace%pw)
-    CALL pw_scale(v_hartree_rspace%pw, v_hartree_rspace%pw%pw_grid%dvol)
+!    CALL pw_scale(v_hartree_rspace%pw, v_hartree_rspace%pw%pw_grid%dvol)
 
     ! Add v_NSC_xc + v_NSC_hartree
     DO ispin = 1,nspins
@@ -721,12 +759,12 @@ CONTAINS
     END DO
 
     IF(para_env%mepos==0) THEN
-      WRITE(*,*) repeat("-",80)  
-       WRITE(*,*) "ec_nsc_forces - qs_env%...%force - rho_elec"
-       CALL ec_write_forces(qs_env, force)
-       WRITE(*,*) "ec_nsc_forces - ec_env%force - rho_elec"
-       CALL ec_write_forces(qs_env, ec_env%force)
-      WRITE(*,*) repeat("-",80)  
+!      WRITE(*,*) repeat("-",80)  
+!       WRITE(*,*) "ec_nsc_forces - qs_env%...%force - rho_elec"
+!       CALL ec_write_forces(qs_env, force)
+!       WRITE(*,*) "ec_nsc_forces - ec_env%force - rho_elec"
+!       CALL ec_write_forces(qs_env, ec_env%force)
+!      WRITE(*,*) repeat("-",80)  
     END IF
     
     !---------------------------------------------------------------------------------------
@@ -769,7 +807,7 @@ CONTAINS
     CALL pw_pool_give_back_pw(auxbas_pw_pool, rho_tot_gspace%pw)
     
 
-    IF(para_env%mepos==0) WRITE(*,*) "ec_nsc_force - END"
+!    IF(para_env%mepos==0) WRITE(*,*) "ec_nsc_force - END"
 !    CALL ec_write_forces(qs_env, force, calculate_forces=.TRUE.)
 
     CALL timestop(handle)

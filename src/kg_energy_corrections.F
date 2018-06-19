@@ -139,6 +139,9 @@ MODULE kg_energy_corrections
    USE ec_methods,                      ONLY: ec_write_forces,&
                                               ec_write_bs_forces,& 
                                               ec_calculate_w_matrix
+   USE input_section_types,             ONLY: section_vals_type
+   USE qs_rho_types,                    ONLY: qs_rho_get,&
+                                              qs_rho_type
 
 #include "./base/base_uses.f90"
 
@@ -159,8 +162,61 @@ MODULE kg_energy_corrections
    PUBLIC :: ec_energy
    PUBLIC :: ec_build_neighborlist
    PUBLIC :: mao_create_matrices
+   PUBLIC :: harris_consistency
 
 CONTAINS
+
+! **************************************************************************************************
+!> \brief Calculate energy once more to get self consitency with forces for debugging 
+!> \param qs_env ...
+!> \param calculate_forces .FALSE. cause we only want to update energy
+!> \date    04.2018
+!> \author  fbelle
+! **************************************************************************************************
+   SUBROUTINE harris_consistency(qs_env, calculate_forces)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      LOGICAL, INTENT(IN), OPTIONAL                      :: calculate_forces
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'harris_consistency', &
+         routineP = moduleN//':'//routineN
+
+      TYPE(energy_correction_type), POINTER              :: ec_env
+      TYPE(kg_environment_type), POINTER                 :: kg_env
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(qs_rho_type), POINTER                         :: rho
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: rho_ao
+      INTEGER                                            :: ispin, nspins
+
+      NULLIFY (ec_env, kg_env, rho)
+      CALL get_qs_env(qs_env = qs_env, &
+               kg_env = kg_env, & 
+               rho=rho, &
+               dft_control = dft_control)
+
+      ec_env => kg_env%ec_env
+      nspins = dft_control%nspins
+   
+      ! new density in ec_env%matrix_p, copy into qs_env%...%rho_ao and update rho_r
+
+      ! get qs_env%...%rho
+      CALL qs_rho_get(rho, rho_ao_kp = rho_ao )
+     
+      ! copy density matrix manually  
+      DO ispin = 1, nspins
+         CALL dbcsr_copy(rho_ao(ispin,1)%matrix, & 
+                           ec_env%matrix_p(ispin,1)%matrix, keep_sparsity=.FALSE.)
+      END DO
+
+      ! updates rho_r and rho_g wrt to new rho%rho_ao
+      CALL qs_rho_update_rho(rho, qs_env = qs_env)
+
+
+      !WRITE(*,*) "HARRIS ENERGY CORRECTION - CONSISTENCY"
+      ! perform energy correction again
+      CALL kg_energy_correction(qs_env, calculate_forces = calculate_forces )
+
+   END SUBROUTINE harris_consistency
+
 
 
 ! **************************************************************************************************
@@ -249,14 +305,14 @@ CONTAINS
 
 
       IF(para_env%mepos==0) THEN
-         WRITE(*,*) "kg_energy_correction - END - ec_env%matrix_ks", ASSOCIATED(ec_env%matrix_ks)
-         IF(ASSOCIATED(ec_env%matrix_ks)) THEN
-               CALL dbcsr_print(ec_env%matrix_ks(1,1)%matrix)
-         END IF
-         WRITE(*,*) "kg_energy_correction - END - ec_env%matrix_p", ASSOCIATED(ec_env%matrix_p)
-         IF(ASSOCIATED(ec_env%matrix_ks)) THEN
-            CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
-         END IF
+!         WRITE(*,*) "kg_energy_correction - END - ec_env%matrix_ks", ASSOCIATED(ec_env%matrix_ks)
+!         IF(ASSOCIATED(ec_env%matrix_ks)) THEN
+!               CALL dbcsr_print(ec_env%matrix_ks(1,1)%matrix)
+!         END IF
+!         WRITE(*,*) "kg_energy_correction - END - ec_env%matrix_p", ASSOCIATED(ec_env%matrix_p)
+!         IF(ASSOCIATED(ec_env%matrix_ks)) THEN
+!            CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
+!         END IF
       END IF
 
 
@@ -369,48 +425,6 @@ CONTAINS
       CALL get_qs_env(qs_env=qs_env, ks_env=ks_env)
       eps_filter = dft_control%qs_control%eps_filter_matrix
 
-
-      IF (calculate_forces) THEN
-      CALL get_qs_env(qs_env,para_env=para_env, force = force)
-      IF(para_env%mepos==0) THEN
-         WRITE(*,*) "ec_forces - qs_env%...%force - before build_kinetic_matrix"
-         CALL ec_write_forces(qs_env, force)
-      END IF
-      END IF
-
-! ----------------------------------------------------------------------------- 
-!      CALL build_overlap_matrix(ks_env, &
-!                                nderivative = nder, &
-!                                matrixkp_s = ec_env%matrix_s, &
-!                                matrix_name = "OVERLAP MATRIX", &
-!                                basis_type_a = "HARRIS", &
-!                                basis_type_b = "HARRIS", &
-!                                sab_nl = sab_orb,&
-!                                calculate_forces = calculate_forces, &
-!                                matrixkp_p = ec_env%matrix_w)
-!
-!      CALL build_kinetic_matrix(ks_env, &
-!                                matrixkp_t = ec_env%matrix_t, &
-!                                matrix_name = "KINETIC ENERGY MATRIX", &
-!                                basis_type = "HARRIS", &
-!                                sab_nl = sab_orb, &
-!                                eps_filter = eps_filter, &
-!                                calculate_forces = calculate_forces, &
-!                                matrixkp_p = ec_env%matrix_p)
-! ----------------------------------------------------------------------------- 
-        
-      CALL get_qs_env(qs_env,para_env=para_env)
-      IF(para_env%mepos==0) THEN
-         WRITE(*,*) " ec_build_core_hamiltonian ec_env%matrix_w", ASSOCIATED(ec_env%matrix_w)
-         IF(ASSOCIATED(ec_env%matrix_w)) THEN
-               CALL dbcsr_print(ec_env%matrix_w(1,1)%matrix)
-         END IF
-      END IF
-
-! ----------------------------------------------------------------------------- 
-! NEW
-! ----------------------------------------------------------------------------- 
-
       IF (calculate_forces) THEN
          CALL build_overlap_matrix(ks_env, &
                                    nderivative = nder, &
@@ -444,21 +458,9 @@ CONTAINS
                                    basis_type="HARRIS", &
                                    sab_nl=sab_orb, &
                                    eps_filter=eps_filter)
-
-
-
-
       END IF
 
 ! ----------------------------------------------------------------------------- 
-
-
-      IF (calculate_forces) THEN
-      IF(para_env%mepos==0) THEN
-         WRITE(*,*) "ec_forces - qs_env%...%force - after build_kinetic_matrix"
-         CALL ec_write_forces(qs_env, force)
-      END IF
-      END IF
 
       CALL get_qs_env(qs_env,para_env=para_env)
 !      IF(para_env%mepos==0) THEN
@@ -552,6 +554,8 @@ CONTAINS
 !      TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho_g
 !      REAL(dp)                                           :: evxc
 !      REAL(dp)                                           :: ehartree_both
+!      TYPE(section_vals_type), POINTER                   :: input
+!      TYPE(section_vals_type), POINTER                   :: xc_section
 
       CALL timeset(routineN, handle)
 
@@ -677,15 +681,14 @@ CONTAINS
   
       CALL get_qs_env(qs_env,para_env=para_env)
       IF(para_env%mepos==0) THEN
-          WRITE(*,*) "ehartree", ehartree
-          !WRITE(*,*) "ehartree_core", ehartree_core
-          !WRITE(*,*) "ehartree_both", ehartree_both
-          WRITE(*,*) "evorl", eovrl
-          WRITE(*,*) "eself", eself
-          !WRITE(*,*) "evxc", evxc
-          WRITE(*,*) "evhxc", evhxc
-          WRITE(*,*) "Juerg correction",  ehartree - evhxc 
-
+!          WRITE(*,*) "ehartree", ehartree
+!          !WRITE(*,*) "ehartree_core", ehartree_core
+!          !WRITE(*,*) "ehartree_both", ehartree_both
+!          WRITE(*,*) "evorl", eovrl
+!          WRITE(*,*) "eself", eself
+!          !WRITE(*,*) "evxc", evxc
+!          WRITE(*,*) "evhxc", evhxc
+!          WRITE(*,*) "Juerg correction",  ehartree - evhxc 
       END IF 
       ec_env%exc = eexc
       !ec_env%ehartree = -ehartree+eovrl+eself+ehartree_core
@@ -1093,14 +1096,14 @@ CONTAINS
 !         IF(ASSOCIATED(ec_env%matrix_t)) THEN
 !               CALL dbcsr_print(ec_env%matrix_t(1,1)%matrix)
 !         END IF
-         WRITE(*,*) " ec_energy ec_env%matrix_p", ASSOCIATED(ec_env%matrix_p)
-         IF(ASSOCIATED(ec_env%matrix_p)) THEN
-               CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
-         END IF
-         WRITE(*,*) " ec_energy -  rho_ao", ASSOCIATED(rho_ao)
-         IF(ASSOCIATED(rho_ao)) THEN
-               CALL dbcsr_print(rho_ao(1,1)%matrix)
-         END IF
+!         WRITE(*,*) " ec_energy ec_env%matrix_p", ASSOCIATED(ec_env%matrix_p)
+!         IF(ASSOCIATED(ec_env%matrix_p)) THEN
+!               CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
+!         END IF
+!         WRITE(*,*) " ec_energy -  rho_ao", ASSOCIATED(rho_ao)
+!         IF(ASSOCIATED(rho_ao)) THEN
+!               CALL dbcsr_print(rho_ao(1,1)%matrix)
+!         END IF
       END IF
       
       

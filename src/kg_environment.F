@@ -37,6 +37,7 @@ MODULE kg_environment
                                               kg_tnadd_embed,&
                                               kg_tnadd_embed_ri,&
                                               kg_tnadd_none,&
+                                              xc_funct_no_shortcut,&
                                               xc_vdw_fun_nonloc,&
                                               xc_vdw_fun_pairpot
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
@@ -151,6 +152,10 @@ CONTAINS
       TYPE(qs_kind_type), POINTER                        :: qs_kind
       TYPE(section_vals_type), POINTER                   :: lri_section, nl_section, pp_section, &
                                                             xc_section, xc_section_kg
+      TYPE(section_vals_type), POINTER                   :: kef_section, &
+                                                            xc_fun_section, xc_fun_section_kg 
+      LOGICAL                                            :: is_set
+      INTEGER                                            :: ke_sections
 
       CALL timeset(routineN, handle)
 
@@ -170,7 +175,6 @@ CONTAINS
       NULLIFY (kg_env%ec_env%sab_orb, kg_env%ec_env%sac_ppl, kg_env%ec_env%sap_ppnl)
       NULLIFY (kg_env%ec_env%matrix_ks, kg_env%ec_env%matrix_h, kg_env%ec_env%matrix_s)
       NULLIFY (kg_env%ec_env%matrix_t, kg_env%ec_env%matrix_p, kg_env%ec_env%matrix_w)
-      NULLIFY (kg_env%ec_env%matrix_delta)
       NULLIFY (kg_env%ec_env%task_list)
       NULLIFY (kg_env%ec_env%mao_coef)
       NULLIFY (kg_env%ec_env%dispersion_env)
@@ -275,8 +279,10 @@ CONTAINS
          xc_section => section_vals_get_subs_vals(input, "DFT%XC")
          xc_section_kg => section_vals_get_subs_vals(input, "DFT%KG_METHOD%ENERGY_CORRECTION%XC")
          IF (ASSOCIATED(xc_section_kg)) THEN
+            WRITE(*,*) "ASSOCIATED(xc_section_kg)", ASSOCIATED(xc_section_kg)
             kg_env%ec_env%xc_section => xc_section_kg
          ELSE
+            WRITE(*,*) "ASSOCIATED(xc_section)", ASSOCIATED(xc_section)
             kg_env%ec_env%xc_section => xc_section
          END IF
          ! dispersion
@@ -297,19 +303,122 @@ CONTAINS
          kg_env%ec_env%dispersion_env => dispersion_env
       END IF
 
-      SELECT CASE (kg_env%tnadd_method)
-      CASE (kg_tnadd_embed, kg_tnadd_embed_ri)
-         ! kinetic energy functional
-         kg_env%xc_section_kg => section_vals_get_subs_vals(input, "DFT%KG_METHOD%XC")
-         IF (.NOT. ASSOCIATED(kg_env%xc_section_kg)) THEN
-            CALL cp_abort(__LOCATION__, &
-                          "KG runs require a kinetic energy functional set in &KG_METHOD")
+!      WRITE(*,*) "kg_env%tnadd_method", kg_env%tnadd_method
+!      SELECT CASE (kg_env%tnadd_method)
+!      CASE (kg_tnadd_embed, kg_tnadd_embed_ri)
+!         ! kinetic energy functional
+!         kg_env%xc_section_kg => section_vals_get_subs_vals(input, "DFT%KG_METHOD%XC")
+!         IF (.NOT. ASSOCIATED(kg_env%xc_section_kg)) THEN
+!            CALL cp_abort(__LOCATION__, &
+!                          "KG runs require a kinetic energy functional set in &KG_METHOD")
+!         END IF
+!      CASE (kg_tnadd_atomic, kg_tnadd_none)
+!         NULLIFY (kg_env%xc_section_kg)
+!      CASE DEFAULT
+!         CPABORT("KG:TNADD METHOD")
+!      END SELECT
+
+!------------------------------------------------------------------------------
+
+      IF (kg_env%tnadd_method == kg_tnadd_embed) THEN
+         ! generate a new XC section with only the KE functional
+         NULLIFY (xc_fun_section_kg, xc_section_kg)
+
+         xc_section => section_vals_get_subs_vals(input, "DFT%KG_METHOD%XC")
+         xc_fun_section => section_vals_get_subs_vals(xc_section, "XC_FUNCTIONAL")
+
+         CALL section_vals_duplicate(xc_section, xc_section_kg)
+
+         ! test for TF, TFW, KE_GGA, and KE_LIBXC sections in turn
+         ke_sections = 0
+         NULLIFY (kef_section)
+         kef_section => section_vals_get_subs_vals(xc_fun_section, "TF")
+         CALL section_vals_get(kef_section, explicit=is_set)
+         IF (is_set) THEN
+            NULLIFY (xc_fun_section_kg)
+            CALL section_vals_create(xc_fun_section_kg, xc_fun_section%section)
+            CALL section_vals_val_set(xc_fun_section_kg, "_SECTION_PARAMETERS_", &
+                                      i_val=xc_funct_no_shortcut)
+            CALL section_vals_set_subs_vals(xc_fun_section_kg, "TF", &
+                                            kef_section)
+            CALL section_vals_set_subs_vals(xc_section_kg, "XC_FUNCTIONAL", &
+                                            xc_fun_section_kg)
+            ke_sections = ke_sections+1
          END IF
-      CASE (kg_tnadd_atomic, kg_tnadd_none)
-         NULLIFY (kg_env%xc_section_kg)
-      CASE DEFAULT
-         CPABORT("KG:TNADD METHOD")
-      END SELECT
+
+         NULLIFY (kef_section)
+         kef_section => section_vals_get_subs_vals(xc_fun_section, "TFW")
+         CALL section_vals_get(kef_section, explicit=is_set)
+         IF (is_set) THEN
+            NULLIFY (xc_fun_section_kg)
+            CALL section_vals_create(xc_fun_section_kg, xc_fun_section%section)
+            CALL section_vals_val_set(xc_fun_section_kg, "_SECTION_PARAMETERS_", &
+                                      i_val=xc_funct_no_shortcut)
+            CALL section_vals_set_subs_vals(xc_fun_section_kg, "TFW", &
+                                            kef_section)
+            CALL section_vals_set_subs_vals(xc_section_kg, "XC_FUNCTIONAL", &
+                                            xc_fun_section_kg)
+            ke_sections = ke_sections+1
+         END IF
+
+         NULLIFY (kef_section)
+         kef_section => section_vals_get_subs_vals(xc_fun_section, "KE_GGA")
+         CALL section_vals_get(kef_section, explicit=is_set)
+         IF (is_set) THEN
+            NULLIFY (xc_fun_section_kg)
+            CALL section_vals_create(xc_fun_section_kg, xc_fun_section%section)
+            CALL section_vals_val_set(xc_fun_section_kg, "_SECTION_PARAMETERS_", &
+                                      i_val=xc_funct_no_shortcut)
+            CALL section_vals_set_subs_vals(xc_fun_section_kg, "KE_GGA", &
+                                            kef_section)
+            CALL section_vals_set_subs_vals(xc_section_kg, "XC_FUNCTIONAL", &
+                                            xc_fun_section_kg)
+            ke_sections = ke_sections+1
+            WRITE(*,*) "KEF - KE_GGA"
+         END IF
+
+         NULLIFY (kef_section)
+         kef_section => section_vals_get_subs_vals(xc_fun_section, "KE_LIBXC")
+         CALL section_vals_get(kef_section, explicit=is_set)
+         IF (is_set) THEN
+            NULLIFY (xc_fun_section_kg)
+            CALL section_vals_create(xc_fun_section_kg, xc_fun_section%section)
+            CALL section_vals_val_set(xc_fun_section_kg, "_SECTION_PARAMETERS_", &
+                                      i_val=xc_funct_no_shortcut)
+            CALL section_vals_set_subs_vals(xc_fun_section_kg, "KE_LIBXC", &
+                                            kef_section)
+            CALL section_vals_set_subs_vals(xc_section_kg, "XC_FUNCTIONAL", &
+                                            xc_fun_section_kg)
+            ke_sections = ke_sections+1
+         END IF
+
+         ! stop if there is more than one kinetic energy functional section present
+         !CPPostcondition(ke_sections==1,cp_failure_level,routineP,failure)
+         IF (ke_sections /= 1) &
+            CALL cp_abort(__LOCATION__, &
+                          "KG runs require a kinetic energy functional. Exactly one of the following "// &
+                          "subsections of XC_FUNCTIONAL needs to be present: KE_GGA, TF, TFW, or KE_LIBXC.")
+
+         kg_env%xc_section_kg => xc_section_kg
+
+         NULLIFY (kef_section, xc_fun_section)
+
+         CALL section_vals_release(xc_fun_section_kg)
+
+      END IF
+
+
+
+
+
+
+
+!------------------------------------------------------------------------------
+
+
+
+
+
 
       IF (kg_env%tnadd_method == kg_tnadd_embed_ri) THEN
          ! initialize the LRI environment

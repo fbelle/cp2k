@@ -23,7 +23,8 @@ MODULE ec_methods
         dbcsr_deallocate_matrix_set, dbcsr_desymmetrize, dbcsr_distribution_type, dbcsr_filter, &
         dbcsr_get_info, dbcsr_init_p, dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_set, &
         dbcsr_trace, dbcsr_type, dbcsr_type_no_symmetry, dbcsr_type_symmetric, dbcsr_print, dbcsr_finalize
-   USE kg_environment_types,            ONLY: energy_correction_type
+   USE kg_environment_types,            ONLY: kg_environment_type,&
+                                              energy_correction_type
    USE kinds,                           ONLY: dp
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
@@ -46,6 +47,7 @@ MODULE ec_methods
    PUBLIC :: ec_write_forces, ec_calculate_w_matrix, ec_write_bs_forces
 
 CONTAINS
+
 
 ! **************************************************************************************************
 !> \brief   Simplified from qs_force.F write_forces 
