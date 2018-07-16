@@ -23,7 +23,7 @@ MODULE dm_ls_scf
         dbcsr_add, dbcsr_binary_read, dbcsr_binary_write, dbcsr_checksum, dbcsr_copy, &
         dbcsr_create, dbcsr_distribution_type, dbcsr_filter, dbcsr_get_info, dbcsr_get_occupation, &
         dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_type, &
-        dbcsr_type_no_symmetry
+        dbcsr_type_no_symmetry, dbcsr_print, dbcsr_norm
    USE dm_ls_chebyshev,                 ONLY: compute_chebyshev
    USE dm_ls_scf_curvy,                 ONLY: deallocate_curvy_data,&
                                               dm_ls_curvy_optimization
@@ -79,6 +79,9 @@ MODULE dm_ls_scf
    USE transport,                       ONLY: external_scf_method,&
                                               transport_initialize
    USE transport_env_types,             ONLY: transport_env_type
+   !fbelle
+   USE cp_para_types,                   ONLY: cp_para_env_type
+
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -459,6 +462,11 @@ CONTAINS
       TYPE(dbcsr_type), ALLOCATABLE, DIMENSION(:)        :: matrix_ks_deviation, matrix_mixing_old
       TYPE(qs_diis_buffer_type_sparse), POINTER          :: diis_buffer
       TYPE(transport_env_type), POINTER                  :: transport_env
+      !fbelle
+      TYPE(dbcsr_type), ALLOCATABLE, DIMENSION(:)        :: matrix_delta
+      TYPE(cp_para_env_type), POINTER                    :: para_env
+      REAL(KIND=dp)                                      :: norm_scalar
+
 
       CALL timeset(routineN, handle)
 
@@ -485,6 +493,34 @@ CONTAINS
 
       transm_scf_converged = .FALSE.
       transm_maxscf_reached = .FALSE.
+
+      !-------------
+      !fbelle
+      CALL get_qs_env(qs_env,para_env=para_env)
+
+      ALLOCATE (matrix_delta(nspin))
+      DO ispin = 1 , nspin
+
+         CALL dbcsr_create(matrix_delta(ispin), template=ls_scf_env%matrix_p(ispin))
+         CALL dbcsr_set(matrix_delta(ispin), 0.0_dp)
+      
+        ! nothing to be stored in there yet
+        ! store first density matrix 
+        ! CALL dbcsr_copy(matrix_delta(ispin), ls_scf_env%matrix_p(ispin), & 
+        !                 keep_sparsity = .FALSE., name="DELTA DENSITY-MATRIX")
+
+      END DO
+
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) "ls_scf_main - matrix_delta "
+         !CALL dbcsr_print(matrix_delta(1))
+         CALL dbcsr_print(ls_scf_env%matrix_p(1))
+      END IF
+
+      !-------------
+
+
+
 
       energy_old = 0.0_dp
       IF (ls_scf_env%scf_history%istore > 0) energy_old = ls_scf_env%energy_init
@@ -685,6 +721,36 @@ CONTAINS
          ! report current SCF loop
          energy_diff = energy_new-energy_old
          energy_old = energy_new
+ 
+         !---------
+         !fbelle
+
+         ! substract new density matrix
+          
+         DO ispin = 1 , nspin
+
+           ! matrix_p(n) - matrix_p(n+1)
+           CALL dbcsr_add(matrix_delta(ispin), ls_scf_env%matrix_p(ispin), &
+                          alpha_scalar=1.0_dp, beta_scalar=-1.0_dp)
+
+           CALL dbcsr_norm(matrix = matrix_delta(ispin), &
+                           which_norm = 2, & ! dbcsr_norm_maxabsnorm
+                           norm_scalar = norm_scalar)
+
+           ! store new density matrix
+           CALL dbcsr_copy(matrix_delta(ispin), ls_scf_env%matrix_p(ispin), & 
+                           keep_sparsity = .FALSE., name="DELTA DENSITY-MATRIX")
+
+         END DO
+         
+         IF(para_env%mepos==0) THEN
+            WRITE(*,*) "ls_scf_main - norm_scalar ", norm_scalar
+         END IF
+
+         !---------
+
+
+
 
          t2 = m_walltime()
          IF (unit_nr > 0) THEN
@@ -705,7 +771,9 @@ CONTAINS
             END IF
          ELSE
             ! exit criterion on the energy only for the time being
-            IF (check_convergence .AND. ABS(energy_diff) < ls_scf_env%eps_scf*ls_scf_env%nelectron_total) EXIT
+            !IF (check_convergence .AND. ABS(energy_diff) < ls_scf_env%eps_scf*ls_scf_env%nelectron_total) EXIT
+!fbelle
+            IF (check_convergence .AND. ABS(norm_scalar) < ls_scf_env%eps_scf*ls_scf_env%nelectron_total) EXIT
          END IF
 
          IF (ls_scf_env%ls_diis) THEN
@@ -736,6 +804,13 @@ CONTAINS
          CALL dbcsr_release(matrix_ks_deviation(ispin))
       ENDDO
       DEALLOCATE (matrix_mixing_old, matrix_ks_deviation)
+
+      ! fbelle
+      DO ispin = 1, nspin
+         CALL dbcsr_release(matrix_delta(ispin))
+      ENDDO
+      DEALLOCATE (matrix_delta)
+
 
       CALL timestop(handle)
 
