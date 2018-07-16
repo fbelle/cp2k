@@ -69,6 +69,7 @@ MODULE kg_energy_corrections
    USE pw_methods,                      ONLY: pw_axpy,&
                                               pw_copy,&
                                               pw_integral_ab,&
+                                              pw_integrate_function,&
                                               pw_scale,&
                                               pw_transfer,&
                                               pw_zero
@@ -383,6 +384,8 @@ CONTAINS
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
       TYPE(virial_type), POINTER                         :: virial
       TYPE(cp_para_env_type), POINTER                    :: para_env
+!      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_w
+
 
       IF (calculate_forces) THEN
          !WRITE(*,*) "In ec_build_core_hamiltonian with forces", calculate_forces
@@ -424,46 +427,49 @@ CONTAINS
       ! Overlap and kinetic energy matrices
       CALL get_qs_env(qs_env=qs_env, ks_env=ks_env)
       eps_filter = dft_control%qs_control%eps_filter_matrix
-
+     
       IF (calculate_forces) THEN
+
+        CALL build_overlap_matrix(ks_env, &
+                                  nderivative = nder, &
+                                  matrixkp_s = ec_env%matrix_s, &
+                                  matrix_name = "OVERLAP MATRIX", &
+                                  basis_type_a = "HARRIS", &
+                                  basis_type_b = "HARRIS", &
+                                  sab_nl = sab_orb, &
+                                  calculate_forces = calculate_forces, &
+                                  matrixkp_p = ec_env%matrix_w)
+
+        CALL build_kinetic_matrix(ks_env, &
+                                  matrixkp_t = ec_env%matrix_t, &
+                                  matrix_name = "KINETIC ENERGY MATRIX", &
+                                  basis_type = "HARRIS", &
+                                  sab_nl = sab_orb, &
+                                  eps_filter = eps_filter, &
+                                  calculate_forces = calculate_forces, &
+                                  matrixkp_p = ec_env%matrix_p)
+      ELSE
+         
          CALL build_overlap_matrix(ks_env, &
                                    nderivative = nder, &
                                    matrixkp_s = ec_env%matrix_s, &
-                                   matrix_name = "OVERLAP MATRIX", &
+                                   matrix_name=  "OVERLAP MATRIX", &
                                    basis_type_a = "HARRIS", &
                                    basis_type_b = "HARRIS", &
-                                   sab_nl = sab_orb,&
-                                   calculate_forces = calculate_forces, &
-                                   matrixkp_p = ec_env%matrix_w)
+                                   sab_nl = sab_orb)
 
          CALL build_kinetic_matrix(ks_env, &
                                    matrixkp_t = ec_env%matrix_t, &
                                    matrix_name = "KINETIC ENERGY MATRIX", &
                                    basis_type = "HARRIS", &
                                    sab_nl = sab_orb, &
-                                   eps_filter = eps_filter, &
-                                   calculate_forces = calculate_forces, &
-                                   matrixkp_p = ec_env%matrix_p)
-
-      ELSE
-
-         CALL build_overlap_matrix(ks_env, nderivative=nder, matrixkp_s=ec_env%matrix_s, &
-                                   matrix_name="OVERLAP MATRIX", &
-                                   basis_type_a="HARRIS", &
-                                   basis_type_b="HARRIS", &
-                                   sab_nl=sab_orb)
-
-         CALL build_kinetic_matrix(ks_env, matrixkp_t=ec_env%matrix_t, &
-                                   matrix_name="KINETIC ENERGY MATRIX", &
-                                   basis_type="HARRIS", &
-                                   sab_nl=sab_orb, &
-                                   eps_filter=eps_filter)
+                                   eps_filter = eps_filter)
       END IF
 
 ! ----------------------------------------------------------------------------- 
 
       CALL get_qs_env(qs_env,para_env=para_env)
-!      IF(para_env%mepos==0) THEN
+      IF(para_env%mepos==0) THEN
 !         WRITE(*,*) " ec_build_core_hamiltonian ec_env%matrix_s", ASSOCIATED(ec_env%matrix_s)
 !         IF(ASSOCIATED(ec_env%matrix_s)) THEN
 !               CALL dbcsr_print(ec_env%matrix_s(1,1)%matrix)
@@ -476,7 +482,7 @@ CONTAINS
 !         IF(ASSOCIATED(ec_env%matrix_t)) THEN
 !               CALL dbcsr_print(ec_env%matrix_t(1,1)%matrix)
 !         END IF
-!      END IF
+      END IF
 
       ! initialize H matrix
       CALL dbcsr_allocate_matrix_set(ec_env%matrix_h, 1, 1)
@@ -1024,13 +1030,24 @@ CONTAINS
       INTEGER                                            :: handle, ispin, nspins
       REAL(KIND=dp)                                      :: eband, energy, trace
       !fbelle
-      REAL(KIND=dp)                                      :: ecore_pin, ekinetic_pin
-      REAL(KIND=dp)                                      :: ecore_pout, ekinetic_pout
       TYPE(cp_para_env_type), POINTER                    :: para_env
       TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: rho_ao
       TYPE(qs_rho_type), POINTER                         :: rho
-      REAL(KIND=dp)                                      :: trace0, trace1, trace2
+      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_s
+      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_h
+      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_t
       TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_ks
+      REAL(KIND=dp)                                      :: trace_sp_ii, trace_sp_oo
+      REAL(KIND=dp)                                      :: trace_sp_io, trace_sp_oi
+
+      REAL(KIND=dp)                                      :: ecore_ii, ecore_oo
+      REAL(KIND=dp)                                      :: ecore_io, ecore_oi
+      
+      REAL(KIND=dp)                                      :: ekinetic_ii, ekinetic_oo
+      REAL(KIND=dp)                                      :: ekinetic_io, ekinetic_oi
+      
+      REAL(KIND=dp)                                      :: ebs_ii, ebs_oo
+      REAL(KIND=dp)                                      :: ebs_io, ebs_oi
 
       CALL timeset(routineN, handle)
 
@@ -1081,8 +1098,11 @@ CONTAINS
 !      ! fbelle 
       CALL get_qs_env(qs_env, rho=rho, para_env = para_env)
       CALL qs_rho_get(rho, rho_ao_kp = rho_ao)
-      CALL get_qs_env(qs_env=qs_env, matrix_ks_kp=matrix_ks)     
-      
+      CALL get_qs_env(qs_env=qs_env, matrix_ks_kp = matrix_ks, matrix_s_kp = matrix_s)     
+      CALL get_qs_env(qs_env=qs_env, matrix_h_kp = matrix_h)     
+      CALL get_qs_env(qs_env=qs_env, kinetic_kp = matrix_t)     
+
+
       IF(para_env%mepos==0) THEN
 !         WRITE(*,*) " ec_energy matrix_ks", ASSOCIATED(matrix_ks)
 !         IF(ASSOCIATED(matrix_ks)) THEN
@@ -1106,27 +1126,61 @@ CONTAINS
 !         END IF
       END IF
       
-      
       ! core matrix trace
-      CALL calculate_ptrace(ec_env%matrix_h, ec_env%matrix_p, ecore_pout, nspins)
-      CALL calculate_ptrace(ec_env%matrix_t, ec_env%matrix_p, ekinetic_pout, nspins)
-      CALL calculate_ptrace(ec_env%matrix_h, rho_ao, ecore_pin, nspins)
-      CALL calculate_ptrace(ec_env%matrix_t, rho_ao, ekinetic_pin, nspins)
-!
-      CALL calculate_ptrace(ec_env%matrix_ks, ec_env%matrix_p, trace0, nspins)
-      CALL calculate_ptrace(matrix_ks, ec_env%matrix_p, trace1, nspins)
-      CALL calculate_ptrace(matrix_ks, rho_ao, trace2, nspins)
+      CALL calculate_ptrace(ec_env%matrix_h, ec_env%matrix_p, ecore_oo, nspins)
+      CALL calculate_ptrace(ec_env%matrix_h, rho_ao, ecore_oi, nspins)
+
+      CALL calculate_ptrace(matrix_h, ec_env%matrix_p, ecore_io, nspins)
+      CALL calculate_ptrace(matrix_h, rho_ao, ecore_ii, nspins)
+
+      ! kinetic matrix trace
+      CALL calculate_ptrace(ec_env%matrix_t, ec_env%matrix_p, ekinetic_oo, nspins)
+      CALL calculate_ptrace(ec_env%matrix_t, rho_ao, ekinetic_oi, nspins)
+      
+      CALL calculate_ptrace(matrix_t, ec_env%matrix_p, ekinetic_io, nspins)
+      CALL calculate_ptrace(matrix_t, rho_ao, ekinetic_ii, nspins)
+
+      ! overlap
+      CALL calculate_ptrace(ec_env%matrix_s, ec_env%matrix_p, trace_sp_oo, nspins)
+      CALL calculate_ptrace(ec_env%matrix_s, rho_ao, trace_sp_oi, nspins)
+
+      CALL calculate_ptrace(matrix_s, ec_env%matrix_p, trace_sp_io, nspins)
+      CALL calculate_ptrace(matrix_s, rho_ao, trace_sp_ii, nspins)
+      
+      ! band structure energy = Tr[KS*P]
+      CALL calculate_ptrace(ec_env%matrix_ks, ec_env%matrix_p, ebs_oo, nspins)
+      CALL calculate_ptrace(ec_env%matrix_ks, rho_ao, ebs_oi, nspins)
+      
+      CALL calculate_ptrace(matrix_ks, ec_env%matrix_p, ebs_io , nspins)
+      CALL calculate_ptrace(matrix_ks, rho_ao, ebs_ii, nspins)
       
       CALL get_qs_env(qs_env,para_env=para_env)
       IF(para_env%mepos==0) THEN
-         WRITE(*,*) "trace[ks_out*p_out]", trace0
-         WRITE(*,*) "trace[ks_in*p_out]", trace1
-         WRITE(*,*) "trace[ks_in*p_in]", trace2
-         WRITE(*,*) "ecore_pin", ecore_pin
-         WRITE(*,*) "ecore_pout", ecore_pout
-         WRITE(*,*) "ekinetic_pin", ekinetic_pin
-         WRITE(*,*) "ekinetic_pout", ekinetic_pout
+         !core
+         WRITE(*,*) "trace[h_out*p_out]",  ecore_oo
+         WRITE(*,*) "trace[h_out*p_in]",   ecore_oi
+         WRITE(*,*) "trace[h_in*p_out]",   ecore_io
+         WRITE(*,*) "trace[h_in*p_in]",    ecore_ii
+         
+         ! kinetic 
+         WRITE(*,*) "trace[T_out*p_out]",  ekinetic_oo
+         WRITE(*,*) "trace[T_out*p_in]",   ekinetic_oi
+         WRITE(*,*) "trace[T_in*p_out]",   ekinetic_io
+         WRITE(*,*) "trace[T_in*p_in]",    ekinetic_ii
+         
+         WRITE(*,*) "trace[ks_out*p_out]", ebs_oo
+         WRITE(*,*) "trace[ks_out*p_in]",  ebs_oi
+         WRITE(*,*) "trace[ks_in*p_out]",  ebs_io
+         WRITE(*,*) "trace[ks_in*p_in]",   ebs_ii
+
+         WRITE(*,*) "trace[S_in*p_in]",    trace_sp_ii
+         WRITE(*,*) "trace[S_out*p_out]",  trace_sp_oo
+         WRITE(*,*) "trace[S_out*p_in]",   trace_sp_oi
+         WRITE(*,*) "trace[S_in*p_out]",   trace_sp_io
       END IF
+
+
+
 
 
 
