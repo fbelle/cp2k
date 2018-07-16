@@ -279,10 +279,8 @@ CONTAINS
          xc_section => section_vals_get_subs_vals(input, "DFT%XC")
          xc_section_kg => section_vals_get_subs_vals(input, "DFT%KG_METHOD%ENERGY_CORRECTION%XC")
          IF (ASSOCIATED(xc_section_kg)) THEN
-            WRITE(*,*) "ASSOCIATED(xc_section_kg)", ASSOCIATED(xc_section_kg)
             kg_env%ec_env%xc_section => xc_section_kg
          ELSE
-            WRITE(*,*) "ASSOCIATED(xc_section)", ASSOCIATED(xc_section)
             kg_env%ec_env%xc_section => xc_section
          END IF
          ! dispersion
