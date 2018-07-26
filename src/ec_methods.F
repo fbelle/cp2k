@@ -16,13 +16,15 @@ MODULE ec_methods
                                               get_atomic_kind_set
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
-                                              cp_logger_type
+                                              cp_logger_type,&
+                                              cp_to_string
    USE cp_para_types,                   ONLY: cp_para_env_type
    USE dbcsr_api,                       ONLY: &
         dbcsr_add, dbcsr_allocate_matrix_set, dbcsr_copy, dbcsr_create, &
         dbcsr_deallocate_matrix_set, dbcsr_desymmetrize, dbcsr_distribution_type, dbcsr_filter, &
         dbcsr_get_info, dbcsr_init_p, dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_set, &
-        dbcsr_trace, dbcsr_type, dbcsr_type_no_symmetry, dbcsr_type_symmetric, dbcsr_print, dbcsr_finalize
+        dbcsr_trace, dbcsr_type, dbcsr_type_no_symmetry, dbcsr_type_symmetric, dbcsr_print, &
+        dbcsr_finalize, dbcsr_transposed, dbcsr_norm
    USE kg_environment_types,            ONLY: kg_environment_type,&
                                               energy_correction_type
    USE kinds,                           ONLY: dp
@@ -33,6 +35,29 @@ MODULE ec_methods
                                               replicate_qs_force,&
                                               zero_qs_force,&
                                               deallocate_qs_force
+   USE qs_kind_types,                   ONLY: get_qs_kind, &
+                                              get_qs_kind_set, &
+                                              qs_kind_type
+   USE cp_fm_types,                     ONLY: cp_fm_create,&
+                                              cp_fm_get_info,&
+                                              cp_fm_p_type,&
+                                              cp_fm_set_all,&
+                                              cp_fm_to_fm,&
+                                              cp_fm_to_fm_triangular,&
+                                              cp_fm_type
+   USE cp_fm_pool_types,                ONLY: cp_fm_pool_p_type
+   USE qs_matrix_pools,                 ONLY: mpools_get
+   USE qs_mo_types,                     ONLY: allocate_mo_set,&
+                                              get_mo_set,&
+                                              init_mo_set,&
+                                              mo_set_p_type
+   USE cp_dbcsr_operations,             ONLY: cp_dbcsr_m_by_n_from_row_template
+   USE qs_rho_types,                    ONLY: qs_rho_get,&
+                                              qs_rho_type
+   USE pw_methods,                      ONLY: pw_integrate_function
+   USE pw_types,                        ONLY: pw_p_type
+   USE qs_core_energies,                ONLY: calculate_ptrace
+                                             
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -44,6 +69,8 @@ MODULE ec_methods
 
    PUBLIC :: ec_write_forces, ec_calculate_w_matrix, ec_write_bs_forces
    PUBLIC :: ec_w_matrix
+   PUBLIC :: ec_mos_init
+   PUBLIC :: ec_rho_check
 
 CONTAINS
 
@@ -426,4 +453,277 @@ CONTAINS
 
    END SUBROUTINE ec_write_bs_forces
 
+
+! **************************************************************************************************
+!> \brief init mos environment for energy correction  
+!>        
+!> \param 
+!> \par History
+!>       2018.7 created [Fabian Belleflamme]
+!> \author Fabian Belleflamme 
+! **************************************************************************************************
+   SUBROUTINE ec_mos_init(qs_env, mos)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+!      TYPE(energy_correction_type), POINTER              :: ec_env
+      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_mos_init', &
+         routineP = moduleN//':'//routineN
+
+      TYPE(kg_environment_type), POINTER                 :: kg_env
+      TYPE(energy_correction_type), POINTER              :: ec_env
+      INTEGER                                            :: handle, ispin, nspins, multiplicity, nelectron
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(cp_para_env_type), POINTER                    :: para_env
+      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
+      INTEGER                                            :: n_ao
+      INTEGER, DIMENSION(2)                              :: n_mo, nelectron_spin
+      REAL(dp)                                           :: maxocc
+      !
+      TYPE(cp_fm_type), POINTER                          :: mo_coeff
+      TYPE(dbcsr_type), POINTER                          :: mo_coeff_b
+      TYPE(cp_fm_pool_p_type), DIMENSION(:), POINTER     :: ao_mo_fm_pools
+      INTEGER                                            :: nmo
+      
+
+
+      CALL timeset(routineN, handle)
+      
+      NULLIFY (mos)
+      NULLIFY (ao_mo_fm_pools, dft_control, mos)
+      NULLIFY (mo_coeff)
+
+      CALL get_qs_env(qs_env = qs_env, kg_env = kg_env, dft_control = dft_control)
+      !fbelle
+      CALL get_qs_env(qs_env,para_env=para_env)
+      
+      ec_env => kg_env%ec_env
+      nspins = dft_control%nspins
+
+      
+      CALL get_qs_env(qs_env, qs_kind_set = qs_kind_set, nelectron_spin = nelectron_spin)
+
+      CALL get_qs_kind_set(qs_kind_set, nsgf = n_ao)
+
+      multiplicity = dft_control%multiplicity
+
+      ! setting maxocc and n_mo
+      IF (dft_control%nspins == 1) THEN
+         maxocc = 2.0_dp
+         nelectron_spin(1) = nelectron
+         nelectron_spin(2) = 0
+         IF (MODULO(nelectron, 2) == 0) THEN
+            n_mo(1) = nelectron/2
+         ELSE
+            n_mo(1) = INT(nelectron/2._dp)+1
+         END IF
+         n_mo(2) = 0
+      ELSE
+         maxocc = 1.0_dp
+
+         ! The simplist spin distribution is written here. Special cases will
+         ! need additional user input
+         IF (MODULO(nelectron+multiplicity-1, 2) /= 0) THEN
+            CPABORT("LSD: try to use a different multiplicity")
+         END IF
+
+         nelectron_spin(1) = (nelectron+multiplicity-1)/2
+         nelectron_spin(2) = (nelectron-multiplicity+1)/2
+
+         IF (nelectron_spin(2) < 0) THEN
+            CPABORT("LSD: too few electrons for this multiplicity")
+         END IF
+
+         n_mo(1) = nelectron_spin(1)
+         n_mo(2) = nelectron_spin(2)
+
+      END IF
+
+      ALLOCATE (mos(nspins))
+      DO ispin = 1, nspins
+         NULLIFY (mos(ispin)%mo_set)
+         CALL allocate_mo_set(mo_set = mos(ispin)%mo_set, &
+                              nao = n_ao, &
+                              nmo = n_mo(ispin), &
+                              nelectron = nelectron_spin(ispin), &
+                              n_el_f = REAL(nelectron_spin(ispin), dp), &
+                              maxocc = maxocc, &
+                              flexible_electron_count = dft_control%relax_multiplicity)
+      END DO
+
+
+!   *** finish initialization of the MOs ***
+
+
+      NULLIFY (ao_mo_fm_pools)
+      CALL mpools_get(qs_env%mpools, ao_mo_fm_pools=ao_mo_fm_pools)
+
+      CPASSERT(ASSOCIATED(mos))
+      DO ispin = 1, SIZE(mos)
+         CALL get_mo_set(mos(ispin)%mo_set, mo_coeff=mo_coeff, mo_coeff_b=mo_coeff_b)
+         IF (.NOT. ASSOCIATED(mo_coeff)) THEN
+            CALL init_mo_set(mos(ispin)%mo_set, &
+                             fm_pool=ao_mo_fm_pools(ispin)%pool, &
+                             name="ec_env"//TRIM(ADJUSTL(cp_to_string(qs_env%id_nr)))// &
+                             "%mo"//TRIM(ADJUSTL(cp_to_string(ispin))))
+         END IF
+         IF (.NOT. ASSOCIATED(mo_coeff_b)) THEN
+            CALL cp_fm_get_info(mos(ispin)%mo_set%mo_coeff, ncol_global=nmo)
+            CALL dbcsr_init_p(mos(ispin)%mo_set%mo_coeff_b)
+            CALL cp_dbcsr_m_by_n_from_row_template(mos(ispin)%mo_set%mo_coeff_b, &
+                                                   template=ec_env%matrix_s(1, 1)%matrix, &
+                                                   n = nmo, &
+                                                   sym = dbcsr_type_no_symmetry)
+         ENDIF
+      END DO
+      CALL timestop(handle)
+
+   END SUBROUTINE ec_mos_init
+
+
+! **************************************************************************************************
+!> \brief init mos environment for energy correction  
+!>        
+!> \param 
+!> \par History
+!>       2018.7 created [Fabian Belleflamme]
+!> \author Fabian Belleflamme 
+! **************************************************************************************************
+    SUBROUTINE ec_rho_check(qs_env, matrix_p, matrix_s)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_p
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_s
+ 
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_rho_check', &
+         routineP = moduleN//':'//routineN
+ 
+      INTEGER                                            :: handle, nspins
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(cp_para_env_type), POINTER                    :: para_env
+      REAL(KIND=dp)                                      :: trace!, trace1
+      REAL(KIND=dp)                                      :: norm_sym, norm_idempo
+      TYPE(dbcsr_type)                                   :: matrix_p_trans, matrix_ps, matrix_psps
+      TYPE(dbcsr_type)                                   :: ref_matrix
+      TYPE(dbcsr_type)                                   :: matrix_p_desym
+      TYPE(dbcsr_type)                                   :: matrix_s_desym
+!      TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho_r
+ 
+ 
+      CALL timeset(routineN, handle)
+ 
+      CALL get_qs_env(qs_env = qs_env, &
+                      dft_control = dft_control, &
+                      para_env = para_env)
+
+      ! setup
+      nspins = dft_control%nspins
+      ref_matrix = matrix_s(1,1)%matrix
+
+      !--------------------------------------------------
+      ! symmetry check
+      !--------------------------------------------------
+      CALL dbcsr_create(matrix_p_trans, template = ref_matrix, &
+                        matrix_type = dbcsr_type_no_symmetry)
+      CALL dbcsr_create(matrix_p_desym, template = ref_matrix, &
+                        matrix_type = dbcsr_type_no_symmetry)
+    
+      CALL dbcsr_desymmetrize(matrix_p(1,1)%matrix, matrix_p_desym)
+      !CALL dbcsr_set(matrix_sym, 0.0_dp)
+      
+      ! P_trans
+      CALL dbcsr_transposed(matrix_p_trans, matrix_p_desym)
+
+      ! P_trans - P
+      CALL dbcsr_add(matrix_p_desym, matrix_p_trans, alpha_scalar = 1.0_dp, beta_scalar = -1.0_dp)
+
+      ! Norm(P_trans - P)
+      CALL dbcsr_norm(matrix = matrix_p_desym, &
+                      which_norm = 2, & ! dbcsr_norm_maxabsnorm
+                      norm_scalar = norm_sym)
+
+      IF(para_env%mepos==0) THEN
+          WRITE(*,*) repeat("-",80)  
+          WRITE(*,*) "ec_rho_check - 'Norm(P_trans - P) = 0'", norm_sym
+      END IF 
+                  
+                  
+      CALL dbcsr_set(matrix_p_desym, 0.0_dp)
+      
+      !--------------------------------------------------
+      ! idempotency check
+      !--------------------------------------------------
+
+      CALL dbcsr_create(matrix_s_desym, template = ref_matrix, &
+                        matrix_type = dbcsr_type_no_symmetry)
+      CALL dbcsr_create(matrix_ps, template = ref_matrix, &
+                        matrix_type = dbcsr_type_no_symmetry)
+      CALL dbcsr_create(matrix_psps, template = ref_matrix, & 
+                        matrix_type = dbcsr_type_no_symmetry)
+
+      CALL dbcsr_set(matrix_s_desym, 0.0_dp)
+      CALL dbcsr_set(matrix_ps, 0.0_dp)
+      CALL dbcsr_set(matrix_psps, 0.0_dp)
+
+      ! Desym matrix P and S
+      CALL dbcsr_desymmetrize(matrix_p(1,1)%matrix, matrix_p_desym)
+      CALL dbcsr_desymmetrize(matrix_s(1,1)%matrix, matrix_s_desym)
+
+      ! PS
+      CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_p_desym, matrix_s_desym, &
+                          0.0_dp, matrix_ps)
+
+
+!      IF(para_env%mepos==0) THEN
+!          WRITE(*,*) "ec_rho_check - matrix_ps"
+!          CALL dbcsr_print(matrix_ps)
+!      END IF 
+
+
+      ! PSPS
+      CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_ps, matrix_ps, &
+                          0.0_dp, matrix_psps)
+
+      ! PSPS - PS
+      CALL dbcsr_add(matrix_psps, matrix_ps, &
+                     alpha_scalar = 1.0_dp, beta_scalar = -1.0_dp)
+
+      ! Norm(PSPS - PS)            
+      CALL dbcsr_norm(matrix = matrix_psps, &
+                      which_norm = 2, & ! dbcsr_norm_maxabsnorm
+                      norm_scalar = norm_idempo)
+
+      IF(para_env%mepos==0) THEN
+          WRITE(*,*) "ec_rho_check - 'PSPS - PS = 0'", norm_idempo
+      END IF 
+
+      CALL dbcsr_release(matrix_ps)
+      CALL dbcsr_release(matrix_psps)
+      
+      !--------------------------------------------------
+      ! Particle conservation check
+      !--------------------------------------------------
+     
+      ! Tr[PS]
+      CALL calculate_ptrace(matrix_p, matrix_s, trace, nspins)
+
+      ! \int rho_r dr
+      !trace1 = pw_integrate_function(rho_r(1)%pw)
+
+
+      IF(para_env%mepos==0) THEN
+          WRITE(*,*) "ec_rho_check - Tr[PS]", trace
+          !WRITE(*,*) "ec_rho_check - Int(rho_r)", trace1
+         WRITE(*,*) repeat("-",80)  
+      END IF 
+
+      ! Clean up
+      CALL dbcsr_release(matrix_p_trans)
+      CALL dbcsr_release(matrix_p_desym)
+      CALL dbcsr_release(matrix_s_desym)
+
+
+      CALL timestop(handle)
+ 
+    END SUBROUTINE ec_rho_check
+ 
 END MODULE ec_methods
