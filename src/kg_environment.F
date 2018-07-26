@@ -84,6 +84,8 @@ MODULE kg_environment
    USE string_utilities,                ONLY: uppercase
    USE task_list_types,                 ONLY: deallocate_task_list
    USE util,                            ONLY: sort
+   USE ec_methods,                      ONLY: ec_mos_init
+
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -173,6 +175,7 @@ CONTAINS
       NULLIFY (kg_env%int_grid_full)
       NULLIFY (kg_env%lri_density)
       NULLIFY (kg_env%ec_env%sab_orb, kg_env%ec_env%sac_ppl, kg_env%ec_env%sap_ppnl)
+      NULLIFY (kg_env%ec_env%sab_ec_vs_kg)
       NULLIFY (kg_env%ec_env%matrix_ks, kg_env%ec_env%matrix_h, kg_env%ec_env%matrix_s)
       NULLIFY (kg_env%ec_env%matrix_t, kg_env%ec_env%matrix_p, kg_env%ec_env%matrix_w)
       NULLIFY (kg_env%ec_env%task_list)
@@ -299,22 +302,22 @@ CONTAINS
             CALL qs_dispersion_nonloc_init(dispersion_env, para_env)
          END IF
          kg_env%ec_env%dispersion_env => dispersion_env
+      
       END IF
 
-!      WRITE(*,*) "kg_env%tnadd_method", kg_env%tnadd_method
-!      SELECT CASE (kg_env%tnadd_method)
-!      CASE (kg_tnadd_embed, kg_tnadd_embed_ri)
-!         ! kinetic energy functional
-!         kg_env%xc_section_kg => section_vals_get_subs_vals(input, "DFT%KG_METHOD%XC")
-!         IF (.NOT. ASSOCIATED(kg_env%xc_section_kg)) THEN
-!            CALL cp_abort(__LOCATION__, &
-!                          "KG runs require a kinetic energy functional set in &KG_METHOD")
-!         END IF
-!      CASE (kg_tnadd_atomic, kg_tnadd_none)
-!         NULLIFY (kg_env%xc_section_kg)
-!      CASE DEFAULT
-!         CPABORT("KG:TNADD METHOD")
-!      END SELECT
+      SELECT CASE (kg_env%tnadd_method)
+      CASE (kg_tnadd_embed, kg_tnadd_embed_ri)
+         ! kinetic energy functional
+         kg_env%xc_section_kg => section_vals_get_subs_vals(input, "DFT%KG_METHOD%XC")
+         IF (.NOT. ASSOCIATED(kg_env%xc_section_kg)) THEN
+            CALL cp_abort(__LOCATION__, &
+                          "KG runs require a kinetic energy functional set in &KG_METHOD")
+         END IF
+      CASE (kg_tnadd_atomic, kg_tnadd_none)
+         NULLIFY (kg_env%xc_section_kg)
+      CASE DEFAULT
+         CPABORT("KG:TNADD METHOD")
+      END SELECT
 
 !------------------------------------------------------------------------------
 
@@ -372,7 +375,6 @@ CONTAINS
             CALL section_vals_set_subs_vals(xc_section_kg, "XC_FUNCTIONAL", &
                                             xc_fun_section_kg)
             ke_sections = ke_sections+1
-            WRITE(*,*) "KEF - KE_GGA"
          END IF
 
          NULLIFY (kef_section)
@@ -412,11 +414,6 @@ CONTAINS
 
 
 !------------------------------------------------------------------------------
-
-
-
-
-
 
       IF (kg_env%tnadd_method == kg_tnadd_embed_ri) THEN
          ! initialize the LRI environment
