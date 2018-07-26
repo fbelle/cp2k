@@ -70,7 +70,8 @@ MODULE ec_environment_types
       
       ! full neighbor lists and corresponding task list
       TYPE(neighbor_list_set_p_type), &
-         DIMENSION(:), POINTER                         :: sab_orb, sac_ppl, sap_ppnl
+         DIMENSION(:), POINTER                         :: sab_orb, sac_ppl, sap_ppnl, &
+                                                          sab_ec_vs_kg
       TYPE(task_list_type), POINTER                    :: task_list
       ! the XC function to be used for the correction, dispersion info
       TYPE(section_vals_type), POINTER                 :: xc_section
@@ -134,6 +135,13 @@ CONTAINS
             CALL deallocate_neighbor_list_set(ec_env%sap_ppnl(iab)%neighbor_list_set)
          END DO
          DEALLOCATE (ec_env%sap_ppnl)
+      END IF
+      ! fbelle aux
+      IF (ASSOCIATED(ec_env%sab_ec_vs_kg)) THEN
+         DO iab = 1, SIZE(ec_env%sab_ec_vs_kg)
+            CALL deallocate_neighbor_list_set(ec_env%sab_ec_vs_kg(iab)%neighbor_list_set)
+         END DO
+         DEALLOCATE (ec_env%sab_ec_vs_kg)
       END IF
       ! operator matrices
       IF (ASSOCIATED(ec_env%matrix_ks)) CALL dbcsr_deallocate_matrix_set(ec_env%matrix_ks)

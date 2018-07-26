@@ -63,6 +63,7 @@ MODULE ec_energy_corrections
    USE pw_methods,                      ONLY: pw_axpy,&
                                               pw_copy,&
                                               pw_integral_ab,&
+                                              pw_integrate_function,&
                                               pw_scale,&
                                               pw_transfer,&
                                               pw_zero,&
@@ -138,7 +139,8 @@ MODULE ec_energy_corrections
    USE ec_methods,                      ONLY: ec_mos,&
                                               ec_write_forces,&
                                               ec_write_bs_forces,& 
-                                              ec_calculate_w_matrix
+                                              ec_calculate_w_matrix, &
+                                              ec_rho_check
    USE ec_environment_types,            ONLY: energy_correction_type
    USE input_constants,                 ONLY: ec_diagonalization,&
                                               ec_functional_harris
@@ -170,9 +172,473 @@ MODULE ec_energy_corrections
    PUBLIC :: harris_ks_solver
    PUBLIC :: harris_energy
    PUBLIC :: harris_build_neighborlist
+   PUBLIC :: harris_consistency
 
 CONTAINS
 
+! **************************************************************************************************
+!> \brief Initialize ec_env%old_rho to store input density matrix, and collocate on grid (to get old_rho_r)
+!>         
+!> \param qs_env ...
+!> \param ec_env ...
+!> \date    07.2018
+!> \author  fbelle
+! **************************************************************************************************
+!   SUBROUTINE ec_rho_update(qs_env, ec_env)
+!      TYPE(qs_environment_type), POINTER                 :: qs_env
+!      TYPE(energy_correction_type), POINTER              :: ec_env
+! 
+!      CHARACTER(len=*), PARAMETER :: routineN = 'ec_rho_update', &
+!         routineP = moduleN//':'//routineN
+! 
+!      TYPE(dft_control_type), POINTER                    :: dft_control
+!      TYPE(qs_rho_type), POINTER                         :: rho
+!      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: old_rho_ao, rho_ao
+!      INTEGER                                            :: ispin, nspins
+!      TYPE(cp_para_env_type), POINTER                    :: para_env
+! 
+!      NULLIFY (rho)
+!      CALL get_qs_env(qs_env = qs_env, &
+!                      rho = rho, &
+!                      dft_control = dft_control)
+! 
+!      nspins = dft_control%nspins
+! 
+!      ! allocate and initialize env to store old density
+!      CALL qs_rho_create(ec_env%old_rho)
+!
+!      !  
+!      CALL duplicate_rho_type(rho_input = rho, &
+!                              rho_output = ec_env%old_rho, &
+!                              qs_env = qs_env)
+!
+!
+!      ! assign target to store old density
+!      CALL qs_rho_get(ec_env%old_rho, rho_ao_kp = old_rho_ao )
+!
+!      ! get old density matrix
+!      CALL qs_rho_get(rho, rho_ao_kp = rho_ao )
+!
+!
+!      ! copy old denisty into ec_env%old_rho 
+!      DO ispin = 1, nspins
+!         CALL dbcsr_copy(old_rho_ao(ispin,1)%matrix, & 
+!                         rho_ao(ispin,1)%matrix, keep_sparsity=.FALSE.)
+!      END DO
+!
+!      ! collocate old density matrix on grid (rho_r)
+!      CALL qs_rho_update_rho(rho_struct = ec_env%old_rho, &
+!                             qs_env = qs_env, &
+!                             task_list_external = ec_env%task_list)
+!
+!
+!    CALL get_qs_env(qs_env,para_env=para_env)
+!    IF(para_env%mepos==0) THEN
+!      WRITE(*,*) " ec_forces - rho_ao", ASSOCIATED(rho_ao)
+!      IF(ASSOCIATED(rho_ao)) THEN
+!            CALL dbcsr_print(rho_ao(1,1)%matrix)
+!      END IF
+!      WRITE(*,*) " ec_forces - old_rho_ao", ASSOCIATED(old_rho_ao)
+!      IF(ASSOCIATED(old_rho_ao)) THEN
+!            CALL dbcsr_print(old_rho_ao(1,1)%matrix)
+!      END IF
+!    END IF
+!
+!   END SUBROUTINE ec_rho_update
+
+
+! **************************************************************************************************
+!> \brief Initialize ec_env%old_rho to store input density matrix, and collocate on grid (to get old_rho_r)
+!> 
+!>        This routine needs to perform 3 task:
+!>        - alloc & init ec_env%old_rho  
+!>        - transform rho_ao(KG_BASIS) to old_rho_ao(HARRIS_BASIS) 
+!>        - update old_rho_r/-_g wrt old_rho_ao(HARRIS_BASIS) 
+!>         
+!> \param qs_env ...
+!> \param ec_env ...
+!> \date    07.2018
+!> \author  fbelle
+! **************************************************************************************************
+   SUBROUTINE ec_rho_update(qs_env, ec_env)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(energy_correction_type), POINTER              :: ec_env
+ 
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_rho_update', &
+         routineP = moduleN//':'//routineN
+ 
+      TYPE(qs_ks_env_type), POINTER                      :: ks_env
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(qs_rho_type), POINTER                         :: rho
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: old_rho_ao, rho_ao
+      TYPE(pw_p_type), DIMENSION(:), POINTER             :: old_rho_r, old_rho_g
+      TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho_r
+      INTEGER                                            :: ispin, nspins
+      TYPE(cp_para_env_type), POINTER                    :: para_env
+      REAL(KIND=dp), DIMENSION(:), POINTER               :: old_tot_rho
+      REAL(KIND=dp)                                      :: iorr
+      REAL(KIND=dp)                                      :: irr
+      TYPE(dbcsr_type)                                   :: ref_matrix
+
+      NULLIFY (rho)
+      CALL get_qs_env(qs_env = qs_env, &
+                      rho = rho, &
+                      dft_control = dft_control, &
+                      ks_env = ks_env)
+      CALL get_qs_env(qs_env,para_env=para_env)
+ 
+      nspins = dft_control%nspins
+
+
+      !--------------------------------------------------
+      ! init and allocate old_rho - to store input density
+      !--------------------------------------------------
+
+
+      ! allocate and initialize the old density
+      CALL qs_rho_create(ec_env%old_rho)
+ 
+      ! allocate and initialize grids and density matrix
+      CALL qs_rho_rebuild(rho = ec_env%old_rho, & 
+                          qs_env = qs_env, &
+                          rebuild_ao = .TRUE., &
+                          rebuild_grids = .TRUE.)
+
+      ! get sparse input density matrix
+      CALL qs_rho_get(rho, rho_ao_kp = rho_ao, rho_r = rho_r )
+      ! assign target to store old density
+      CALL qs_rho_get(ec_env%old_rho, &
+                      rho_r = old_rho_r, &
+                      rho_g = old_rho_g, &
+                      rho_ao_kp = old_rho_ao, &
+                      tot_rho_r = old_tot_rho)
+
+
+      ! copy sparse density matrix manually  
+      DO ispin = 1, nspins
+         CALL dbcsr_copy(old_rho_ao(ispin,1)%matrix, & 
+                           rho_ao(ispin,1)%matrix, keep_sparsity=.TRUE.)
+      END DO
+
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) "ec_rho_update - rho_ao", ASSOCIATED(rho_ao)
+         IF(ASSOCIATED(rho_ao)) THEN
+               CALL dbcsr_print(rho_ao(1,1)%matrix)
+         END IF
+         WRITE(*,*) "ec_rho_update - old_rho_ao", ASSOCIATED(old_rho_ao)
+         IF(ASSOCIATED(old_rho_ao)) THEN
+               CALL dbcsr_print(old_rho_ao(1,1)%matrix)
+         END IF
+      END IF
+      
+      !--------------------------------------------------
+      ! updates old_rho_r/_g wrt to sparse density matrix
+      ! (necessary for embedding, where rho on grid still contains KEF contribubtion) 
+      !--------------------------------------------------
+
+      CALL qs_rho_update_rho(ec_env%old_rho, qs_env = qs_env)
+
+      !--------------------------------------------------
+      ! rebuild old_rho_ao as non-sparse
+      !--------------------------------------------------
+
+      ! allocate old density matrix as non sparse 
+      IF (ASSOCIATED(old_rho_ao)) CALL dbcsr_deallocate_matrix_set(old_rho_ao)
+      
+      ! Create a new density matrix set
+      CALL dbcsr_allocate_matrix_set(old_rho_ao, nspins, 1)
+      CALL qs_rho_set(ec_env%old_rho, rho_ao_kp = old_rho_ao)
+      ref_matrix = ec_env%matrix_s(1,1)%matrix
+      DO ispin = 1, nspins
+         ALLOCATE (old_rho_ao(ispin,1)%matrix)
+         CALL dbcsr_create(matrix = old_rho_ao(ispin,1)%matrix, &
+                           template = ref_matrix, &
+                           name = "OLD DENSITY MATRIX")!, &
+!                           matrix_type = dbcsr_type_symmetric, &
+!                           nze = 0)
+         CALL cp_dbcsr_alloc_block_from_nbl(old_rho_ao(ispin,1)%matrix, ec_env%sab_orb)
+         CALL dbcsr_set(old_rho_ao(ispin,1)%matrix, 0.0_dp)
+      END DO
+
+      ! copy density matrix manually 
+      ! P_in_sparse -> P_in_dense
+      DO ispin = 1, nspins
+         CALL dbcsr_copy(old_rho_ao(ispin,1)%matrix, & 
+                           rho_ao(ispin,1)%matrix, keep_sparsity=.TRUE.)
+      END DO
+
+
+!      DO ispin = 1, nspins
+!         ! computes the density corresponding to a given density matrix on the grid
+!         ! rho_ao -> old_rho_r & old_rho_g
+!         CALL calculate_rho_elec(matrix_p = old_rho_ao(ispin,1)%matrix, &
+!                                 rho = old_rho_r(ispin), &
+!                                 rho_gspace = old_rho_g(ispin), &
+!                                 total_rho = old_tot_rho(ispin), &
+!                                 ks_env = ks_env, &
+!                                 basis_type = "HARRIS", & 
+!                                 task_list_external = ec_env%task_list)
+!      END DO
+      ! updates rho_r and rho_g wrt to new rho%rho_ao
+      CALL qs_rho_update_rho(ec_env%old_rho, qs_env = qs_env, task_list_external = ec_env%task_list )
+
+      !!---------------------------------------------------------------------------------------
+      !!  Printing of density and integrate over grid
+      !!---------------------------------------------------------------------------------------
+         ! density integrals over grid: \int rho dr = N_el
+         iorr = pw_integrate_function(old_rho_r(1)%pw)
+         irr = pw_integrate_function(rho_r(1)%pw)
+
+         IF(para_env%mepos==0) THEN
+            WRITE(*,*) " ec_rho_update - old_rho_r", iorr 
+            WRITE(*,*) " ec_rho_update - rho_r", irr 
+            WRITE(*,*) " ec_rho_update - old_rho_ao", ASSOCIATED(old_rho_ao)
+            IF(ASSOCIATED(old_rho_ao)) THEN
+                  CALL dbcsr_print(old_rho_ao(1,1)%matrix)
+            END IF
+         END IF
+
+      !!---------------------------------------------------------------------------------------
+
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) " ec_rho_update - END"
+      END IF
+
+!      CALL dbcsr_release(ref_matrix)
+
+   END SUBROUTINE ec_rho_update
+
+! **************************************************************************************************
+!> \brief Initialize ec_env%old_rho 
+!> 
+!>        This routine needs to perform 3 task:
+!>        - alloc & init ec_env%old_rho  
+!>        - project rho_ao(KG_BASIS) to old_rho_ao(HARRIS_BASIS) 
+!>        - update old_rho_r/-_g wrt old_rho_ao(HARRIS_BASIS) 
+!>         
+!> \param qs_env ...
+!> \param ec_env ...
+!> \date    07.2018
+!> \author  fbelle
+! **************************************************************************************************
+   SUBROUTINE ec_rho_update2(qs_env, ec_env)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(energy_correction_type), POINTER              :: ec_env
+ 
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_rho_update2', &
+         routineP = moduleN//':'//routineN
+ 
+      TYPE(qs_ks_env_type), POINTER                      :: ks_env
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(qs_rho_type), POINTER                         :: rho
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: old_rho_ao, rho_ao
+      TYPE(pw_p_type), DIMENSION(:), POINTER             :: old_rho_r, old_rho_g
+      TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho_r
+      REAL(KIND=dp), DIMENSION(:), POINTER               :: old_tot_rho
+      INTEGER                                            :: ispin, nspins
+      TYPE(cp_para_env_type), POINTER                    :: para_env
+      REAL(KIND=dp)                                      :: iorr
+      REAL(KIND=dp)                                      :: irr
+      TYPE(dbcsr_type), POINTER                          :: ref_matrix
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_s_mixed
+      TYPE(dbcsr_type)                                   :: matrix_s_inv, matrix_tmp
+      TYPE(dbcsr_type)                                   :: matrix_A
+      ! rho_check
+      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_s
+
+      NULLIFY (rho)
+      CALL get_qs_env(qs_env = qs_env, &
+                      rho = rho, &
+                      dft_control = dft_control, &
+                      ks_env = ks_env)
+      CALL get_qs_env(qs_env,para_env=para_env)
+      
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) "ec_rho_update2 - BEGINNING"
+      END IF
+ 
+      nspins = dft_control%nspins
+
+      !--------------------------------------------------
+      ! init and allocate old_rho - to store input density
+      !--------------------------------------------------
+
+      ! allocate and initialize the old density
+      CALL qs_rho_create(ec_env%old_rho)
+ 
+      ! allocate and initialize grids and density matrix
+      CALL qs_rho_rebuild(rho = ec_env%old_rho, & 
+                          qs_env = qs_env, &
+                          rebuild_ao = .TRUE., &
+                          rebuild_grids = .TRUE.)
+
+      ! get sparse input density matrix
+      CALL qs_rho_get(rho, rho_ao_kp = rho_ao, rho_r = rho_r )
+      ! assign target to store old density
+      CALL qs_rho_get(ec_env%old_rho, &
+                      rho_r = old_rho_r, &
+                      rho_g = old_rho_g, &
+                      rho_ao_kp = old_rho_ao, &
+                      tot_rho_r = old_tot_rho)
+    
+      
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) "ec_rho_update2 - old_rho_ao "
+      END IF
+      CALL get_qs_env(qs_env=qs_env, matrix_s_kp = matrix_s)     
+      CALL ec_rho_check(qs_env, matrix_p = rho_ao, matrix_s = matrix_s)
+
+
+      ! copy sparse density matrix manually  
+      DO ispin = 1, nspins
+         CALL dbcsr_copy(old_rho_ao(ispin,1)%matrix, & 
+                           rho_ao(ispin,1)%matrix, keep_sparsity=.TRUE.)
+      END DO
+
+!      IF(para_env%mepos==0) THEN
+!         WRITE(*,*) "ec_rho_update2 - rho_ao", ASSOCIATED(rho_ao)
+!         IF(ASSOCIATED(rho_ao)) THEN
+!               CALL dbcsr_print(rho_ao(1,1)%matrix)
+!         END IF
+!         WRITE(*,*) "ec_rho_update2 - old_rho_ao", ASSOCIATED(old_rho_ao)
+!         IF(ASSOCIATED(old_rho_ao)) THEN
+!               CALL dbcsr_print(old_rho_ao(1,1)%matrix)
+!         END IF
+!      END IF
+      
+      !--------------------------------------------------
+      ! updates old_rho_r/_g wrt to sparse density matrix
+      ! (necessary for embedding, where rho on grid still contains KEF contribubtion) 
+      !--------------------------------------------------
+
+      CALL qs_rho_update_rho(ec_env%old_rho, qs_env = qs_env)
+
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) "ec_rho_update2 - old_rho_ao after qs_rho_update_rho"
+      END IF
+      CALL ec_rho_check(qs_env, matrix_p = old_rho_ao, matrix_s = matrix_s)
+
+      !--------------------------------------------------
+      ! Density matrix projection ADMM2 (see Guidon2010)
+      ! KG BASIS -> HARRIS BASIS
+      !--------------------------------------------------
+
+      ! calculate S_mixed
+       
+      NULLIFY (matrix_s_mixed)
+      CALL dbcsr_allocate_matrix_set(matrix_s_mixed, nspins, 1)
+    
+      DO ispin = 1, nspins
+         ALLOCATE (matrix_s_mixed(ispin,1)%matrix)
+
+         CALL build_overlap_matrix(ks_env = ks_env, &
+                                   matrixkp_s = matrix_s_mixed, &
+                                   matrix_name = "MIXED_OVERLAP", &
+                                   basis_type_a = "HARRIS", &
+                                   basis_type_b = "ORB", &
+                                   sab_nl = ec_env%sab_ec_vs_kg)
+       END DO 
+
+      ! ---------------------------------
+      ! Calculate A = S_ec^(-1) * S_mixed
+      ! ---------------------------------
+
+      ! S_ec^(-1)
+      CALL dbcsr_create(matrix_s_inv, template=ec_env%matrix_s(1,1)%matrix, matrix_type="N")
+      CALL invert_Hotelling(matrix_s_inv, ec_env%matrix_s(1,1)%matrix, & 
+                            dft_control%qs_control%eps_filter_matrix)
+      
+      ! A = S_ec^(-1) * S_mixed
+      CALL dbcsr_create(matrix_A, template = matrix_s_mixed(1,1)%matrix, matrix_type="N")
+      
+      CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_s_inv, matrix_s_mixed(1,1)%matrix, &
+                          0.0_dp, matrix_A)
+      CALL dbcsr_release(matrix_s_inv)
+      
+      
+      IF (ASSOCIATED(old_rho_ao)) CALL dbcsr_deallocate_matrix_set(old_rho_ao)
+      CALL dbcsr_allocate_matrix_set(old_rho_ao, nspins, 1)
+      CALL qs_rho_set(ec_env%old_rho, rho_ao_kp = old_rho_ao)
+      ref_matrix => ec_env%matrix_s(1,1)%matrix
+
+      ! Calculate P_ec = A * P_kg * A^T
+      CALL dbcsr_create(matrix_tmp, template = matrix_A)
+      DO ispin = 1, nspins
+         ALLOCATE (old_rho_ao(ispin,1)%matrix)
+         CALL dbcsr_create(matrix = old_rho_ao(ispin,1)%matrix, &
+                           template = ref_matrix, &
+                           name = "OLD DENSITY MATRIX", &
+                           matrix_type = dbcsr_type_symmetric)
+         CALL cp_dbcsr_alloc_block_from_nbl(old_rho_ao(ispin,1)%matrix, ec_env%sab_orb)
+         CALL dbcsr_set(old_rho_ao(ispin,1)%matrix, 0.0_dp)
+
+         CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_A, rho_ao(ispin,1)%matrix, &
+                             0.0_dp, matrix_tmp)
+         CALL dbcsr_multiply("N", "T", 1.0_dp, matrix_tmp, matrix_A, &
+                             0.0_dp, old_rho_ao(ispin,1)%matrix)
+      END DO
+      CALL dbcsr_release(matrix_tmp)
+      CALL dbcsr_release(matrix_A)
+      CALL dbcsr_deallocate_matrix_set(matrix_s_mixed)
+
+!      IF(para_env%mepos==0) THEN
+!         WRITE(*,*) "ec_rho_update2 - rho_ao", ASSOCIATED(rho_ao)
+!         IF(ASSOCIATED(rho_ao)) THEN
+!               CALL dbcsr_print(rho_ao(1,1)%matrix)
+!         END IF
+!         WRITE(*,*) "ec_rho_update2 - old_rho_ao", ASSOCIATED(old_rho_ao)
+!         IF(ASSOCIATED(old_rho_ao)) THEN
+!               CALL dbcsr_print(old_rho_ao(1,1)%matrix)
+!         END IF
+!      END IF
+
+      DO ispin = 1, nspins
+         ! computes the density corresponding to a given density matrix on the grid
+         ! rho_ao -> old_rho_r & old_rho_g
+         CALL calculate_rho_elec(matrix_p = old_rho_ao(ispin,1)%matrix, &
+                                 rho = old_rho_r(ispin), &
+                                 rho_gspace = old_rho_g(ispin), &
+                                 total_rho = old_tot_rho(ispin), &
+                                 ks_env = ks_env, &
+                                 basis_type = "HARRIS", & 
+                                 task_list_external = ec_env%task_list)
+      END DO
+
+      ! updates rho_r and rho_g wrt to new rho%rho_ao
+!      CALL qs_rho_update_rho(ec_env%old_rho, qs_env = qs_env, task_list_external = ec_env%task_list )
+
+
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) "ec_rho_update2 - old_rho_ao after projection"
+      END IF
+
+      CALL ec_rho_check(qs_env, matrix_p = old_rho_ao, matrix_s = ec_env%matrix_s)
+
+      !!---------------------------------------------------------------------------------------
+      !!  Printing of density and integrate over grid
+      !!---------------------------------------------------------------------------------------
+         ! density integrals over grid: \int rho dr = N_el
+         iorr = pw_integrate_function(old_rho_r(1)%pw)
+         irr = pw_integrate_function(rho_r(1)%pw)
+
+         IF(para_env%mepos==0) THEN
+            WRITE(*,*) " ec_rho_update2 - old_rho_r", iorr 
+            WRITE(*,*) " ec_rho_update2 - rho_r", irr 
+!            IF(ASSOCIATED(old_rho_ao)) THEN
+!                  CALL dbcsr_print(old_rho_ao(1,1)%matrix)
+!            END IF
+         END IF
+
+      !!---------------------------------------------------------------------------------------
+
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) " ec_rho_update2 - END"
+      END IF
+
+
+
+
+   END SUBROUTINE ec_rho_update2
 
 ! **************************************************************************************************
 !> \brief Energy correction to a KG simulation
@@ -243,7 +709,13 @@ CONTAINS
 
          ! build neighbor and task lists
          CALL harris_build_neighborlist(qs_env, ec_env)
+
          CALL harris_build_core_hamiltonian(qs_env, ec_env, my_calc_forces)
+
+         ! store input density
+!         CALL ec_rho_update(qs_env, ec_env)
+         CALL ec_rho_update2(qs_env, ec_env)
+
          CALL harris_build_ks_matrix(qs_env, ec_env, my_calc_forces)
          CALL harris_ks_solver(qs_env, ec_env)
          CALL harris_energy(qs_env, ec_env, unit_nr)
@@ -407,17 +879,19 @@ CONTAINS
 
       ELSE
 
-         CALL build_overlap_matrix(ks_env, nderivative=nder, matrixkp_s=ec_env%matrix_s, &
-                                   matrix_name="OVERLAP MATRIX", &
-                                   basis_type_a="HARRIS", &
-                                   basis_type_b="HARRIS", &
-                                   sab_nl=sab_orb)
+         CALL build_overlap_matrix(ks_env, &
+                                   nderivative = nder, &
+                                   matrixkp_s = ec_env%matrix_s, &
+                                   matrix_name = "OVERLAP MATRIX", &
+                                   basis_type_a = "HARRIS", &
+                                   basis_type_b = "HARRIS", &
+                                   sab_nl = sab_orb)
 
-         CALL build_kinetic_matrix(ks_env, matrixkp_t=ec_env%matrix_t, &
-                                   matrix_name="KINETIC ENERGY MATRIX", &
-                                   basis_type="HARRIS", &
-                                   sab_nl=sab_orb, &
-                                   eps_filter=eps_filter)
+         CALL build_kinetic_matrix(ks_env, matrixkp_t = ec_env%matrix_t, &
+                                   matrix_name = "KINETIC ENERGY MATRIX", &
+                                   basis_type = "HARRIS", &
+                                   sab_nl = sab_orb, &
+                                   eps_filter = eps_filter)
 
       END IF
 
@@ -572,6 +1046,9 @@ CONTAINS
                              v_hartree_rspace%pw, &
                              use_data=REALDATA3D, &
                              in_space=REALSPACE)
+
+      ! use reconstructed density in ec_env%old_rho
+      rho => ec_env%old_rho
 
       ! Get the total density in g-space [ions + electrons]
       CALL calc_rho_tot_gspace(rho_tot_gspace, qs_env, rho)
@@ -1039,6 +1516,9 @@ CONTAINS
       !fbelle
 !      TYPE(section_vals_type), POINTER                   :: neighbor_list_section
 !      TYPE(cp_para_env_type), POINTER                    :: para_env
+      TYPE(gto_basis_set_type), POINTER                  :: basis_set_kg
+      REAL(dp), ALLOCATABLE, DIMENSION(:)                :: kg_radius
+      LOGICAL, ALLOCATABLE, DIMENSION(:)                 :: kg_present
 
       CALL timeset(routineN, handle)
 
@@ -1117,6 +1597,30 @@ CONTAINS
          END IF
       END IF
 
+      ! fbelle
+      ! Build mixed overlap matrix KG-BASIS vs HARRIS-BASIS (ORB here)
+      ALLOCATE (kg_present(nkind))
+      ALLOCATE (kg_radius(nkind))
+      DO ikind = 1, nkind
+         CALL get_atomic_kind(atomic_kind_set(ikind), atom_list=atom2d(ikind)%list)
+         qs_kind => qs_kind_set(ikind)
+         CALL get_qs_kind(qs_kind=qs_kind, basis_set=basis_set_kg, basis_type="ORB")
+         IF (ASSOCIATED(basis_set)) THEN
+            kg_present(ikind) = .TRUE.
+            CALL get_gto_basis_set(gto_basis_set=basis_set_kg, kind_radius=kg_radius(ikind))
+         ELSE
+            kg_present(ikind) = .FALSE.
+            kg_radius(ikind) = 0.0_dp
+         END IF
+      END DO
+
+      CALL pair_radius_setup(orb_present, kg_present, orb_radius, kg_radius, pair_radius)
+      CALL build_neighbor_lists(ec_env%sab_ec_vs_kg, particle_set, atom2d, cell, pair_radius, &
+                                symmetric=.FALSE.,  molecular=.FALSE., &
+                                subcells=subcells, nlname="sab_ec_vs_kg")
+
+
+
       ! Release work storage
       CALL atom2d_cleanup(atom2d)
       DEALLOCATE (atom2d)
@@ -1137,5 +1641,57 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE harris_build_neighborlist
+
+! **************************************************************************************************
+!> \brief Calculate energy once more to get self consitency with forces for debugging 
+!> \param qs_env ...
+!> \param calculate_forces .FALSE. cause we only want to update energy
+!> \date    04.2018
+!> \author  fbelle
+! **************************************************************************************************
+   SUBROUTINE harris_consistency(qs_env, calculate_forces)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      LOGICAL, INTENT(IN), OPTIONAL                      :: calculate_forces
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'harris_consistency', &
+         routineP = moduleN//':'//routineN
+
+      TYPE(energy_correction_type), POINTER              :: ec_env
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(qs_rho_type), POINTER                         :: rho
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: rho_ao
+      INTEGER                                            :: ispin, nspins
+   ! need to update matrices from ec_env 
+
+!               CALL qs_ks_update_qs_env(qs_env, calculate_forces=.FALSE., just_energy=.TRUE.)
+
+      NULLIFY (ec_env, rho)
+      CALL get_qs_env(qs_env = qs_env, &
+               ec_env = ec_env, & 
+               rho=rho, &
+               dft_control = dft_control)
+
+      nspins = dft_control%nspins
+   
+      ! new density in ec_env%matrix_p, copy into qs_env%...%rho_ao and update rho_r
+
+      ! get qs_env%...%rho
+      CALL qs_rho_get(rho, rho_ao_kp = rho_ao )
+     
+      ! copy density matrix manually  
+      DO ispin = 1, nspins
+         CALL dbcsr_copy(rho_ao(ispin,1)%matrix, & 
+                           ec_env%matrix_p(ispin,1)%matrix, keep_sparsity=.FALSE.)
+      END DO
+
+      ! updates rho_r and rho_g wrt to new rho%rho_ao
+      CALL qs_rho_update_rho(rho, qs_env = qs_env)
+
+
+      WRITE(*,*) "HARRIS ENERGY CORRECTION - CONSISTENCY"
+      ! perform energy correction again
+      CALL ec_energy_correction(qs_env, calculate_forces = calculate_forces )
+
+   END SUBROUTINE harris_consistency
 
 END MODULE ec_energy_corrections

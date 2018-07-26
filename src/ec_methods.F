@@ -23,7 +23,7 @@ MODULE ec_methods
         dbcsr_deallocate_matrix_set, dbcsr_desymmetrize, dbcsr_distribution_type, dbcsr_filter, &
         dbcsr_get_info, dbcsr_init_p, dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_set, &
         dbcsr_trace, dbcsr_type, dbcsr_type_no_symmetry, dbcsr_type_symmetric, dbcsr_print, dbcsr_finalize,& 
-        dbcsr_copy_into_existing
+        dbcsr_copy_into_existing, dbcsr_norm, dbcsr_transposed
    USE ec_environment_types,            ONLY: energy_correction_type
    USE kinds,                           ONLY: dp
    USE qs_environment_types,            ONLY: get_qs_env,&
@@ -34,8 +34,8 @@ MODULE ec_methods
                                               qs_force_type,&
                                               replicate_qs_force,&
                                               zero_qs_force,&
-                                              deallocate_qs_force
-
+                                              deallocate_qs_force,&
+                                              qs_copy_force
                                            
    !fbelle - ec_mos
    USE qs_mo_types,                     ONLY: deallocate_mo_set,&
@@ -45,12 +45,9 @@ MODULE ec_methods
                                               mo_set_p_type,&
                                               mo_set_type
    USE qs_ks_methods,                   ONLY: calculate_w_matrix
-   USE qs_rho_types,                    ONLY: qs_rho_create,&
-                                              qs_rho_get,&
-                                              qs_rho_release,&
-                                              qs_rho_set,&
-                                              qs_rho_type,&
-                                              qs_rho_clear
+   USE qs_rho_types,                    ONLY: qs_rho_get,&
+                                              qs_rho_type
+   USE qs_core_energies,                ONLY: calculate_ptrace
 
 
 #include "./base/base_uses.f90"
@@ -64,23 +61,25 @@ MODULE ec_methods
 
    PUBLIC :: ec_write_forces, ec_calculate_w_matrix, ec_write_bs_forces, ec_w_matrix
    PUBLIC :: ec_mos, ec_ks_w_matrix, ec_w_test_matrix
-
+   PUBLIC :: ec_rho_check
 
 CONTAINS
 
 ! **************************************************************************************************
 !> \brief   Simplified from qs_force.F write_forces 
-!> \param qs_env ...
-!> \param qs_force ...
+!> \param   qs_env ...
+!> \param   qs_force ...
+!> \param   ftype 1: all , 2:Harris, 3: rho_elec, default is Harris
 !> \date    04.2018
 !> \author  fbelle
 ! **************************************************************************************************
-   SUBROUTINE ec_write_forces(qs_env, qs_force)
+   SUBROUTINE ec_write_forces(qs_env, qs_force, ftype)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(qs_force_type), DIMENSION(:), POINTER         :: qs_force
+      INTEGER, INTENT(IN), OPTIONAL                      :: ftype
 
-      CHARACTER(len=*), PARAMETER :: routineN = 'ec_write_forces2', routineP = moduleN//':'//routineN
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_write_forces', routineP = moduleN//':'//routineN
 
       CHARACTER(LEN=35)                                  :: fmtstr2
       CHARACTER(LEN=48)                                  :: fmtstr1
@@ -88,6 +87,7 @@ CONTAINS
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: atom_of_kind, kind_of
       REAL(KIND=dp), DIMENSION(3)                        :: grand_total
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      INTEGER                                            :: my_ftype
 
 
       IF (.NOT. ASSOCIATED(qs_force)) THEN
@@ -95,7 +95,6 @@ CONTAINS
                        "The qs_force pointer is not associated "// &
                        "and cannot be printed")
       END IF
-
 
       ! get atom mapping
       NULLIFY (atomic_kind_set)
@@ -110,7 +109,7 @@ CONTAINS
                                kind_of=kind_of)
 
       ! Variable precision output of the forces
-      ndigits=6
+      ndigits=8
 
       fmtstr1 = "(/,/,T2,A,/,/,T3,A,T11,A,T23,A,T40,A1,2(  X,A1))"
       WRITE (UNIT=fmtstr1(41:42), FMT="(I2)") ndigits+5
@@ -124,32 +123,87 @@ CONTAINS
 
       grand_total(:) = 0.0_dp
 
-      DO iatom = 1, natom
-         ikind = kind_of(iatom)
-         i = atom_of_kind(iatom)
-         WRITE (UNIT=6, FMT=fmtstr2) &
-            iatom, ikind, "       overlap", qs_force(ikind)%overlap(1:3, i), &
-           !iatom, ikind, "  overlap_admm", qs_force(ikind)%overlap_admm(1:3, i), &
-            iatom, ikind, "       kinetic", qs_force(ikind)%kinetic(1:3, i), &
-            iatom, ikind, "       gth_ppl", qs_force(ikind)%gth_ppl(1:3, i), &
-           !iatom, ikind, "      gth_nlcc", qs_force(ikind)%gth_nlcc(1:3, i), &
-            iatom, ikind, "      gth_ppnl", qs_force(ikind)%gth_ppnl(1:3, i), &
-            iatom, ikind, "  core_overlap", qs_force(ikind)%core_overlap(1:3, i), &
-            iatom, ikind, "      rho_core", qs_force(ikind)%rho_core(1:3, i), &
-           iatom, ikind, "      rho_elec", qs_force(ikind)%rho_elec(1:3, i),&
-           !iatom, ikind, "      rho_lri_elec", qs_force(ikind)%rho_lri_elec(1:3, i), &
-           !iatom, ikind, "      ch_pulay", qs_force(ikind)%ch_pulay(1:3, i), &
-           !iatom, ikind, "    dispersion", qs_force(ikind)%dispersion(1:3, i), &
-           !iatom, ikind, "         other", qs_force(ikind)%other(1:3, i), &
-           !iatom, ikind, "       fock_4c", qs_force(ikind)%fock_4c(1:3, i), &
-           !iatom, ikind, "     ehrenfest", qs_force(ikind)%ehrenfest(1:3, i), &
-           !iatom, ikind, "        efield", qs_force(ikind)%efield(1:3, i), &
-           !iatom, ikind, "           eev", qs_force(ikind)%eev(1:3, i), &
-           !iatom, ikind, "   mp2_non_sep", qs_force(ikind)%mp2_non_sep(1:3, i), &
-           !iatom, ikind, "       mp2_sep", qs_force(ikind)%mp2_sep(1:3, i), &
-            iatom, ikind, "         total", qs_force(ikind)%total(1:3, i)
-         grand_total(1:3) = grand_total(1:3)+qs_force(ikind)%total(1:3, i)
-      END DO
+      IF (PRESENT(ftype)) THEN
+         my_ftype = ftype
+      ELSE 
+         my_ftype = 2
+      END IF
+
+      SELECT CASE (my_ftype)
+      CASE DEFAULT
+
+         DO iatom = 1, natom
+            ikind = kind_of(iatom)
+            i = atom_of_kind(iatom)
+            WRITE (UNIT=6, FMT=fmtstr2) &
+               iatom, ikind, "       overlap", qs_force(ikind)%overlap(1:3, i), &
+               iatom, ikind, "       kinetic", qs_force(ikind)%kinetic(1:3, i), &
+               iatom, ikind, "       gth_ppl", qs_force(ikind)%gth_ppl(1:3, i), &
+               iatom, ikind, "      gth_ppnl", qs_force(ikind)%gth_ppnl(1:3, i), &
+               iatom, ikind, "  core_overlap", qs_force(ikind)%core_overlap(1:3, i), &
+               iatom, ikind, "      rho_core", qs_force(ikind)%rho_core(1:3, i), &
+               iatom, ikind, "      rho_elec", qs_force(ikind)%rho_elec(1:3, i),&
+               iatom, ikind, "         total", qs_force(ikind)%total(1:3, i)
+            grand_total(1:3) = grand_total(1:3)+qs_force(ikind)%total(1:3, i)
+         END DO
+
+      CASE (0) !all
+
+         DO iatom = 1, natom
+            ikind = kind_of(iatom)
+            i = atom_of_kind(iatom)
+            WRITE (UNIT=6, FMT=fmtstr2) &
+              iatom, ikind, "       overlap", qs_force(ikind)%overlap(1:3, i), &
+              iatom, ikind, "  overlap_admm", qs_force(ikind)%overlap_admm(1:3, i), &
+              iatom, ikind, "       kinetic", qs_force(ikind)%kinetic(1:3, i), &
+              iatom, ikind, "       gth_ppl", qs_force(ikind)%gth_ppl(1:3, i), &
+              iatom, ikind, "      gth_nlcc", qs_force(ikind)%gth_nlcc(1:3, i), &
+              iatom, ikind, "      gth_ppnl", qs_force(ikind)%gth_ppnl(1:3, i), &
+              iatom, ikind, "  core_overlap", qs_force(ikind)%core_overlap(1:3, i), &
+              iatom, ikind, "      rho_core", qs_force(ikind)%rho_core(1:3, i), &
+              iatom, ikind, "      rho_elec", qs_force(ikind)%rho_elec(1:3, i),&
+              iatom, ikind, "      rho_lri_elec", qs_force(ikind)%rho_lri_elec(1:3, i), &
+              iatom, ikind, "      ch_pulay", qs_force(ikind)%ch_pulay(1:3, i), &
+              iatom, ikind, "    dispersion", qs_force(ikind)%dispersion(1:3, i), &
+              iatom, ikind, "         other", qs_force(ikind)%other(1:3, i), &
+              iatom, ikind, "       fock_4c", qs_force(ikind)%fock_4c(1:3, i), &
+              iatom, ikind, "     ehrenfest", qs_force(ikind)%ehrenfest(1:3, i), &
+              iatom, ikind, "        efield", qs_force(ikind)%efield(1:3, i), &
+              iatom, ikind, "           eev", qs_force(ikind)%eev(1:3, i), &
+              iatom, ikind, "   mp2_non_sep", qs_force(ikind)%mp2_non_sep(1:3, i), &
+              iatom, ikind, "       mp2_sep", qs_force(ikind)%mp2_sep(1:3, i), &
+               iatom, ikind, "         total", qs_force(ikind)%total(1:3, i)
+            grand_total(1:3) = grand_total(1:3)+qs_force(ikind)%total(1:3, i)
+         END DO
+
+      CASE (2) !harris
+
+         DO iatom = 1, natom
+            ikind = kind_of(iatom)
+            i = atom_of_kind(iatom)
+            WRITE (UNIT=6, FMT=fmtstr2) &
+              iatom, ikind, "       overlap", qs_force(ikind)%overlap(1:3, i), &
+              iatom, ikind, "       kinetic", qs_force(ikind)%kinetic(1:3, i), &
+              iatom, ikind, "       gth_ppl", qs_force(ikind)%gth_ppl(1:3, i), &
+              iatom, ikind, "      gth_ppnl", qs_force(ikind)%gth_ppnl(1:3, i), &
+              iatom, ikind, "  core_overlap", qs_force(ikind)%core_overlap(1:3, i), &
+              iatom, ikind, "      rho_core", qs_force(ikind)%rho_core(1:3, i), &
+              iatom, ikind, "      rho_elec", qs_force(ikind)%rho_elec(1:3, i),&
+              iatom, ikind, "         total", qs_force(ikind)%total(1:3, i)
+            grand_total(1:3) = grand_total(1:3)+qs_force(ikind)%total(1:3, i)
+         END DO
+
+      CASE (3) !rho_elec
+
+         DO iatom = 1, natom
+            ikind = kind_of(iatom)
+            i = atom_of_kind(iatom)
+            WRITE (UNIT=6, FMT=fmtstr2) &
+              iatom, ikind, "      rho_elec", qs_force(ikind)%rho_elec(1:3, i)
+         END DO
+
+      END SELECT
+
 
       DEALLOCATE (atom_of_kind)
       DEALLOCATE (kind_of)
@@ -408,14 +462,13 @@ CONTAINS
       TYPE(qs_force_type), DIMENSION(:), POINTER         :: qs_force
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: atom_of_kind, kind_of, natom_of_kind
-      INTEGER                                            :: i, iatom, ikind, natom, ndigits, nkind
-      CHARACTER(LEN=35)                                  :: fmtstr2
-      CHARACTER(LEN=48)                                  :: fmtstr1
+      INTEGER                                            :: natom, ikind, nkind
+      TYPE(cp_para_env_type), POINTER                    :: para_env
 
 
       ! get atom mapping
       NULLIFY (atomic_kind_set , qs_force)
-      CALL get_qs_env(qs_env, atomic_kind_set=atomic_kind_set, natom = natom)
+      CALL get_qs_env(qs_env, atomic_kind_set=atomic_kind_set, natom = natom, para_env = para_env)
       ALLOCATE (atom_of_kind(natom), kind_of(natom))
       CALL get_atomic_kind_set(atomic_kind_set=atomic_kind_set, &
                                atom_of_kind=atom_of_kind, &
@@ -430,35 +483,28 @@ CONTAINS
       DEALLOCATE (natom_of_kind)
       CALL zero_qs_force(qs_force)
 
+      ! copy to qs_force
+      CALL qs_copy_force(qs_force, force)
+
+      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      ! doesnt work past replicate
+
+      !  *** replicate forces ***
+      CALL replicate_qs_force(qs_force, para_env)
+
       DO ikind = 1, SIZE(force)
-
          qs_force(ikind)%total(:, :) = qs_force(ikind)%total(:, :)+ &
-                                       force(ikind)%core_overlap(:, :)+ &
-                                       force(ikind)%gth_ppl(:, :)+ &
-                                       force(ikind)%gth_ppnl(:, :)+ &
-                                       force(ikind)%kinetic(:, :)+ &
-                                       force(ikind)%overlap(:, :)+ &
-                                       force(ikind)%rho_elec(:, :)
+                                       qs_force(ikind)%core_overlap(:, :)+ &
+                                       qs_force(ikind)%gth_ppl(:, :)+ &
+                                       qs_force(ikind)%gth_ppnl(:, :)+ &
+                                       qs_force(ikind)%kinetic(:, :)+ &
+                                       qs_force(ikind)%overlap(:, :)+ &
+                                       qs_force(ikind)%rho_core(:, :)+ &
+                                       qs_force(ikind)%rho_elec(:, :)
       END DO
 
-      ndigits=6
-
-      fmtstr1 = "(/,/,T2,A,/,/,T3,A,T11,A,T23,A,T40,A1,2(  X,A1))"
-      WRITE (UNIT=fmtstr1(41:42), FMT="(I2)") ndigits+5
-
-      fmtstr2 = "(/,(T2,I5,4X,I4,T18,A,T34,3F  .  ))"
-      WRITE (UNIT=fmtstr2(32:33), FMT="(I2)") ndigits
-      WRITE (UNIT=fmtstr2(29:30), FMT="(I2)") ndigits+6
-
-      WRITE (UNIT=6, FMT=fmtstr1) &
-         "FORCES [a.u.]", "Atom", "Kind", "Component", "X", "Y", "Z"
-
-      DO iatom = 1, natom
-         ikind = kind_of(iatom)
-         i = atom_of_kind(iatom)
-         WRITE (UNIT=6, FMT=fmtstr2) &
-            iatom, ikind, "         f_trace", qs_force(ikind)%total(1:3, i)
-      END DO
+      CALL ec_write_forces(qs_env, qs_force, ftype = 2)
 
       DEALLOCATE (atom_of_kind)
       DEALLOCATE (kind_of)
@@ -606,5 +652,151 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE ec_ks_w_matrix
+
+! **************************************************************************************************
+!> \brief init mos environment for energy correction  
+!>        
+!> \param 
+!> \par History
+!>       2018.7 created [Fabian Belleflamme]
+!> \author Fabian Belleflamme 
+! **************************************************************************************************
+    SUBROUTINE ec_rho_check(qs_env, matrix_p, matrix_s)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_p
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_s
+ 
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_rho_check', &
+         routineP = moduleN//':'//routineN
+ 
+      INTEGER                                            :: handle, nspins
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(cp_para_env_type), POINTER                    :: para_env
+      REAL(KIND=dp)                                      :: trace!, trace1
+      REAL(KIND=dp)                                      :: norm_sym, norm_idempo
+      TYPE(dbcsr_type)                                   :: matrix_p_trans, matrix_ps, matrix_psps
+      TYPE(dbcsr_type)                                   :: ref_matrix
+      TYPE(dbcsr_type)                                   :: matrix_p_desym
+      TYPE(dbcsr_type)                                   :: matrix_s_desym
+!      TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho_r
+ 
+ 
+      CALL timeset(routineN, handle)
+ 
+      CALL get_qs_env(qs_env = qs_env, &
+                      dft_control = dft_control, &
+                      para_env = para_env)
+
+      ! setup
+      nspins = dft_control%nspins
+      ref_matrix = matrix_s(1,1)%matrix
+
+      !--------------------------------------------------
+      ! symmetry check
+      !--------------------------------------------------
+      CALL dbcsr_create(matrix_p_trans, template = ref_matrix, &
+                        matrix_type = dbcsr_type_no_symmetry)
+      CALL dbcsr_create(matrix_p_desym, template = ref_matrix, &
+                        matrix_type = dbcsr_type_no_symmetry)
+    
+      CALL dbcsr_desymmetrize(matrix_p(1,1)%matrix, matrix_p_desym)
+      !CALL dbcsr_set(matrix_sym, 0.0_dp)
+      
+      ! P_trans
+      CALL dbcsr_transposed(matrix_p_trans, matrix_p_desym)
+
+      ! P_trans - P
+      CALL dbcsr_add(matrix_p_desym, matrix_p_trans, alpha_scalar = 1.0_dp, beta_scalar = -1.0_dp)
+
+      ! Norm(P_trans - P)
+      CALL dbcsr_norm(matrix = matrix_p_desym, &
+                      which_norm = 2, & ! dbcsr_norm_maxabsnorm
+                      norm_scalar = norm_sym)
+
+      IF(para_env%mepos==0) THEN
+          WRITE(*,*) repeat("-",80)  
+          WRITE(*,*) "ec_rho_check - 'Norm(P_trans - P) = 0'", norm_sym
+      END IF 
+                  
+                  
+      CALL dbcsr_set(matrix_p_desym, 0.0_dp)
+      
+      !--------------------------------------------------
+      ! idempotency check
+      !--------------------------------------------------
+
+      CALL dbcsr_create(matrix_s_desym, template = ref_matrix, &
+                        matrix_type = dbcsr_type_no_symmetry)
+      CALL dbcsr_create(matrix_ps, template = ref_matrix, &
+                        matrix_type = dbcsr_type_no_symmetry)
+      CALL dbcsr_create(matrix_psps, template = ref_matrix, & 
+                        matrix_type = dbcsr_type_no_symmetry)
+
+      CALL dbcsr_set(matrix_s_desym, 0.0_dp)
+      CALL dbcsr_set(matrix_ps, 0.0_dp)
+      CALL dbcsr_set(matrix_psps, 0.0_dp)
+
+      ! Desym matrix P and S
+      CALL dbcsr_desymmetrize(matrix_p(1,1)%matrix, matrix_p_desym)
+      CALL dbcsr_desymmetrize(matrix_s(1,1)%matrix, matrix_s_desym)
+
+      ! PS
+      CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_p_desym, matrix_s_desym, &
+                          0.0_dp, matrix_ps)
+
+
+!      IF(para_env%mepos==0) THEN
+!          WRITE(*,*) "ec_rho_check - matrix_ps"
+!          CALL dbcsr_print(matrix_ps)
+!      END IF 
+
+
+      ! PSPS
+      CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_ps, matrix_ps, &
+                          0.0_dp, matrix_psps)
+
+      ! PSPS - PS
+      CALL dbcsr_add(matrix_psps, matrix_ps, &
+                     alpha_scalar = 1.0_dp, beta_scalar = -1.0_dp)
+
+      ! Norm(PSPS - PS)            
+      CALL dbcsr_norm(matrix = matrix_psps, &
+                      which_norm = 2, & ! dbcsr_norm_maxabsnorm
+                      norm_scalar = norm_idempo)
+
+      IF(para_env%mepos==0) THEN
+          WRITE(*,*) "ec_rho_check - 'PSPS - PS = 0'", norm_idempo
+      END IF 
+
+      CALL dbcsr_release(matrix_ps)
+      CALL dbcsr_release(matrix_psps)
+      
+      !--------------------------------------------------
+      ! Particle conservation check
+      !--------------------------------------------------
+     
+      ! Tr[PS]
+      CALL calculate_ptrace(matrix_p, matrix_s, trace, nspins)
+
+      ! \int rho_r dr
+      !trace1 = pw_integrate_function(rho_r(1)%pw)
+
+
+      IF(para_env%mepos==0) THEN
+          WRITE(*,*) "ec_rho_check - Tr[PS]", trace
+          !WRITE(*,*) "ec_rho_check - Int(rho_r)", trace1
+         WRITE(*,*) repeat("-",80)  
+      END IF 
+
+      ! Clean up
+      CALL dbcsr_release(matrix_p_trans)
+      CALL dbcsr_release(matrix_p_desym)
+      CALL dbcsr_release(matrix_s_desym)
+
+
+      CALL timestop(handle)
+ 
+    END SUBROUTINE ec_rho_check
+
 
 END MODULE ec_methods
