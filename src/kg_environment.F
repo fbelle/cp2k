@@ -85,6 +85,9 @@ MODULE kg_environment
    USE task_list_types,                 ONLY: deallocate_task_list
    USE util,                            ONLY: sort
    USE ec_methods,                      ONLY: ec_mos_init
+   USE qs_rho_types,                    ONLY: qs_rho_create
+
+
 
 #include "./base/base_uses.f90"
 
@@ -302,7 +305,14 @@ CONTAINS
             CALL qs_dispersion_nonloc_init(dispersion_env, para_env)
          END IF
          kg_env%ec_env%dispersion_env => dispersion_env
-      
+     
+         !--------------------------------------------------
+         ! init and allocate old_rho - to store input density
+         !--------------------------------------------------
+   
+         ! allocate and initialize the old density
+         CALL qs_rho_create(kg_env%ec_env%old_rho)
+
       END IF
 
       SELECT CASE (kg_env%tnadd_method)
@@ -406,12 +416,6 @@ CONTAINS
          CALL section_vals_release(xc_fun_section_kg)
 
       END IF
-
-
-
-
-
-
 
 !------------------------------------------------------------------------------
 

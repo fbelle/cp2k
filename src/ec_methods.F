@@ -57,6 +57,11 @@ MODULE ec_methods
    USE pw_methods,                      ONLY: pw_integrate_function
    USE pw_types,                        ONLY: pw_p_type
    USE qs_core_energies,                ONLY: calculate_ptrace
+   ! matrix projection
+   USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type
+   USE qs_ks_types,                     ONLY: qs_ks_env_type
+   USE qs_overlap,                      ONLY: build_overlap_matrix
+   USE iterate_matrix,                  ONLY: invert_Hotelling
                                              
 #include "./base/base_uses.f90"
 
@@ -71,6 +76,7 @@ MODULE ec_methods
    PUBLIC :: ec_w_matrix
    PUBLIC :: ec_mos_init
    PUBLIC :: ec_rho_check
+   PUBLIC :: matrix_projection
 
 CONTAINS
 
@@ -582,9 +588,10 @@ CONTAINS
 
 
 ! **************************************************************************************************
-!> \brief init mos environment for energy correction  
-!>        
-!> \param 
+!> \brief density matrix testing of its properties  
+!>        - symmetry 
+!>        - idempotency        
+!>        - Particle conservation
 !> \par History
 !>       2018.7 created [Fabian Belleflamme]
 !> \author Fabian Belleflamme 
@@ -669,7 +676,9 @@ CONTAINS
       CALL dbcsr_desymmetrize(matrix_s(1,1)%matrix, matrix_s_desym)
 
       ! PS
-      CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_p_desym, matrix_s_desym, &
+!      CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_p_desym, matrix_s_desym, &
+!                          0.0_dp, matrix_ps)
+      CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_p(1,1)%matrix, matrix_s(1,1)%matrix, &
                           0.0_dp, matrix_ps)
 
 
@@ -725,5 +734,102 @@ CONTAINS
       CALL timestop(handle)
  
     END SUBROUTINE ec_rho_check
- 
+
+! **************************************************************************************************
+!> \brief Projection of a dbcsr_matrix from one basis set to another 
+!> 
+!> \param qs_env ...
+!> \param matrix_in      Matrix to project
+!> \param matrix_out     projected matrix in output basis
+!> \param matrix_s_out   overlap matrix of output basis
+!> \param sab_out_vs_in  overlapped neighborlist of in and output basis
+!> \param basis_type_in  name of input basis set
+!> \param basis_type_out name of output basis set
+
+!> \date    07.2018
+!> \author  fbelle
+! **************************************************************************************************
+
+   SUBROUTINE matrix_projection(qs_env, matrix_in, matrix_out, matrix_s_out, &
+                                sab_out_vs_in, basis_type_in, basis_type_out)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_in
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_out
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_s_out
+      TYPE(neighbor_list_set_p_type), &
+         DIMENSION(:), POINTER                           ::  sab_out_vs_in
+      CHARACTER(LEN=*), INTENT(IN)                       :: basis_type_in, basis_type_out
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_rho_update', &
+         routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: ispin, nspins
+      TYPE(qs_ks_env_type), POINTER                      :: ks_env
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(qs_rho_type), POINTER                         :: rho
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_s_mixed
+      TYPE(dbcsr_type)                                   :: matrix_s_inv, matrix_tmp
+      TYPE(dbcsr_type)                                   :: matrix_A
+
+
+      CALL get_qs_env(qs_env = qs_env, &
+                      rho = rho, &
+                      dft_control = dft_control, &
+                      ks_env = ks_env)
+!      CALL get_qs_env(qs_env,para_env=para_env)
+      nspins = dft_control%nspins
+
+      !--------------------------------------------------
+      ! Density matrix projection ADMM2 (see Guidon2010)
+      ! KG BASIS -> HARRIS BASIS
+      !--------------------------------------------------
+
+      ! calculate S_mixed
+       
+      NULLIFY (matrix_s_mixed)
+      CALL dbcsr_allocate_matrix_set(matrix_s_mixed, nspins, 1)
+    
+      DO ispin = 1, nspins
+         ALLOCATE (matrix_s_mixed(ispin,1)%matrix)
+
+         CALL build_overlap_matrix(ks_env = ks_env, &
+                                   matrixkp_s = matrix_s_mixed, &
+                                   matrix_name = "MIXED_OVERLAP", &
+                                   basis_type_a = basis_type_out, & ! HARRIS
+                                   basis_type_b = basis_type_in, &  ! ORB
+                                   sab_nl = sab_out_vs_in)
+       END DO 
+
+      ! ---------------------------------
+      ! Calculate A = S_out^(-1) * S_mixed
+      ! ---------------------------------
+
+      ! S_out^(-1)
+      CALL dbcsr_create(matrix_s_inv, template = matrix_s_out(1,1)%matrix, matrix_type = "N")
+      CALL invert_Hotelling(matrix_s_inv, matrix_s_out(1,1)%matrix, & 
+                            dft_control%qs_control%eps_filter_matrix)
+      
+      ! A = S_out^(-1) * S_mixed
+      CALL dbcsr_create(matrix_A, template = matrix_s_mixed(1,1)%matrix, matrix_type = "N")
+      
+      CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_s_inv, matrix_s_mixed(1,1)%matrix, &
+                          0.0_dp, matrix_A)
+      
+      ! Calculate P_out = A * P_in * A^T
+      CALL dbcsr_create(matrix_tmp, template = matrix_A)
+      DO ispin = 1, nspins
+         CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_A, matrix_in(ispin,1)%matrix, &
+                             0.0_dp, matrix_tmp)
+         CALL dbcsr_multiply("N", "T", 1.0_dp, matrix_tmp, matrix_A, &
+                             0.0_dp, matrix_out(ispin,1)%matrix)
+      END DO
+
+      CALL dbcsr_release(matrix_s_inv)
+      CALL dbcsr_release(matrix_tmp)
+      CALL dbcsr_release(matrix_A)
+      CALL dbcsr_deallocate_matrix_set(matrix_s_mixed)
+    
+   END SUBROUTINE matrix_projection
+
 END MODULE ec_methods
