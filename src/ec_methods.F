@@ -74,6 +74,7 @@ MODULE ec_methods
 
    PUBLIC :: ec_write_forces, ec_calculate_w_matrix, ec_write_bs_forces
    PUBLIC :: ec_w_matrix
+   PUBLIC :: ec_w2_matrix
    PUBLIC :: ec_mos_init
    PUBLIC :: ec_rho_check
    PUBLIC :: matrix_projection
@@ -309,6 +310,81 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief Compute matrix_w as needed for the forces
+!>        !!!!!!!!!!!!!! THIS ONE MODIFIED SO TO CALCULATE MATRIX W from RESPONSE DENSITY
+!>        W = P*KS*P
+!> \param matrix_w ...
+!> \par History
+!>       2018.2 created [Fabian Belleflamme]
+!> \author Fabian Belleflamme - heavily influenced by calculate_w_matrix in dm_ls_scf 
+! **************************************************************************************************
+   SUBROUTINE ec_w2_matrix(qs_env, matrix_w, matrix_p, matrix_ks)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER        :: matrix_w
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER        :: matrix_p
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER        :: matrix_ks
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_w2_matrix', &
+         routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: handle, ispin, nspins
+      REAL(KIND=dp)                                      :: scaling
+      TYPE(dbcsr_type)                                   :: matrix_tmp1, matrix_tmp2, matrix_tmp3, &
+                                                            ref_matrix
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      REAL(KIND=dp)                                      :: eps_filter
+      TYPE(cp_para_env_type), POINTER                    :: para_env
+
+      CALL timeset(routineN, handle)
+
+      CALL get_qs_env(qs_env = qs_env, dft_control = dft_control)
+      !fbelle
+      CALL get_qs_env(qs_env,para_env=para_env)
+      
+      nspins = dft_control%nspins
+      eps_filter = dft_control%qs_control%eps_filter_matrix
+
+      ! init temp matrices
+      ref_matrix = matrix_ks(1, 1)%matrix
+      CALL dbcsr_create(matrix_tmp1, template=ref_matrix, matrix_type=dbcsr_type_no_symmetry)
+      CALL dbcsr_create(matrix_tmp2, template=ref_matrix, matrix_type=dbcsr_type_no_symmetry)
+      CALL dbcsr_create(matrix_tmp3, template=ref_matrix, matrix_type=dbcsr_type_no_symmetry)
+
+      IF (nspins == 1) THEN
+         scaling = 0.5_dp
+      ELSE
+         scaling = 1.0_dp
+      ENDIF
+
+      ! perform multiplication W = P*KS*P
+      DO ispin = 1, nspins
+         CALL dbcsr_copy(matrix_tmp3, matrix_ks(ispin, 1)%matrix)
+         CALL dbcsr_filter(matrix_tmp3, eps_filter)
+         CALL dbcsr_multiply("N", "N", scaling, matrix_p(ispin, 1)%matrix, matrix_tmp3, &
+                             0.0_dp, matrix_tmp1, filter_eps = eps_filter)
+         CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_tmp1, matrix_p(ispin, 1)%matrix, &
+                             0.0_dp, matrix_tmp2, filter_eps = eps_filter)
+                 
+         CALL dbcsr_copy(matrix_w(ispin,1)%matrix, matrix_tmp2, name="W MATRIX", keep_sparsity = .TRUE.)
+      ENDDO
+
+!      WRITE(*,*) "matrix_tmp3"
+!      CALL dbcsr_print(matrix_tmp3)
+!      WRITE(*,*) "matrix_tmp1"
+!      CALL dbcsr_print(matrix_tmp1)
+!      WRITE(*,*) "matrix_tmp2"
+!      CALL dbcsr_print(matrix_tmp2)
+!      CALL dbcsr_print(matrix_w(1,1)%matrix)
+
+      CALL dbcsr_release(matrix_tmp1)
+      CALL dbcsr_release(matrix_tmp2)
+      CALL dbcsr_release(matrix_tmp3)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE ec_w2_matrix
+
+! **************************************************************************************************
+!> \brief Compute matrix_w as needed for the forces
 !>        W = P*KS*P
 !> \param matrix_w ...
 !> \par History
@@ -335,7 +411,7 @@ CONTAINS
       CALL get_qs_env(qs_env = qs_env, dft_control = dft_control)
       !fbelle
       CALL get_qs_env(qs_env,para_env=para_env)
-      
+
       nspins = dft_control%nspins
       eps_filter = dft_control%qs_control%eps_filter_matrix
 
@@ -348,11 +424,13 @@ CONTAINS
          CALL dbcsr_set(ec_env%matrix_w(ispin, 1)%matrix, 0.0_dp)
       END DO
 
+!      CALL dbcsr_print(ec_env%matrix_w(1,1)%matrix)
+
       ! init temp matrices
-      ref_matrix = ec_env%matrix_s(1, 1)%matrix
-      CALL dbcsr_create(matrix_tmp1, template=ref_matrix, matrix_type=dbcsr_type_no_symmetry)
-      CALL dbcsr_create(matrix_tmp2, template=ref_matrix, matrix_type=dbcsr_type_no_symmetry)
-      CALL dbcsr_create(matrix_tmp3, template=ref_matrix, matrix_type=dbcsr_type_no_symmetry)
+      ref_matrix = ec_env%matrix_ks(1, 1)%matrix
+      CALL dbcsr_create(matrix_tmp1, template = ref_matrix, matrix_type = dbcsr_type_no_symmetry)
+      CALL dbcsr_create(matrix_tmp2, template = ref_matrix, matrix_type = dbcsr_type_no_symmetry)
+      CALL dbcsr_create(matrix_tmp3, template = ref_matrix, matrix_type = dbcsr_type_no_symmetry)
 
       IF (nspins == 1) THEN
          scaling = 0.5_dp
@@ -366,14 +444,21 @@ CONTAINS
          CALL dbcsr_filter(matrix_tmp3, eps_filter)
          CALL dbcsr_multiply("N", "N", scaling, ec_env%matrix_p(ispin, 1)%matrix, matrix_tmp3, &
                              0.0_dp, matrix_tmp1, filter_eps = eps_filter)
-
-                 
-                 
-                 
          CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_tmp1, ec_env%matrix_p(ispin, 1)%matrix, &
                              0.0_dp, matrix_tmp2, filter_eps = eps_filter)
          CALL dbcsr_copy(ec_env%matrix_w(ispin,1)%matrix, matrix_tmp2, name="EC W MATRIX", keep_sparsity = .TRUE.)
+
+
       ENDDO
+
+!      WRITE(*,*) "matrix_tmp3"
+!      CALL dbcsr_print(matrix_tmp3)
+!      WRITE(*,*) "matrix_tmp1"
+!      CALL dbcsr_print(matrix_tmp1)
+!      WRITE(*,*) "matrix_tmp2"
+!      CALL dbcsr_print(matrix_tmp2)
+!      CALL dbcsr_print(ec_env%matrix_w(1,1)%matrix)
+
 
       CALL dbcsr_release(matrix_tmp1)
       CALL dbcsr_release(matrix_tmp2)
@@ -676,17 +761,8 @@ CONTAINS
       CALL dbcsr_desymmetrize(matrix_s(1,1)%matrix, matrix_s_desym)
 
       ! PS
-!      CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_p_desym, matrix_s_desym, &
-!                          0.0_dp, matrix_ps)
-      CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_p(1,1)%matrix, matrix_s(1,1)%matrix, &
+      CALL dbcsr_multiply("N", "N", 0.5_dp, matrix_p_desym, matrix_s_desym, &
                           0.0_dp, matrix_ps)
-
-
-!      IF(para_env%mepos==0) THEN
-!          WRITE(*,*) "ec_rho_check - matrix_ps"
-!          CALL dbcsr_print(matrix_ps)
-!      END IF 
-
 
       ! PSPS
       CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_ps, matrix_ps, &

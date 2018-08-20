@@ -92,12 +92,18 @@ MODULE kg_environment_types
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_t
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_p
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_w
-      
+
+      ! matrix_nsc -
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER  :: matrix_nsc
+
       ! reduce basis
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER     :: mao_coef
       
       ! store old rho
       TYPE(qs_rho_type), POINTER                    :: old_rho
+
+      ! harris rho
+      TYPE(qs_rho_type), POINTER                    :: harris_rho
 
       ! store force environment 
       TYPE(qs_force_type), DIMENSION(:), POINTER    :: force
@@ -249,6 +255,7 @@ CONTAINS
          IF (ASSOCIATED(kg_env%ec_env%matrix_t)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_t)
          IF (ASSOCIATED(kg_env%ec_env%matrix_p)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_p)
          IF (ASSOCIATED(kg_env%ec_env%matrix_w)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_w)
+         IF (ASSOCIATED(kg_env%ec_env%matrix_nsc)) CALL dbcsr_deallocate_matrix_set(kg_env%ec_env%matrix_nsc)
          IF (ASSOCIATED(kg_env%ec_env%task_list)) THEN
             CALL deallocate_task_list(kg_env%ec_env%task_list)
          END IF
@@ -260,6 +267,9 @@ CONTAINS
          END IF
          IF (ASSOCIATED(kg_env%ec_env%old_rho)) THEN
             CALL qs_rho_release(kg_env%ec_env%old_rho)
+         END IF
+         IF (ASSOCIATED(kg_env%ec_env%harris_rho)) THEN
+            CALL qs_rho_release(kg_env%ec_env%harris_rho)
          END IF
 
          ! force environment 

@@ -181,11 +181,13 @@ CONTAINS
       NULLIFY (kg_env%ec_env%sab_ec_vs_kg)
       NULLIFY (kg_env%ec_env%matrix_ks, kg_env%ec_env%matrix_h, kg_env%ec_env%matrix_s)
       NULLIFY (kg_env%ec_env%matrix_t, kg_env%ec_env%matrix_p, kg_env%ec_env%matrix_w)
+      NULLIFY (kg_env%ec_env%matrix_nsc)
       NULLIFY (kg_env%ec_env%task_list)
       NULLIFY (kg_env%ec_env%mao_coef)
       NULLIFY (kg_env%ec_env%dispersion_env)
       NULLIFY (kg_env%ec_env%xc_section)
       NULLIFY (kg_env%ec_env%old_rho)
+      NULLIFY (kg_env%ec_env%harris_rho)
       NULLIFY (kg_env%ec_env%force)
 
       kg_env%ec_env%mao = .FALSE.
@@ -312,6 +314,11 @@ CONTAINS
    
          ! allocate and initialize the old density
          CALL qs_rho_create(kg_env%ec_env%old_rho)
+
+         ! allocate and initialize the old density
+         CALL qs_rho_create(kg_env%ec_env%harris_rho)
+
+
 
       END IF
 

@@ -9,7 +9,7 @@
 !> Force contributions : ec_core_hamiltonian:  kinetic, overlap, gth_ppl, 
 !>                                             gth_ppnl
 !>                       ec_build_ks_matrix:   core_overlap, rho_core, rho_elec
-!>                       ec_nsc_force:         (-1)*rho_elec
+!>                       ec_nsc_forces:         (-1)*rho_elec
 !> F_tot = F_kin[n_out] + F_gth_ppl[n_out] + F_gth_ppnl[n_out] 
 !>         + F_BS_H[n_in, n_out] + F_BS_XC[n_in, n_out] 
 !>         + F_core[rho_core + n_in] + F_NSC[n_in, n_out]
@@ -57,7 +57,8 @@ MODULE ec_force
                                               qs_copy_force,&
                                               qs_force_type,&
                                               replicate_qs_force,&
-                                              zero_qs_force
+                                              zero_qs_force, &
+                                              qs_axpy_force
    USE qs_ks_methods,                   ONLY: calc_rho_tot_gspace
    USE qs_ks_types,                     ONLY: qs_ks_env_type
    USE qs_rho_methods,                  ONLY: qs_rho_update_rho,&
@@ -128,6 +129,9 @@ MODULE ec_force
                                               get_qs_kind_set,&
                                               qs_kind_type
    USE qs_core_energies,                ONLY: calculate_ptrace
+   USE ec_response_solver,              ONLY: ec_response_density
+   
+   
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -140,7 +144,7 @@ MODULE ec_force
 
 ! *** Public subroutines ***
 
-   PUBLIC :: ec_forces, ec_bs_forces, ec_nsc_force
+   PUBLIC :: ec_forces, ec_bs_forces, ec_nsc_forces
 
 CONTAINS
 
@@ -205,7 +209,7 @@ CONTAINS
     
     CALL get_qs_env(qs_env,para_env=para_env)
     IF(para_env%mepos==0) THEN
-!       WRITE(*,*) "ec_forces - BEGINNING"
+       WRITE(*,*) "ec_forces - BEGINNING"
     END IF
 
     ! obviously 
@@ -249,14 +253,6 @@ CONTAINS
 !!  storage old density
 !!---------------------------------------------------------------------------------------
 
-!    ! allocate and initialize the old density
-!    CALL qs_rho_create(ec_env%old_rho)
-!    ! copy rho structure, alert, sets density matrix to zero
-!    CALL duplicate_rho_type(rho_input = rho, &
-!                            rho_output = ec_env%old_rho, &
-!                            qs_env = qs_env)
-
-!    CALL qs_rho_get(rho, rho_ao_kp = rho_ao )
     CALL qs_rho_get(rho, &
                     rho_r = rho_r, &
                     rho_g = rho_g, &
@@ -265,7 +261,7 @@ CONTAINS
     CALL qs_rho_get(ec_env%old_rho, rho_ao_kp = old_rho_ao )
 
     !--------------------------------------------------
-    ! rebuild old_rho_ao as non-sparse
+    ! copy new density (HARRIS and non-sparse) and collocate it  
     !--------------------------------------------------
 
     ! update rho strucutre with new density matrix of energy correction
@@ -277,7 +273,7 @@ CONTAINS
 
     DO ispin = 1, nspins
        ! computes the density corresponding to a given density matrix on the grid
-       ! rho_ao -> old_rho_r & old_rho_g
+       ! rho_ao -> rho_r & rho_g
        CALL calculate_rho_elec(matrix_p = rho_ao(ispin,1)%matrix, &
                                rho = rho_r(ispin), &
                                rho_gspace = rho_g(ispin), &
@@ -287,6 +283,50 @@ CONTAINS
                                task_list_external = ec_env%task_list)
     END DO
 
+!!---------------------------------------------------------------------------------------
+!!  storage old density
+!!  - old version : stores old_rho in HARRIS basis 
+!!  -               does not take advantage of sparsity
+!!---------------------------------------------------------------------------------------
+!
+!!    ! allocate and initialize the old density
+!!    CALL qs_rho_create(ec_env%old_rho)
+!!    ! copy rho structure, alert, sets density matrix to zero
+!!    CALL duplicate_rho_type(rho_input = rho, &
+!!                            rho_output = ec_env%old_rho, &
+!!                            qs_env = qs_env)
+!
+!!    CALL qs_rho_get(rho, rho_ao_kp = rho_ao )
+!    CALL qs_rho_get(rho, &
+!                    rho_r = rho_r, &
+!                    rho_g = rho_g, &
+!                    rho_ao_kp = rho_ao, &
+!                    tot_rho_r = tot_rho)
+!    CALL qs_rho_get(ec_env%old_rho, rho_ao_kp = old_rho_ao )
+!
+!    !--------------------------------------------------
+!    ! rebuild old_rho_ao as non-sparse
+!    !--------------------------------------------------
+!
+!    ! update rho strucutre with new density matrix of energy correction
+!    ! copy ec_env%matrix_p to rho%rho_ao(:,:) 
+!    DO ispin = 1, nspins
+!       CALL dbcsr_copy(rho_ao(ispin,1)%matrix, ec_env%matrix_p(ispin,1)%matrix, & 
+!                         keep_sparsity = .FALSE.)
+!    END DO
+!
+!    DO ispin = 1, nspins
+!       ! computes the density corresponding to a given density matrix on the grid
+!       ! rho_ao -> old_rho_r & old_rho_g
+!       CALL calculate_rho_elec(matrix_p = rho_ao(ispin,1)%matrix, &
+!                               rho = rho_r(ispin), &
+!                               rho_gspace = rho_g(ispin), &
+!                               total_rho = tot_rho(ispin), &
+!                               ks_env = ks_env, &
+!                               basis_type = "HARRIS", & 
+!                               task_list_external = ec_env%task_list)
+!    END DO
+!
 !    IF(para_env%mepos==0) THEN
 !      WRITE(*,*) " ec_forces -  ec_env%matrix_p", ASSOCIATED(ec_env%matrix_p)
 !      IF(ASSOCIATED(ec_env%matrix_p)) THEN
@@ -301,6 +341,8 @@ CONTAINS
 !            CALL dbcsr_print(old_rho_ao(1,1)%matrix)
 !      END IF
 !    END IF
+
+
 
 !!---------------------------------------------------------------------------------------
 !!---------------------------------------------------------------------------------------
@@ -340,7 +382,6 @@ CONTAINS
        CALL pw_zero(rho_dif_rspace(ispin)%pw)
     END DO
 
-
     ! delta density
     DO ispin = 1,nspins
       CALL pw_axpy(rho_r(ispin)%pw,rho_dif_rspace(ispin)%pw)
@@ -360,8 +401,6 @@ CONTAINS
        CALL pw_pool_give_back_pw(auxbas_pw_pool, rho_dif_rspace(ispin)%pw)
     END DO
     DEALLOCATE(rho_dif_rspace)
-
-
 
     NULLIFY (matrix_delta)
     
@@ -385,10 +424,7 @@ CONTAINS
           WRITE(*,*) "DELTA DENSITY-MATRIX"
           WRITE(*,*) "norm_scalar", norm_scalar
        END IF
-
-
     END DO
-
 
     ! Deallocate dummy ks matrix                         
     CALL dbcsr_deallocate_matrix_set(matrix_delta)
@@ -397,10 +433,10 @@ CONTAINS
 !!  matrix_w
 !!---------------------------------------------------------------------------------------
 
-!    IF(para_env%mepos==0) THEN
-!
-!       WRITE(*,*) "ec_forces - BEFORE CALCULATE W MATRIX"
-!
+    IF(para_env%mepos==0) THEN
+
+       WRITE(*,*) "ec_forces - BEFORE CALCULATE W MATRIX"
+
 !       WRITE(*,*) " ec_forces -  ec_env%matrix_p", ASSOCIATED(ec_env%matrix_p)
 !       IF(ASSOCIATED(ec_env%matrix_p)) THEN
 !             CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
@@ -409,11 +445,11 @@ CONTAINS
 !       IF(ASSOCIATED(rho_ao)) THEN
 !             CALL dbcsr_print(rho_ao(1,1)%matrix)
 !       END IF
-!       WRITE(*,*) " ec_forces - old_rho_ao", ASSOCIATED(old_rho_ao)
-!       IF(ASSOCIATED(old_rho_ao)) THEN
-!             CALL dbcsr_print(old_rho_ao(1,1)%matrix)
-!       END IF
-!    END IF
+       WRITE(*,*) " ec_forces - old_rho_ao", ASSOCIATED(old_rho_ao)
+       IF(ASSOCIATED(old_rho_ao)) THEN
+             CALL dbcsr_print(old_rho_ao(1,1)%matrix)
+       END IF
+    END IF
 
 
     ! calculate matrix_w = matrix_p*matrix_ks*matrix_p
@@ -458,7 +494,7 @@ CONTAINS
     CALL ec_build_core_hamiltonian(qs_env, ec_env, calculate_forces)
 
 !    CALL ec_core_forces(qs_env, ec_env)
-    
+
     ! next, grid based forces of band structure: 
     ! rho_elec : F_BS_XC[n_in, n_out] + F_BS_H[n_in, n_out]
     ! rho_core : integrate_v_core_rspace [n_out]
@@ -491,15 +527,48 @@ CONTAINS
     
     ! forces from band structure and double counting terms
     ! grid based forces rho_elec
-    CALL ec_nsc_force(qs_env, ec_env)
+    CALL ec_nsc_forces(qs_env, ec_env)
 
     !!---------------------------------------------------------------------------------------
     !! NSC force contributions : Hartree and XC
     !!---------------------------------------------------------------------------------------
 
-    CALL ec_nsc_hartree_force(qs_env, ec_env)
+!    CALL ec_nsc_hartree_force(qs_env, ec_env)
 
-    CALL ec_nsc_xc_force(qs_env, ec_env)
+!    CALL ec_nsc_xc_force(qs_env, ec_env)
+
+    !!---------------------------------------------------------------------------------------
+
+   !!---------------------------------------------------------------------------------------
+   !!  Calculate reponse forces
+   !!---------------------------------------------------------------------------------------
+
+    IF(para_env%mepos==0) THEN
+      WRITE(*,*) " ec_forces -  call ec_response_density"
+    END IF
+   
+    CALL ec_response_density(qs_env)
+
+    ! store these forces contributions in ec_env%force
+    !                  to            from
+    CALL qs_axpy_force(ec_env%force, force, alpha = -1.0_dp)
+
+    ! Sweet spot - all forces are saved in ec_env%force, and force is about to be purged
+    ! can replicate and print force right here, right now
+    CALL replicate_qs_force(force, para_env)
+
+    IF(para_env%mepos==0) THEN
+       WRITE(*,*) repeat("-",80)  
+       WRITE(*,*) "ec_forces - qs_env%...%force - after ec_response_forces"
+       CALL ec_write_forces(qs_env, force)
+!       WRITE(*,*) "ec_forces - qs_env%...%force - after ec_response_forces"
+!       CALL ec_write_forces(qs_env, ec_env%force)
+       WRITE(*,*) "ec_forces - ec_response_forces end"
+       WRITE(*,*) repeat("-",80)  
+    END IF
+
+    ! empty qs force type
+    CALL zero_qs_force(force)
 
     !!---------------------------------------------------------------------------------------
 
@@ -638,8 +707,6 @@ CONTAINS
          ALLOCATE (matrix_ks_proj(ispin,1)%matrix)
          CALL dbcsr_create(matrix_ks_proj(ispin, 1)%matrix, template = ec_env%matrix_s(1, 1)%matrix)
          CALL dbcsr_set(matrix_ks_proj(ispin, 1)%matrix, 0.0_dp)
-
-
       END DO
 
 
@@ -954,7 +1021,6 @@ CONTAINS
 
 !------------------------------------------------------------------------------
 
-
     ! Core-Core repulsion forces (force%rho_core)
     CALL integrate_v_core_rspace(v_hartree_rspace, qs_env)
 
@@ -984,7 +1050,7 @@ CONTAINS
 !> \date    03.2018
 !> \author  Fabian Belleflamme
 ! **************************************************************************************************
-  SUBROUTINE ec_nsc_force(qs_env, ec_env)
+  SUBROUTINE ec_nsc_forces(qs_env, ec_env)
 
     TYPE(qs_environment_type), POINTER                 :: qs_env
     TYPE(energy_correction_type), POINTER              :: ec_env
@@ -1017,8 +1083,12 @@ CONTAINS
     TYPE(xc_derivative_set_type), POINTER              :: deriv_set
     TYPE(xc_rho_set_type), POINTER                     :: rho_set
     TYPE(pw_p_type), DIMENSION(:), POINTER             :: v_xc, v_rspace_nsc
-    TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: my_matrix_ks
+!    TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: my_matrix_ks
+    TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_ks
     TYPE(section_vals_type), POINTER                   :: input, xc_section
+    TYPE(neighbor_list_set_p_type), DIMENSION(:), &
+       POINTER                                         :: sab_orb
+    TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_s
 
     logger => cp_get_default_logger()
     
@@ -1033,7 +1103,7 @@ CONTAINS
                     para_env = para_env)
 
 !    IF(para_env%mepos==0) THEN
-!       WRITE(*,*) "ec_nsc_force - BEGINNING"
+!       WRITE(*,*) "ec_nsc_forces - BEGINNING"
 !    END IF
     
     calculate_forces = .TRUE.
@@ -1170,28 +1240,56 @@ CONTAINS
       CALL pw_scale(v_rspace_nsc(ispin)%pw, v_rspace_nsc(ispin)%pw%pw_grid%dvol)
       CALL pw_axpy(v_hartree_rspace%pw,v_rspace_nsc(ispin)%pw)
     END DO
-    
-    NULLIFY (my_matrix_ks)
+
+
+
+    CALL get_qs_env(qs_env, sab_orb = sab_orb, matrix_s_kp = matrix_s )
+
+    ! initialize NSC matrix
+    CALL dbcsr_allocate_matrix_set(ec_env%matrix_nsc, nspins, 1)
+    DO ispin = 1, nspins
+       ALLOCATE (ec_env%matrix_nsc(ispin, 1)%matrix)
+       CALL dbcsr_create(ec_env%matrix_nsc(ispin, 1)%matrix, name = "NSC MATRIX", &
+                         template = matrix_s(1, 1)%matrix)
+       CALL cp_dbcsr_alloc_block_from_nbl(ec_env%matrix_nsc(ispin, 1)%matrix, sab_orb)
+       CALL dbcsr_set(ec_env%matrix_nsc(ispin,1)%matrix, 0.0_dp)
+    END DO
+
+
+!    NULLIFY (my_matrix_ks)
 
     DO ispin = 1 , nspins
        ! modifies KS matrix!
-       CALL dbcsr_allocate_matrix_set(my_matrix_ks, nspins, 1)
-       ALLOCATE (my_matrix_ks(ispin,1)%matrix)
+!       CALL dbcsr_allocate_matrix_set(my_matrix_ks, nspins, 1)
+!       ALLOCATE (my_matrix_ks(ispin,1)%matrix)
 
-       CALL dbcsr_copy(my_matrix_ks(ispin,1)%matrix, ec_env%matrix_ks(ispin,1)%matrix, & 
-                       keep_sparsity = .FALSE., name="DUMMY KS-MATRIX")
-   
+       ! get sparse matrix_s to set up dummy-ks-matrix
+       CALL get_qs_env(qs_env, matrix_ks_kp = matrix_ks)
+
+!       CALL dbcsr_copy(my_matrix_ks(ispin,1)%matrix, matrix_ks(ispin,1)%matrix, & 
+!                       keep_sparsity = .FALSE., name="DUMMY KS-MATRIX")
+
+!       CALL integrate_v_rspace(v_rspace = v_rspace_nsc(ispin), &
+!                               pmat = old_rho_ao(ispin, 1), &
+!                               hmat = my_matrix_ks(ispin, 1), &
+!                               qs_env = qs_env, &
+!                               calculate_forces = calculate_forces, & 
+!                               basis_type = "HARRIS", &
+!                               task_list_external = ec_env%task_list)
+
+       ! input density and basis - use sparsity
        CALL integrate_v_rspace(v_rspace = v_rspace_nsc(ispin), &
                                pmat = old_rho_ao(ispin, 1), &
-                               hmat = my_matrix_ks(ispin, 1), &
+                               !hmat = matrix_ks(ispin, 1), &
+                               hmat = ec_env%matrix_nsc(ispin, 1), &
                                qs_env = qs_env, &
                                calculate_forces = calculate_forces, & 
-                               basis_type = "HARRIS", &
-                               task_list_external = ec_env%task_list)
-    
-       ! Deallocate dummy ks matrix                         
-       CALL dbcsr_deallocate_matrix_set(my_matrix_ks)
+                               basis_type = "ORB")
+
     END DO
+
+!       ! Deallocate dummy ks matrix                         
+!       CALL dbcsr_deallocate_matrix_set(my_matrix_ks)
 
     !---------------------------------------------------------------------------------------
     ! Need to copy NSC force contrib from qs_env%...%force to stored forces in ec_env%force
@@ -1228,7 +1326,7 @@ CONTAINS
     CALL zero_qs_force(force)
     
 !    IF(para_env%mepos==0) THEN
-!       WRITE(*,*) "ec_nsc_force - qs_env%...%force - after copy of rho_elec"
+!       WRITE(*,*) "ec_nsc_forces - qs_env%...%force - after copy of rho_elec"
 !       CALL ec_write_forces(qs_env, force)
 !       WRITE(*,*) "ec_force - ec_env%force - after copy of rho_elec"
 !       CALL ec_write_forces(qs_env, ec_env%force)
@@ -1249,7 +1347,7 @@ CONTAINS
 
     CALL timestop(handle)
 
-  END SUBROUTINE ec_nsc_force
+  END SUBROUTINE ec_nsc_forces
 
 ! **************************************************************************************************
 !> \brief  Non-self-consistent forces (Hartree part)
@@ -1400,9 +1498,7 @@ CONTAINS
       CALL pw_axpy(v_hartree_rspace%pw,v_rspace_nsc(ispin)%pw)
     END DO
 
-
     DO ispin = 1 , nspins
-       
        ! modifies KS matrix!
        NULLIFY (my_matrix_ks)
        CALL dbcsr_allocate_matrix_set(my_matrix_ks, nspins, 1)
@@ -1412,7 +1508,8 @@ CONTAINS
    
        CALL integrate_v_rspace(v_rspace = v_rspace_nsc(ispin), &
                                pmat = old_rho_ao(ispin, 1), &
-                               hmat = my_matrix_ks(ispin, 1), &
+                               !hmat = my_matrix_ks(ispin, 1), &
+                               hmat = ec_env%matrix_nsc(ispin, 1), &
                                qs_env = qs_env, &
                                calculate_forces = calculate_forces, & 
                                basis_type = "HARRIS", &
