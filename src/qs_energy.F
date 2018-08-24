@@ -12,9 +12,10 @@
 MODULE qs_energy
    USE almo_scf,                        ONLY: almo_entry_scf
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_operations,             ONLY: dbcsr_allocate_matrix_set,&
+                                              dbcsr_deallocate_matrix_set
    USE dm_ls_scf,                       ONLY: ls_scf
-   USE kg_energy_corrections,           ONLY: kg_energy_correction,&
-                                              harris_consistency
+   USE kg_energy_corrections,           ONLY: kg_energy_correction
    USE lri_environment_methods,         ONLY: lri_print_stat
    USE qs_energy_init,                  ONLY: qs_energies_init
    USE qs_energy_types,                 ONLY: qs_energy_type
@@ -28,10 +29,11 @@ MODULE qs_energy
    USE qs_scf,                          ONLY: scf
    USE cp_para_types,                   ONLY: cp_para_env_type
    USE dbcsr_api,                       ONLY: &
-        dbcsr_add, dbcsr_allocate_matrix_set, dbcsr_copy, dbcsr_create, &
-        dbcsr_deallocate_matrix_set, dbcsr_desymmetrize, dbcsr_distribution_type, dbcsr_filter, &
-        dbcsr_get_info, dbcsr_init_p, dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_set, &
-        dbcsr_trace, dbcsr_type, dbcsr_type_no_symmetry, dbcsr_type_symmetric, dbcsr_print, dbcsr_finalize
+        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_desymmetrize,&
+        dbcsr_distribution_type, dbcsr_filter,  dbcsr_get_info,&
+        dbcsr_init_p, dbcsr_multiply, dbcsr_p_type, dbcsr_release,&
+        dbcsr_set, dbcsr_trace,  dbcsr_type, dbcsr_type_no_symmetry,&
+        dbcsr_type_symmetric, dbcsr_print, dbcsr_finalize
    USE qs_rho_types,                    ONLY: qs_rho_create,&
                                               qs_rho_get,&
                                               qs_rho_release,&
@@ -40,6 +42,10 @@ MODULE qs_energy
    USE qs_core_energies,                ONLY: calculate_ptrace
    USE kinds,                           ONLY: default_string_length,&
                                               dp
+   USE ec_methods,                      ONLY: ec_rho_check   
+   USE kg_environment_types,            ONLY: energy_correction_type,&
+                                              kg_environment_type
+
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -90,6 +96,7 @@ CONTAINS
 !      INTEGER                                            :: nspins
 !      REAL(KIND=dp)                                      :: trace_ks_p, ecore, ekinetic, trace_ovrl
 !      REAL(KIND=dp)                                      :: trace
+      TYPE(kg_environment_type), POINTER                 :: kg_env
 
       CALL timeset(routineN, handle)
 
@@ -124,19 +131,19 @@ CONTAINS
       !--------------------------------------------------------------------------
  
       CALL get_qs_env(qs_env,para_env=para_env)
-!      IF(para_env%mepos==0) THEN
-!        WRITE(*,*) "qs_energies - after KG" 
-!        
-!        WRITE(*,*) "core        "  , energy%core
-!        WRITE(*,*) "core_overlap " , energy%core_overlap
-!        WRITE(*,*) "core_self   "  , energy%core_self
-!        WRITE(*,*) "exc         "  , energy%exc
-!        WRITE(*,*) "hartree     "  , energy%hartree
-!        WRITE(*,*) "e_hartree,  "  , energy%e_hartree
-!        WRITE(*,*) "total       "  , energy%total
-!        WRITE(*,*) "tot_old     "  , energy%tot_old
-!        WRITE(*,*) "kinetic     "  , energy%kinetic
-!      END IF
+      IF(para_env%mepos==0) THEN
+        WRITE(*,*) "qs_energies - after KG" 
+        
+        WRITE(*,*) "core        "  , energy%core
+        WRITE(*,*) "core_overlap " , energy%core_overlap
+        WRITE(*,*) "core_self   "  , energy%core_self
+        WRITE(*,*) "exc         "  , energy%exc
+        WRITE(*,*) "hartree     "  , energy%hartree
+        WRITE(*,*) "e_hartree,  "  , energy%e_hartree
+        WRITE(*,*) "total       "  , energy%total
+        WRITE(*,*) "tot_old     "  , energy%tot_old
+        WRITE(*,*) "kinetic     "  , energy%kinetic
+     END IF
  
       ! fbelle 
       CALL get_qs_env(qs_env, rho=rho, para_env = para_env)
@@ -146,7 +153,10 @@ CONTAINS
       CALL get_qs_env(qs_env, matrix_s_kp=matrix_s)
       CALL get_qs_env(qs_env, matrix_h_kp=matrix_h)
       CALL get_qs_env(qs_env, kinetic_kp=kinetic)
-      
+      CALL get_qs_env(qs_env, kg_env = kg_env)
+
+      CALL ec_rho_check(qs_env, matrix_p = rho_ao, matrix_s = matrix_s)
+
       IF(para_env%mepos==0) THEN
 !         WRITE(*,*) " qs_energies - matrix_ks", ASSOCIATED(matrix_ks)
 !         IF(ASSOCIATED(matrix_ks)) THEN
@@ -172,13 +182,17 @@ CONTAINS
 !         IF(ASSOCIATED(matrix_w)) THEN
 !               CALL dbcsr_print(matrix_w(1)%matrix)
 !         END IF
-     
 !         CALL calculate_ptrace(matrix_ks, rho_ao, trace, dft_control%nspins)
 !         WRITE(*,*) "trace[ks_out*p_out]", trace
-     
+
+         WRITE(*,*) " qs_energies - tnadd_mat", ASSOCIATED(kg_env%tnadd_mat)
+         IF(ASSOCIATED(kg_env%tnadd_mat)) THEN
+         CALL dbcsr_print(kg_env%tnadd_mat(1)%matrix)
+         END IF
+
       END IF
 
-      ! kinetic matrix trace
+!      ! kinetic matrix trace
 !      CALL calculate_ptrace(kinetic, rho_ao, ekinetic, nspins)
 !      CALL calculate_ptrace(matrix_s, rho_ao, trace_ovrl, nspins)
 !      ! core matrix trace
@@ -193,11 +207,6 @@ CONTAINS
 !         WRITE(*,*) "trace[h*p]", ecore
 !         WRITE(*,*) "trace[ks*p]", trace_ks_p
 !      END IF
- 
- 
- 
- 
- 
  
      !--------------------------------------------------------------------------
      
@@ -231,8 +240,6 @@ CONTAINS
             !IF (consistent_energies .AND. .NOT. dft_control%qs_control%do_kg_ec ) THEN
             IF (consistent_energies) THEN
 !               CALL qs_ks_update_qs_env(qs_env, calculate_forces=.FALSE., just_energy=.TRUE.)
-
-!               CALL harris_consistency(qs_env, calculate_forces=.FALSE.)
 
                ! add MP2 energy if necessary
                IF (ASSOCIATED(qs_env%mp2_env)) THEN

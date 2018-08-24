@@ -26,16 +26,16 @@ MODULE ec_force
                                               get_atomic_kind,&
                                               get_atomic_kind_set
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_operations,             ONLY: dbcsr_allocate_matrix_set,&
+                                              dbcsr_deallocate_matrix_set
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_type
    USE cp_output_handling,              ONLY: cp_p_file,&
                                               cp_print_key_unit_nr
    USE cp_para_types,                   ONLY: cp_para_env_type
    USE dbcsr_api,                       ONLY: dbcsr_add,&
-                                              dbcsr_allocate_matrix_set,&
                                               dbcsr_copy,&
                                               dbcsr_create,&
-                                              dbcsr_deallocate_matrix_set,&
                                               dbcsr_init_p,&
                                               dbcsr_p_type,&
                                               dbcsr_set,&
