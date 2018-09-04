@@ -1008,7 +1008,7 @@ CONTAINS
       nm = (6+11*nmom+6*nmom**2+nmom**3)/6-1
       ! rmom(:,1)=electronic
       ! rmom(:,2)=nuclear
-      ! rmom(:,1)=total
+      ! rmom(:,3)=total
       ALLOCATE (rmom(nm+1, 3))
       ALLOCATE (rlab(nm+1))
       rmom = 0.0_dp
