@@ -669,6 +669,17 @@ CONTAINS
          CALL get_qs_env(qs_env=qs_env, force=force)
       END IF
 
+      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      !!
+      !! qs_core_ham : nder -> core matrices
+      !!               nders -> overlap derivs IF WANTED
+      !! 
+      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   
+
+
       ! forces require first derivative of energy
       IF (calculate_forces) THEN
          nder = 1
