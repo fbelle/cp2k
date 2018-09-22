@@ -785,6 +785,64 @@ ddss = 0
                                                        f2*kvec(1)*dsc(coset(ax-1, ay, az), 1, 3)
                      END IF
 
+                     IF (PRESENT(ddsc)) THEN
+                        ddsc(coset(ax, ay, az), 1, 1) = rap(1)*ddsc(coset(ax-1, ay, az), 1, 1)+ &
+                                                        f3*ddsc(coset(ax-2, ay, az), 1, 1)- &
+                                                        2*f2*dss(coset(ax-1, ay, az), 1, 1)- &
+                                                        f2*kvec(1)*ddss(coset(ax-1, ay, az), 1, 1)
+!!!! check third term
+                        ddsc(coset(ax, ay, az), 1, 2) = rap(1)*ddsc(coset(ax-1, ay, az), 1, 2)+ &
+                                                        f3*ddsc(coset(ax-2, ay, az), 1, 2)- &
+                                                        f2*dss(coset(ax-1, ay, az),1 , 2)- &
+                                                        f2*kvec(1)*ddss(coset(ax-1, ay, az), 1, 2)
+
+                        ddsc(coset(ax, ay, az), 1, 3) = rap(1)*ddsc(coset(ax-1, ay, az), 1, 3)+ &
+                                                        f3*ddsc(coset(ax-2, ay, az), 1, 3)- &
+                                                        f2*dss(coset(ax-1, ay, az), 1, 3)- &
+                                                        f2*kvec(1)*ddss(coset(ax-1, ay, az), 1, 3)
+                        
+                        ddsc(coset(ax, ay, az), 1, 4) = rap(1)*ddsc(coset(ax-1, ay, az), 1, 4)+ &
+                                                        f3*ddsc(coset(ax-2, ay, az), 1, 4)- &
+                                                        f2*kvec(1)*dss(coset(ax-1, ay, az), 1, 4)
+                        
+                        ddsc(coset(ax, ay, az), 1, 5) = rap(1)*ddsc(coset(ax-1, ay, az), 1, 5)+ &
+                                                        f3*ddsc(coset(ax-2, ay, az), 1, 5)- &
+                                                        f2*kvec(1)*dss(coset(ax-1, ay, az), 1, 5)
+                        
+                        ddsc(coset(ax, ay, az), 1, 6) = rap(1)*ddsc(coset(ax-1, ay, az), 1, 6)+ &
+                                                        f3*ddsc(coset(ax-2, ay, az), 1, 6)- &
+                                                        f2*kvec(1)*dss(coset(ax-1, ay, az), 1, 6)
+                     END IF
+
+                     IF (PRESENT(ddss)) THEN
+                        ddss(coset(ax, ay, az), 1, 1) = rap(1)*ddss(coset(ax-1, ay, az), 1, 1)+ &
+                                                        f3*ddss(coset(ax-2, ay, az), 1, 1)+ &
+                                                        2*f2*dsc(coset(ax-1, ay, az), 1, 1)+ &
+                                                        f2*kvec(1)*ddsc(coset(ax-1, ay, az), 1, 1)
+!!!! check third term
+                        ddss(coset(ax, ay, az), 1, 2) = rap(1)*ddss(coset(ax-1, ay, az), 1, 2)+ &
+                                                        f3*ddss(coset(ax-2, ay, az), 1, 2)+ &
+                                                        f2*dsc(coset(ax-1, ay, az), 1, 2)+ &
+                                                        f2*kvec(1)*ddsc(coset(ax-1, ay, az), 1, 2)
+
+                        ddss(coset(ax, ay, az), 1, 3) = rap(1)*ddss(coset(ax-1, ay, az), 1, 3)+ &
+                                                        f3*ddss(coset(ax-2, ay, az), 1, 3)+ &
+                                                        f2*dsc(coset(ax-1, ay, az), 1, 3)+ &
+                                                        f2*kvec(1)*ddsc(coset(ax-1, ay, az), 1, 3)
+                        
+                        ddss(coset(ax, ay, az), 1, 4) = rap(1)*ddss(coset(ax-1, ay, az), 1, 4)+ &
+                                                        f3*ddss(coset(ax-2, ay, az), 1, 4)+ &
+                                                        f2*kvec(1)*dsc(coset(ax-1, ay, az), 1, 4)
+                        
+                        ddss(coset(ax, ay, az), 1, 5) = rap(1)*ddss(coset(ax-1, ay, az), 1, 5)+ &
+                                                        f3*ddss(coset(ax-2, ay, az), 1, 5)+ &
+                                                        f2*kvec(1)*dsc(coset(ax-1, ay, az), 1, 5)
+                        
+                        ddss(coset(ax, ay, az), 1, 6) = rap(1)*ddss(coset(ax-1, ay, az), 1, 6)+ &
+                                                        f3*ddss(coset(ax-2, ay, az), 1, 6)+ &
+                                                        f2*kvec(1)*dsc(coset(ax-1, ay, az), 1, 6)
+                     END IF
+
 
                      END DO
                   END DO
@@ -830,6 +888,50 @@ ddss = 0
                                                       rab(2)*ss(coset(ax, ay, az), 1)
                            ss(coset(ax, ay, az), 4) = ss(coset(ax, ay, az+1), 1)- &
                                                       rab(3)*ss(coset(ax, ay, az), 1)
+
+!                        IF (PRESENT(dsc)) THEN
+!                           DO i = 1, 3
+!                              dsc(coset(ax, ay, az), 2, i) = dsc(coset(ax+1, ay, az), 1, i)- &
+!                                                             rab(1)*dsc(coset(ax, ay, az), 1, i)
+!                              dsc(coset(ax, ay, az), 3, i) = dsc(coset(ax, ay+1, az), 1, i)- &
+!                                                             rab(2)*dsc(coset(ax, ay, az), 1, i)
+!                              dsc(coset(ax, ay, az), 4, i) = dsc(coset(ax, ay, az+1), 1, i)- &
+!                                                             rab(3)*sc(coset(ax, ay, az), 1, i)
+!                           END DO
+!                        END IF
+!                        
+!                        IF (PRESENT(dss)) THEN
+!                           DO i = 1, 3
+!                              dss(coset(ax, ay, az), 2, i) = dss(coset(ax+1, ay, az), 1, i)- &
+!                                                             rab(1)*dss(coset(ax, ay, az), 1, i)
+!                              dss(coset(ax, ay, az), 3, i) = dss(coset(ax, ay+1, az), 1, i)- &
+!                                                             rab(2)*dss(coset(ax, ay, az), 1, i)
+!                              dss(coset(ax, ay, az), 4, i) = dss(coset(ax, ay, az+1), 1, i)- &
+!                                                             rab(3)*ss(coset(ax, ay, az), 1, i)
+!                           END DO
+!                        END IF
+!                        IF (PRESENT(ddsc)) THEN
+!                           DO i = 1, 6
+!                              ddsc(coset(ax, ay, az), 2, i) = ddsc(coset(ax+1, ay, az), 1, i)- &
+!                                                              rab(1)*ddsc(coset(ax, ay, az), 1, i)
+!                              ddsc(coset(ax, ay, az), 3, i) = dsc(coset(ax, ay+1, az), 1, i)- &
+!                                                             rab(2)*dsc(coset(ax, ay, az), 1, i)
+!                              ddsc(coset(ax, ay, az), 4, i) = dsc(coset(ax, ay, az+1), 1, i)- &
+!                                                             rab(3)*sc(coset(ax, ay, az), 1, i)
+!                           END DO
+!                        END IF
+!                        
+!                        IF (PRESENT(dss)) THEN
+!                           DO i = 1, 6
+!                              ddss(coset(ax, ay, az), 2, i) = ddss(coset(ax+1, ay, az), 1, i)- &
+!                                                             rab(1)*dss(coset(ax, ay, az), 1, i)
+!                              ddss(coset(ax, ay, az), 3, i) = ddss(coset(ax, ay+1, az), 1, i)- &
+!                                                             rab(2)*dss(coset(ax, ay, az), 1, i)
+!                              ddss(coset(ax, ay, az), 4, i) = ddss(coset(ax, ay, az+1), 1, i)- &
+!                                                             rab(3)*ss(coset(ax, ay, az), 1, i)
+!                           END DO
+!                        END IF
+
                         END DO
                      END DO
                   END DO
@@ -850,6 +952,62 @@ ddss = 0
                                                       f2*kvec(1)*ss(coset(ax, ay, az), 1)
                            ss(coset(ax, ay, az), 2) = rbp(1)*ss(coset(ax, ay, az), 1)+ &
                                                       f2*kvec(1)*sc(coset(ax, ay, az), 1)
+
+                           IF (PRESENT(dsc)) THEN
+                              dsc(coset(ax, ay, az), 2, 1) = rbp(1)*dsc(coset(ax, ay, az), 1, 1)- &
+                                                             f2*ss(coset(ax, ay, az), 1)- &
+                                                             f2*kvec(1)*dss(coset(ax, ay, az), 1, 1)
+                              dsc(coset(ax, ay, az), 2, 2) = rbp(1)*dsc(coset(ax, ay, az), 1, 2)- &
+                                                             f2*kvec(1)*dss(coset(ax, ay, az), 1, 2)
+                              dsc(coset(ax, ay, az), 2, 3) = rbp(1)*dsc(coset(ax, ay, az),1 , 3)- &
+                                                             f2*kvec(1)*dss(coset(ax, ay, az), 1, 3)
+                           END IF
+                           
+                           IF (PRESENT(ddsc)) THEN
+                              ddsc(coset(ax, ay, az), 2, 1) = rbp(1)*ddsc(coset(ax, ay, az), 1, 1)- &
+                                                              2*f2*ss(coset(ax, ay, az), 1)- &
+                                                              f2*kvec(1)*ddss(coset(ax, ay, az), 1, 1)
+                              ddsc(coset(ax, ay, az), 2, 2) = rbp(1)*ddsc(coset(ax, ay, az), 1, 2)- &
+                                                              f2*dss(coset(ax, ay, az), 1, 2)- &
+                                                              f2*kvec(1)*ddss(coset(ax, ay, az), 1, 2)
+                              ddsc(coset(ax, ay, az), 2, 3) = rbp(1)*ddsc(coset(ax, ay, az), 1, 3)- &
+                                                              f2*dss(coset(ax, ay, az), 1, 3)- &
+                                                              f2*kvec(1)*ddss(coset(ax, ay, az), 1, 3)
+                              ddsc(coset(ax, ay, az), 2, 4) = rbp(1)*ddsc(coset(ax, ay, az), 1, 4)- &
+                                                              f2*kvec(1)*ddss(coset(ax, ay, az), 1, 4)
+                              ddsc(coset(ax, ay, az), 2, 5) = rbp(1)*ddsc(coset(ax, ay, az), 1, 5)- &
+                                                              f2*kvec(1)*ddss(coset(ax, ay, az), 1, 5)
+                              ddsc(coset(ax, ay, az), 2, 6) = rbp(1)*ddsc(coset(ax, ay, az), 1, 6)- &
+                                                              f2*kvec(1)*ddss(coset(ax, ay, az), 1, 6)
+                           END IF
+                           
+                           IF (PRESENT(dss)) THEN
+                              dss(coset(ax, ay, az), 2, 1) = rbp(1)*dss(coset(ax, ay, az), 1, 1)+ &
+                                                             f2*sc(coset(ax, ay, az), 1)+ &
+                                                             f2*kvec(1)*dsc(coset(ax, ay, az), 1, 1)
+                              dss(coset(ax, ay, az), 2, 2) = rbp(1)*dss(coset(ax, ay, az), 1, 2)+ &
+                                                             f2*kvec(1)*dsc(coset(ax, ay, az), 1, 2)
+                              dss(coset(ax, ay, az), 2, 3) = rbp(1)*dss(coset(ax, ay, az),1 , 3)+ &
+                                                             f2*kvec(1)*dsc(coset(ax, ay, az), 1, 3)
+                           END IF
+                           IF (PRESENT(ddss)) THEN
+                              ddss(coset(ax, ay, az), 2, 1) = rbp(1)*ddss(coset(ax, ay, az), 1, 1)+ &
+                                                              2*f2*sc(coset(ax, ay, az), 1)+ &
+                                                              f2*kvec(1)*ddsc(coset(ax, ay, az), 1, 1)
+                              ddss(coset(ax, ay, az), 2, 2) = rbp(1)*ddss(coset(ax, ay, az), 1, 2)+ &
+                                                              f2*dsc(coset(ax, ay, az), 1, 2)+ &
+                                                              f2*kvec(1)*ddsc(coset(ax, ay, az), 1, 2)
+                              ddss(coset(ax, ay, az), 2, 3) = rbp(1)*ddss(coset(ax, ay, az), 1, 3)+ &
+                                                              f2*dss(coset(ax, ay, az), 1, 3)+ &
+                                                              f2*kvec(1)*ddsc(coset(ax, ay, az), 1, 3)
+                              ddss(coset(ax, ay, az), 2, 4) = rbp(1)*ddss(coset(ax, ay, az), 1, 4)+ &
+                                                              f2*kvec(1)*ddsc(coset(ax, ay, az), 1, 4)
+                              ddss(coset(ax, ay, az), 2, 5) = rbp(1)*ddss(coset(ax, ay, az), 1, 5)+ &
+                                                              f2*kvec(1)*ddsc(coset(ax, ay, az), 1, 5)
+                              ddss(coset(ax, ay, az), 2, 6) = rbp(1)*ddss(coset(ax, ay, az), 1, 6)+ &
+                                                              f2*kvec(1)*ddsc(coset(ax, ay, az), 1, 6)
+                           END IF
+
                         ELSE
                            sc(coset(ax, ay, az), 2) = rbp(1)*sc(coset(ax, ay, az), 1)+ &
                                                       fx*sc(coset(ax-1, ay, az), 1)- &
@@ -857,12 +1015,157 @@ ddss = 0
                            ss(coset(ax, ay, az), 2) = rbp(1)*ss(coset(ax, ay, az), 1)+ &
                                                       fx*ss(coset(ax-1, ay, az), 1)+ &
                                                       f2*kvec(1)*sc(coset(ax, ay, az), 1)
+
+                           IF (PRESENT(dsc)) THEN
+                              dsc(coset(ax, ay, az), 2, 1) = rbp(1)*dsc(coset(ax, ay, az), 1, 1)+ &
+                                                             fx*dsc(coset(ax-1, ay, az), 1, 1)- &
+                                                             f2*ss(coset(ax, ay, az), 1)- &
+                                                             f2*kvec(1)*dss(coset(ax, ay, az), 1, 1)
+                              dsc(coset(ax, ay, az), 2, 2) = rbp(1)*dsc(coset(ax, ay, az), 1, 2)+ &
+                                                             fx*dsc(coset(ax-1, ay, az), 1, 2)- &
+                                                             f2*kvec(1)*dss(coset(ax, ay, az), 1, 2)
+                              dsc(coset(ax, ay, az), 2, 3) = rbp(1)*dsc(coset(ax, ay, az),1 , 3)+ &
+                                                             fx*dsc(coset(ax-1, ay, az), 1, 3)- &
+                                                             f2*kvec(1)*dss(coset(ax, ay, az), 1, 3)
+                           END IF
+                           IF (PRESENT(ddsc)) THEN
+                              ddsc(coset(ax, ay, az), 2, 1) = rbp(1)*ddsc(coset(ax, ay, az), 1, 1)+ &
+                                                              fx*ddsc(coset(ax-1, ay, az), 1, 1)- &
+                                                              2*f2*ss(coset(ax, ay, az), 1)- &
+                                                              f2*kvec(1)*ddss(coset(ax, ay, az), 1, 1)
+                              ddsc(coset(ax, ay, az), 2, 2) = rbp(1)*ddsc(coset(ax, ay, az), 1, 2)+ &
+                                                              fx*ddsc(coset(ax-1, ay, az), 1, 2)- &
+                                                              f2*dss(coset(ax, ay, az), 1, 2)- &
+                                                              f2*kvec(1)*ddss(coset(ax, ay, az), 1, 2)
+                              ddsc(coset(ax, ay, az), 2, 3) = rbp(1)*ddsc(coset(ax, ay, az), 1, 3)+ &
+                                                              fx*ddsc(coset(ax-1, ay, az), 1, 3)- &
+                                                              f2*dss(coset(ax, ay, az), 1, 3)- &
+                                                              f2*kvec(1)*ddss(coset(ax, ay, az), 1, 3)
+
+                              ddsc(coset(ax, ay, az), 2, 4) = rbp(1)*ddsc(coset(ax, ay, az), 1, 4)+ &
+                                                              fx*dsc(coset(ax-1, ay, az), 1, 4)- &
+                                                              f2*kvec(1)*ddss(coset(ax, ay, az), 1, 4)
+                              ddsc(coset(ax, ay, az), 2, 5) = rbp(1)*ddsc(coset(ax, ay, az), 1, 5)+ &
+                                                              fx*dsc(coset(ax-1, ay, az), 1, 5)- &
+                                                              f2*kvec(1)*ddss(coset(ax, ay, az), 1, 5)
+
+                              ddsc(coset(ax, ay, az), 2, 6) = rbp(1)*ddsc(coset(ax, ay, az), 1, 6)+ &
+                                                              fx*dsc(coset(ax-1, ay, az), 1, 6)- &
+                                                              f2*kvec(1)*ddss(coset(ax, ay, az), 1, 6)
+                           END IF
+
+                           IF (PRESENT(dss)) THEN
+                              dss(coset(ax, ay, az), 2, 1) = rbp(1)*dss(coset(ax, ay, az), 1, 1)+ &
+                                                             fx*dss(coset(ax-1, ay, az), 1, 1)+ &
+                                                             f2*sc(coset(ax, ay, az), 1)+ &
+                                                             f2*kvec(1)*dsc(coset(ax, ay, az), 1, 1)
+                              dss(coset(ax, ay, az), 2, 2) = rbp(1)*dss(coset(ax, ay, az), 1, 2)+ &
+                                                             fx*dss(coset(ax-1, ay, az), 1, 2)+ &
+                                                             f2*kvec(1)*dsc(coset(ax, ay, az), 1, 2)
+                              dss(coset(ax, ay, az), 2, 3) = rbp(1)*dss(coset(ax, ay, az),1 , 3)+ &
+                                                             fx*dss(coset(ax-1, ay, az), 1, 3)+ &
+                                                             f2*kvec(1)*dsc(coset(ax, ay, az), 1, 3)
+                           END IF
+                           IF (PRESENT(ddss)) THEN
+                              ddss(coset(ax, ay, az), 2, 1) = rbp(1)*ddss(coset(ax, ay, az), 1, 1)+ &
+                                                              fx*ddss(coset(ax-1, ay, az), 1, 1)+ &
+                                                              2*f2*sc(coset(ax, ay, az), 1)+ &
+                                                              f2*kvec(1)*ddsc(coset(ax, ay, az), 1, 1)
+                              ddss(coset(ax, ay, az), 2, 2) = rbp(1)*ddss(coset(ax, ay, az), 1, 2)+ &
+                                                              fx*ddss(coset(ax-1, ay, az), 1, 2)+ &
+                                                              f2*dsc(coset(ax, ay, az), 1, 2)+ &
+                                                              f2*kvec(1)*ddsc(coset(ax, ay, az), 1, 2)
+                              ddss(coset(ax, ay, az), 2, 3) = rbp(1)*ddss(coset(ax, ay, az), 1, 3)+ &
+                                                              fx*ddss(coset(ax-1, ay, az), 1, 3)+ &
+                                                              f2*dss(coset(ax, ay, az), 1, 3)+ &
+                                                              f2*kvec(1)*ddsc(coset(ax, ay, az), 1, 3)
+
+                              ddss(coset(ax, ay, az), 2, 4) = rbp(1)*ddss(coset(ax, ay, az), 1, 4)+ &
+                                                              fx*dss(coset(ax-1, ay, az), 1, 4)+ &
+                                                              f2*kvec(1)*ddsc(coset(ax, ay, az), 1, 4)
+                              ddss(coset(ax, ay, az), 2, 5) = rbp(1)*ddss(coset(ax, ay, az), 1, 5)+ &
+                                                              fx*dss(coset(ax-1, ay, az), 1, 5)+ &
+                                                              f2*kvec(1)*ddsc(coset(ax, ay, az), 1, 5)
+
+                              ddss(coset(ax, ay, az), 2, 6) = rbp(1)*ddss(coset(ax, ay, az), 1, 6)+ &
+                                                              fx*dss(coset(ax-1, ay, az), 1, 6)+ &
+                                                              f2*kvec(1)*ddsc(coset(ax, ay, az), 1, 6)
+                            END IF
                         END IF
                         IF (ay == 0) THEN
                            sc(coset(ax, ay, az), 3) = rbp(2)*sc(coset(ax, ay, az), 1)- &
                                                       f2*kvec(2)*ss(coset(ax, ay, az), 1)
                            ss(coset(ax, ay, az), 3) = rbp(2)*ss(coset(ax, ay, az), 1)+ &
                                                       f2*kvec(2)*sc(coset(ax, ay, az), 1)
+                        
+                           IF (PRESENT(dsc)) THEN
+                              dsc(coset(ax, ay, az), 3, 1) = rbp(2)*dsc(coset(ax, ay, az), 1, 1)- &
+                                                             f2*kvec(2)*dss(coset(ax, ay, az), 1, 1)
+
+                              dsc(coset(ax, ay, az), 3, 2) = rbp(2)*dsc(coset(ax, ay, az), 1, 2)- &
+                                                             f2*ss(coset(ax, ay, az), 1)- &
+                                                             f2*kvec(2)*dss(coset(ax, ay, az), 1, 2)
+
+                              dsc(coset(ax, ay, az), 3, 3) = rbp(2)*dsc(coset(ax, ay, az), 1, 3)- &
+                                                             f2*kvec(2)*dss(coset(ax, ay, az), 1, 3)
+                           END IF
+                                                
+                           IF (PRESENT(dss)) THEN
+                              dss(coset(ax, ay, az), 3, 1) = rbp(2)*dss(coset(ax, ay, az), 1, 1)+ &
+                                                             f2*kvec(2)*dsc(coset(ax, ay, az), 1, 1)
+
+                              dss(coset(ax, ay, az), 3, 2) = rbp(2)*dss(coset(ax, ay, az), 1, 2)+ &
+                                                             f2*sc(coset(ax, ay, az), 1)+ &
+                                                             f2*kvec(2)*dsc(coset(ax, ay, az), 1, 2)
+
+                              dss(coset(ax, ay, az), 3, 3) = rbp(2)*dss(coset(ax, ay, az), 1, 3)+ &
+                                                             f2*kvec(2)*dsc(coset(ax, ay, az), 1, 3)
+                           END IF
+                           IF (PRESENT(ddsc)) THEN
+                              ddsc(coset(ax, ay, az), 3, 1) = rbp(2)*ddsc(coset(ax, ay, az), 1, 1)- &
+                                                              f2*kvec(2)*ddss(coset(ax, ay, az), 1, 1)
+
+                              ddsc(coset(ax, ay, az), 3, 2) = rbp(2)*ddsc(coset(ax, ay, az), 1, 2)- &
+                                                              f2*dss(coset(ax, ay, az), 1, 2)- &
+                                                              f2*kvec(2)*ddss(coset(ax, ay, az), 1, 2)
+
+                              ddsc(coset(ax, ay, az), 3, 3) = rbp(2)*ddsc(coset(ax, ay, az), 1, 3)- &
+                                                              f2*kvec(2)*ddss(coset(ax, ay, az), 1, 3)
+
+                              ddsc(coset(ax, ay, az), 3, 4) = rbp(2)*ddsc(coset(ax, ay, az), 1, 4)- &
+                                                              2*f2*dss(coset(ax, ay, az), 1, 2)- &
+                                                              f2*kvec(2)*ddss(coset(ax, ay, az), 1, 4)
+
+                              ddsc(coset(ax, ay, az), 3, 5) = rbp(2)*ddsc(coset(ax, ay, az), 1, 5)- &
+                                                              f2*dss(coset(ax, ay, az), 1, 3)- &
+                                                              f2*kvec(2)*ddss(coset(ax, ay, az), 1, 5)
+                            
+                              ddsc(coset(ax, ay, az), 3, 6) = rbp(2)*ddsc(coset(ax, ay, az), 1, 6)- &
+                                                              f2*kvec(2)*ddss(coset(ax, ay, az), 1, 6)
+                           END IF
+                           IF (PRESENT(ddss)) THEN
+                              ddss(coset(ax, ay, az), 3, 1) = rbp(2)*ddss(coset(ax, ay, az), 1, 1)+ &
+                                                              f2*kvec(2)*ddsc(coset(ax, ay, az), 1, 1)
+
+                              ddss(coset(ax, ay, az), 3, 2) = rbp(2)*ddss(coset(ax, ay, az), 1, 2)+ &
+                                                              f2*dsc(coset(ax, ay, az), 1, 2)+ &
+                                                              f2*kvec(2)*ddsc(coset(ax, ay, az), 1, 2)
+                              
+                              ddss(coset(ax, ay, az), 3, 3) = rbp(2)*ddss(coset(ax, ay, az), 1, 3)+ &
+                                                              f2*kvec(2)*ddsc(coset(ax, ay, az), 1, 3)
+
+                              ddss(coset(ax, ay, az), 3, 4) = rbp(2)*ddss(coset(ax, ay, az), 1, 4)+ &
+                                                              2*f2*dsc(coset(ax, ay, az), 1, 2)+ &
+                                                              f2*kvec(2)*ddsc(coset(ax, ay, az), 1, 4)
+                              
+                              ddss(coset(ax, ay, az), 3, 5) = rbp(2)*ddss(coset(ax, ay, az), 1, 5)+ &
+                                                              f2*dsc(coset(ax, ay, az), 1, 3)+ &
+                                                              f2*kvec(2)*ddsc(coset(ax, ay, az), 1, 5)
+                            
+                              ddss(coset(ax, ay, az), 3, 6) = rbp(2)*ddss(coset(ax, ay, az), 1, 6)+ &
+                                                              f2*kvec(2)*ddsc(coset(ax, ay, az), 1, 6)
+                           END IF
+                                                
                         ELSE
                            sc(coset(ax, ay, az), 3) = rbp(2)*sc(coset(ax, ay, az), 1)+ &
                                                       fy*sc(coset(ax, ay-1, az), 1)- &
@@ -870,6 +1173,94 @@ ddss = 0
                            ss(coset(ax, ay, az), 3) = rbp(2)*ss(coset(ax, ay, az), 1)+ &
                                                       fy*ss(coset(ax, ay-1, az), 1)+ &
                                                       f2*kvec(2)*sc(coset(ax, ay, az), 1)
+                           
+                           IF (PRESENT(dsc)) THEN
+                              dsc(coset(ax, ay, az), 3, 1) = rbp(2)*dsc(coset(ax, ay, az), 1, 1)+ &
+                                                             fy*dsc(coset(ax, ay-1, az), 1, 1)- &
+                                                             f2*kvec(2)*dss(coset(ax, ay, az), 1, 1)
+
+                              dsc(coset(ax, ay, az), 3, 2) = rbp(2)*dsc(coset(ax, ay, az), 1, 2)+ &
+                                                             fy*dsc(coset(ax, ay-1, az), 1, 2)- &
+                                                             f2*ss(coset(ax, ay, az), 1)- &
+                                                             f2*kvec(2)*dss(coset(ax, ay, az), 1, 2)
+
+                              dsc(coset(ax, ay, az), 3, 3) = rbp(2)*dsc(coset(ax, ay, az), 1, 3)+ &
+                                                             fy*dsc(coset(ax, ay-1, az), 1, 3)- &
+                                                             f2*kvec(2)*dss(coset(ax, ay, az), 1, 3)
+                           END IF
+                                                
+                           IF (PRESENT(ddsc)) THEN
+                              ddsc(coset(ax, ay, az), 3, 1) = rbp(2)*ddsc(coset(ax, ay, az), 1, 1)+ &
+                                                              fy*ddsc(coset(ax, ay-1, az), 1, 1)- &
+                                                              f2*kvec(2)*ddss(coset(ax, ay, az), 1, 1)
+
+                              ddsc(coset(ax, ay, az), 3, 2) = rbp(2)*ddsc(coset(ax, ay, az), 1, 2)+ &
+                                                              fy*ddsc(coset(ax, ay-1, az), 1, 2)- &
+                                                              f2*dss(coset(ax, ay, az), 1, 2)- &
+                                                              f2*kvec(2)*ddss(coset(ax, ay, az), 1, 2)
+
+                              ddsc(coset(ax, ay, az), 3, 3) = rbp(2)*ddsc(coset(ax, ay, az), 1, 3)+ &
+                                                              fy*ddsc(coset(ax, ay-1, az), 1, 3)- &
+                                                              f2*kvec(2)*ddss(coset(ax, ay, az), 1, 3)
+
+                              ddsc(coset(ax, ay, az), 3, 4) = rbp(2)*ddsc(coset(ax, ay, az), 1, 4)+ &
+                                                              fy*ddsc(coset(ax, ay-1, az), 1, 4)- &
+                                                              2*f2*dss(coset(ax, ay, az), 1, 2)- &
+                                                              f2*kvec(2)*ddss(coset(ax, ay, az), 1, 4)
+
+                              ddsc(coset(ax, ay, az), 3, 5) = rbp(2)*ddsc(coset(ax, ay, az), 1, 5)+ &
+                                                              fy*ddsc(coset(ax, ay-1, az), 1, 5)- &
+                                                              f2*dss(coset(ax, ay, az), 1, 3)- &
+                                                              f2*kvec(2)*ddss(coset(ax, ay, az), 1, 5)
+                            
+                              ddsc(coset(ax, ay, az), 3, 6) = rbp(2)*ddsc(coset(ax, ay, az), 1, 6)+ &
+                                                              fy*ddsc(coset(ax, ay-1, az), 1, 6)- &
+                                                              f2*kvec(2)*ddss(coset(ax, ay, az), 1, 6)
+                           END IF
+                           IF (PRESENT(dss)) THEN
+                              dss(coset(ax, ay, az), 3, 1) = rbp(2)*dss(coset(ax, ay, az), 1, 1)+ &
+                                                             fy*dss(coset(ax, ay-1, az), 1, 1)+ &
+                                                             f2*kvec(2)*dsc(coset(ax, ay, az), 1, 1)
+
+                              dss(coset(ax, ay, az), 3, 2) = rbp(2)*dss(coset(ax, ay, az), 1, 2)+ &
+                                                             fy*dss(coset(ax, ay-1, az), 1, 2)+ &
+                                                             f2*sc(coset(ax, ay, az), 1)+ &
+                                                             f2*kvec(2)*dsc(coset(ax, ay, az), 1, 2)
+
+                              dss(coset(ax, ay, az), 3, 3) = rbp(2)*dss(coset(ax, ay, az), 1, 3)+ &
+                                                             fy*dss(coset(ax, ay-1, az), 1, 3)+ &
+                                                             f2*kvec(2)*dsc(coset(ax, ay, az), 1, 3)
+                           END IF
+                                                
+                           IF (PRESENT(ddss)) THEN
+                              ddss(coset(ax, ay, az), 3, 1) = rbp(2)*ddss(coset(ax, ay, az), 1, 1)+ &
+                                                              fy*ddss(coset(ax, ay-1, az), 1, 1)+ &
+                                                              f2*kvec(2)*ddsc(coset(ax, ay, az), 1, 1)
+
+                              ddss(coset(ax, ay, az), 3, 2) = rbp(2)*ddss(coset(ax, ay, az), 1, 2)+ &
+                                                              fy*ddss(coset(ax, ay-1, az), 1, 2)+ &
+                                                              f2*dsc(coset(ax, ay, az), 1, 2)+ &
+                                                              f2*kvec(2)*ddsc(coset(ax, ay, az), 1, 2)
+
+                              ddss(coset(ax, ay, az), 3, 3) = rbp(2)*ddss(coset(ax, ay, az), 1, 3)+ &
+                                                              fy*ddss(coset(ax, ay-1, az), 1, 3)+ &
+                                                              f2*kvec(2)*ddsc(coset(ax, ay, az), 1, 3)
+
+                              ddss(coset(ax, ay, az), 3, 4) = rbp(2)*ddss(coset(ax, ay, az), 1, 4)+ &
+                                                              fy*ddss(coset(ax, ay-1, az), 1, 4)+ &
+                                                              2*f2*dsc(coset(ax, ay, az), 1, 2)+ &
+                                                              f2*kvec(2)*ddsc(coset(ax, ay, az), 1, 4)
+                              
+                              ddss(coset(ax, ay, az), 3, 5) = rbp(2)*ddss(coset(ax, ay, az), 1, 5)+ &
+                                                              fy*ddss(coset(ax, ay-1, az), 1, 5)+ &
+                                                              f2*dsc(coset(ax, ay, az), 1, 3)+ &
+                                                              f2*kvec(2)*ddsc(coset(ax, ay, az), 1, 5)
+                            
+                              ddss(coset(ax, ay, az), 3, 6) = rbp(2)*ddss(coset(ax, ay, az), 1, 6)+ &
+                                                              fy*ddss(coset(ax, ay-1, az), 1, 6)+ &
+                                                              f2*kvec(2)*ddsc(coset(ax, ay, az), 1, 6)
+                           END IF
+                                                
                         END IF
                         IF (az == 0) THEN
                            sc(coset(ax, ay, az), 4) = rbp(3)*sc(coset(ax, ay, az), 1)- &
@@ -883,6 +1274,41 @@ ddss = 0
                            ss(coset(ax, ay, az), 4) = rbp(3)*ss(coset(ax, ay, az), 1)+ &
                                                       fz*ss(coset(ax, ay, az-1), 1)+ &
                                                       f2*kvec(3)*sc(coset(ax, ay, az), 1)
+                  
+                                          
+                           IF (PRESENT(dsc)) THEN                        
+                              dsc(coset(ax, ay, az), 4, 1) = rbp(3)*dsc(coset(ax, ay, az), 1, 1)+ &
+                                                             fz*dsc(coset(ax, ay, az-1), 1, 1)- &
+                                                             f2*kvec(3)*dss(coset(ax, ay, az), 1, 1)
+                                          
+                              dsc(coset(ax, ay, az), 4, 2) = rbp(3)*dsc(coset(ax, ay, az), 1, 2)+ &
+                                                             fz*dsc(coset(ax, ay, az-1), 1, 2)- &
+                                                             f2*kvec(3)*dss(coset(ax, ay, az), 1, 2)
+                                          
+                              dsc(coset(ax, ay, az), 4, 3) = rbp(3)*dsc(coset(ax, ay, az), 1, 3)+ &
+                                                             fz*dsc(coset(ax, ay, az-1), 1, 3)- &
+                                                             f2*ss(coset(ax, ay, az), 1)- &
+                                                             f2*kvec(3)*dss(coset(ax, ay, az), 1, 3)
+                           END IF
+
+
+
+                           IF (PRESENT(dss)) THEN                        
+                              dss(coset(ax, ay, az), 4, 1) = rbp(3)*dss(coset(ax, ay, az), 1, 1)+ &
+                                                             fz*dss(coset(ax, ay, az-1), 1, 1)+ &
+                                                             f2*kvec(3)*dsc(coset(ax, ay, az), 1, 1)
+                                          
+                              dss(coset(ax, ay, az), 4, 2) = rbp(3)*dss(coset(ax, ay, az), 1, 2)+ &
+                                                             fz*dss(coset(ax, ay, az-1), 1, 2)+ &
+                                                             f2*kvec(3)*dsc(coset(ax, ay, az), 1, 2)
+                                          
+                              dss(coset(ax, ay, az), 4, 3) = rbp(3)*dss(coset(ax, ay, az), 1, 3)+ &
+                                                             fz*dss(coset(ax, ay, az-1), 1, 3)+ &
+                                                             f2*sc(coset(ax, ay, az), 1)+ &
+                                                             f2*kvec(3)*dsc(coset(ax, ay, az), 1, 3)
+                           END IF
+
+
                         END IF
                      END DO
                   END DO
