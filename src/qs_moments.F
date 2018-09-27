@@ -48,8 +48,9 @@ MODULE qs_moments
                                               put_results
    USE cp_result_types,                 ONLY: cp_result_type
    USE dbcsr_api,                       ONLY: &
-        dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_distribution_type, &
-        dbcsr_get_block_p, dbcsr_p_type, dbcsr_set, dbcsr_trace, dbcsr_type, dbcsr_type_symmetric
+        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_distribution_type, &
+        dbcsr_get_block_p, dbcsr_p_type, dbcsr_set, dbcsr_trace, dbcsr_type, dbcsr_type_symmetric, &
+        dbcsr_print, dbcsr_scale
    USE distribution_1d_types,           ONLY: distribution_1d_type
    USE kinds,                           ONLY: default_string_length,&
                                               dp
@@ -96,6 +97,8 @@ MODULE qs_moments
    ! Public subroutines
    PUBLIC :: build_berry_moment_matrix, build_local_moment_matrix
    PUBLIC :: build_berry_moment_matrix2
+   PUBLIC :: build_berry_moment_matrix3
+   PUBLIC :: debug_berry_moment_matrix
    PUBLIC :: build_berry_kpoint_matrix
    PUBLIC :: qs_moment_berry_phase, qs_moment_locop
    PUBLIC :: qs_moment_berry_phase2
@@ -563,6 +566,651 @@ CONTAINS
 
    END SUBROUTINE build_local_magmom_matrix
 
+
+! **************************************************************************************************
+!> \brief Debugging of moments integral cossin, and its derivatives wrt k
+!>        Check analytical integrals using the numerical integrals as refernce
+!> \param qs_env ...
+!> \param cosmat ...
+!> \param sinmat ...
+!> \param kvec ...
+!> \param sab_orb_external ...
+!> \param basis_type ...
+!> \param nderivative ... Order of derivative wrt k
+! **************************************************************************************************
+   SUBROUTINE debug_berry_moment_matrix(qs_env, nmoments)
+   
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      INTEGER, INTENT(IN)                                :: nmoments
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'debug_berry_moment_matrix', &
+         routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: i, j, k, l, nmom, handle
+      REAL(dp), DIMENSION(3)                             :: kvec
+      REAL(dp)                                           :: std_value
+      TYPE(cell_type), POINTER                           :: cell
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
+      TYPE(dbcsr_type), POINTER                          :: cosmat, sinmat
+
+      ! fbelle
+      TYPE(dbcsr_type), DIMENSION(:), POINTER            :: dkcos, dksin
+      TYPE(dbcsr_type), DIMENSION(:), POINTER            :: d2kcos, d2ksin
+      REAL(KIND=dp)                                      :: dx   
+
+      TYPE(dbcsr_type), DIMENSION(:,:), POINTER          :: analyt_cosmat, analyt_sinmat
+      TYPE(dbcsr_type), DIMENSION(:,:), POINTER          :: numer_cosmat, numer_sinmat
+!      TYPE(dbcsr_type), DIMENSION(:), POINTER            :: numcos, numsin
+      REAL (KIND=dp), DIMENSION(3,3)                     :: anactrace, anastrace
+      REAL (KIND=dp), DIMENSION(3,3)                     :: numctrace, numstrace
+
+      CALL timeset(routineN, handle)
+
+      ! restrict maximum moment available
+      nmom = MIN(nmoments, 2)
+
+      NULLIFY (cell, matrix_s)
+
+      CALL get_qs_env(qs_env, &
+                      cell = cell, &
+                      matrix_s = matrix_s)
+
+      NULLIFY (cosmat, sinmat)
+      ALLOCATE (cosmat, sinmat)
+      CALL dbcsr_copy(cosmat, matrix_s(1)%matrix, 'COS MOM')
+      CALL dbcsr_copy(sinmat, matrix_s(1)%matrix, 'SIN MOM')
+      CALL dbcsr_set(cosmat, 0.0_dp)
+      CALL dbcsr_set(sinmat, 0.0_dp)
+
+      ! Init matrices to store analytically calculated matrices
+      NULLIFY (analyt_cosmat, analyt_sinmat)
+      ALLOCATE (analyt_cosmat(3,3), analyt_sinmat(3,3))
+      ! Init matrices to store numerically calculated matrices
+      NULLIFY (numer_cosmat, numer_sinmat)
+      ALLOCATE (numer_cosmat(3,3), numer_sinmat(3,3))
+
+      DO i = 1, 3
+         DO j = 1, 3
+            CALL dbcsr_copy(analyt_cosmat(i,j), matrix_s(1)%matrix, 'COS ANAL')
+            CALL dbcsr_copy(analyt_sinmat(i,j), matrix_s(1)%matrix, 'SIN ANAL')
+            CALL dbcsr_set(analyt_cosmat(i,j), 0.0_dp)
+            CALL dbcsr_set(analyt_sinmat(i,j), 0.0_dp)
+
+            CALL dbcsr_copy(numer_cosmat(i,j), matrix_s(1)%matrix, 'COS NUMER')
+            CALL dbcsr_copy(numer_sinmat(i,j), matrix_s(1)%matrix, 'SIN NUMER')
+            CALL dbcsr_set(numer_cosmat(i,j), 0.0_dp)
+            CALL dbcsr_set(numer_sinmat(i,j), 0.0_dp)
+         END DO
+      END DO         
+
+!      ! more matrices for numer storage
+!      NULLIFY (numcos, numsin)
+!      ALLOCATE (numcos(2), numsin(2))
+!
+!      DO i = 1, 2
+!         CALL dbcsr_copy(numcos(i), matrix_s(1)%matrix, 'COS MOM')
+!         CALL dbcsr_copy(numsin(i), matrix_s(1)%matrix, 'SIN MOM')
+!         CALL dbcsr_set(numcos(i), 0.0_dp)
+!         CALL dbcsr_set(numsin(i), 0.0_dp)
+!      END DO         
+
+      ! Initialize and allocate matrices to store derivatives
+      IF(nmom >= 1) THEN
+         NULLIFY(dkcos, dksin)
+         ALLOCATE(dkcos(3), dksin(3))
+         DO i = 1, 3
+            CALL dbcsr_copy(dkcos(i), matrix_s(1)%matrix, 'DKCOS MOM')
+            CALL dbcsr_copy(dksin(i), matrix_s(1)%matrix, 'DKSIN MOM')
+            CALL dbcsr_set(dkcos(i), 0.0_dp)
+            CALL dbcsr_set(dksin(i), 0.0_dp)
+         END DO
+      END IF
+      IF(nmom >= 2) THEN
+         NULLIFY(d2kcos, d2ksin)
+         ALLOCATE(d2kcos(6), d2ksin(6))
+         DO i = 1, 6
+            CALL dbcsr_copy(d2kcos(i), matrix_s(1)%matrix, 'D2KCOS MOM')
+            CALL dbcsr_copy(d2ksin(i), matrix_s(1)%matrix, 'D2KSIN MOM')
+            CALL dbcsr_set(d2kcos(i), 0.0_dp)
+            CALL dbcsr_set(d2ksin(i), 0.0_dp)
+         END DO
+      END IF
+
+      ! Deviation
+      dx = 1.0E-3
+
+      !------------------------------------------------------------------------
+      ! Analytic call of cossin
+      !------------------------------------------------------------------------
+
+      ! 3 distinct kvecs -> each gives 3 first derivs
+      !                  -> each gives 6 second derivs
+
+      ! First, evaluate analytic 
+      DO l = 1, nmom
+         SELECT CASE (l)
+         CASE (1)
+            ! Dipole
+            DO i = 1, 3
+
+               kvec(:) = twopi*cell%h_inv(i, :)
+               CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec, &
+                                               nderivative = 1, dkcos = dkcos, dksin = dksin)
+       
+               DO j = 1, 3
+                  ! copy cosmat sinmat into separate array
+                  CALL dbcsr_copy(analyt_cosmat(i, j), dkcos(j)) 
+                  CALL dbcsr_copy(analyt_sinmat(i, j), dksin(j)) 
+
+                  ! store only trace
+                  CALL dbcsr_trace(analyt_cosmat(i, j), anactrace(i, j))
+                  CALL dbcsr_trace(analyt_cosmat(i, j), anastrace(i, j))
+               END DO
+            END DO
+
+         CASE (2)
+            ! Quadrupole
+            DO i = 1, 3
+               DO j = i, 3
+                  kvec(:) = twopi*(cell%h_inv(i, :)+cell%h_inv(j, :))
+                  CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec, & 
+                                                  nderivative = 2, dkcos = dkcos, dksin = dksin, &
+                                                  d2kcos = d2kcos, d2ksin = d2ksin)
+                  ! copy cosmat sinmat into separate array
+!                  analyt_cosmat(i, j, 1:6) = d2kcos(1:6) 
+!                  analyt_sinmat(i, j, 1:6) = d2ksin(1:6) 
+               END DO
+            END DO
+         CASE (3)
+            ! Octapole
+            CPABORT("Berry phase moments bigger than 2 not implemented")
+         CASE (4)
+            ! Hexadecapole
+            CPABORT("Berry phase moments bigger than 3 not implemented")
+         CASE DEFAULT
+            CPABORT("Berry phase moments bigger than 4 not implemented")
+         END SELECT
+      END DO
+
+      WRITE(*,*) "----------------------------------------------"
+      WRITE(*,*) "ANALYTIC DERIVATIVE analyt_cosmat(1, 1)"
+      WRITE(*,*) "----------------------------------------------"
+      ! print analytic matrices
+      CALL dbcsr_print(analyt_cosmat(1, 1))
+      CALL dbcsr_print(analyt_cosmat(1, 2))
+      CALL dbcsr_print(analyt_cosmat(1, 3))
+
+      WRITE(*,*) "TRACE dcos:", anactrace(i,1:3)
+      WRITE(*,*) "TRACE dsin:", anastrace(i,1:3)
+
+      WRITE(*,*) "----------------------------------------------"
+    
+      !------------------------------------------------------------------------
+      ! Numerical calculation 
+      !------------------------------------------------------------------------
+
+      ! kvec is a 3D object, needs to be perturbed in all 3 directions
+      ! just like particle position in forces
+      DO i = 1, 3
+
+         ! do each kvec twice: (+) deviation and (-) deviation
+         kvec(:) = twopi*cell%h_inv(i, :)
+
+         ! loop over the 3 derivation directions 
+         DO k = 1, 3
+            ! save inital value of kvec in direction k
+            std_value = kvec(k)
+
+            DO j = 1, 2
+               CALL dbcsr_set(cosmat, 0.0_dp)
+               CALL dbcsr_set(sinmat, 0.0_dp)
+               ! Apply deviation on kvecs direction k
+               kvec(k) = std_value-(-1.0_dp)**j*dx
+
+               ! Compute cosmat and sinmat
+!               cosmat => numcos(j)
+!               sinmat => numsin(j)
+               CALL build_berry_moment_matrix3(qs_env = qs_env, &
+                                               cosmat = cosmat, &
+                                               sinmat = sinmat, &
+                                               kvec = kvec)
+               IF (j = 1) THEN
+                  CALL dbcsr_copy(numer_cosmat(i, k), cosmat)
+                  CALL dbcsr_copy(numer_sinmat(i, k), sinmat)
+                  ! Numcos within j loop
+               END IF
+               IF (j = 2) THEN
+                  CALL dbcsr_copy(numer_cosmat(i,k), cosmat)
+                  CALL dbcsr_copy(numer_cosmat(i,k), sinmat)
+               END IF
+
+            END DO
+            kvec(k) = std_value
+
+            ! Numerical calculation: 
+            ! analyt_cosmat ~~ numer_cosmat = (numcos(2) - numcos(1))/dx
+
+!            CALL dbcsr_add(numer_cosmat(i, k), numcos(2), 1.0_dp, -1.0_dp)
+!            CALL dbcsr_add(numer_sinmat(i, k), numsin(2), 1.0_dp, -1.0_dp)
+
+            ! dividing by dx
+            !CALL dbcsr_scale(numer_cosmat(i, k), 1000.0_dp)
+            !CALL dbcsr_scale(numer_sinmat(i, k), 1000.0_dp)
+
+            ! store only trace
+!            CALL dbcsr_trace(numer_cosmat(i,k), numctrace(i,k))
+!            CALL dbcsr_trace(numer_cosmat(i,k), numstrace(i,k))
+
+         END DO
+
+      END DO
+
+      WRITE(*,*) "----------------------------------------------"
+      WRITE(*,*) "NUMERIC DERIVATIVE numer_cosmat(1, 1)"
+      WRITE(*,*) "----------------------------------------------"
+      CALL dbcsr_print(numer_cosmat(1, 1))
+      CALL dbcsr_print(numer_cosmat(1, 2))
+      CALL dbcsr_print(numer_cosmat(1, 3))
+!      DO k = 1, 3
+!         WRITE(*,*) "TRACE dcos:", numctrace(i,1:3)
+!         WRITE(*,*) "TRACE dsin:", numstrace(i,1:3)
+!      END DO
+      WRITE(*,*) "----------------------------------------------"
+
+
+
+
+
+
+      CALL dbcsr_deallocate_matrix(cosmat)
+      CALL dbcsr_deallocate_matrix(sinmat)
+
+
+      DEALLOCATE(analyt_cosmat)
+      DEALLOCATE(analyt_sinmat)
+      DEALLOCATE(numer_cosmat)
+      DEALLOCATE(numer_sinmat)
+
+
+
+!      CALL dbcsr_deallocate_matrix(analyt_cosmat)
+!      CALL dbcsr_deallocate_matrix(analyt_sinmat)
+!      CALL dbcsr_deallocate_matrix(numer_cosmat)
+!      CALL dbcsr_deallocate_matrix(numer_sinmat)
+!      CALL dbcsr_deallocate_matrix(numcos)
+!      CALL dbcsr_deallocate_matrix(numsin)
+
+
+!      DO i = 1, 3
+!         DO j = 1, 3
+!            CALL dbcsr_deallocate_matrix(analyt_cosmat(i,j))
+!            CALL dbcsr_deallocate_matrix(analyt_sinmat(i,j))
+!           
+!            CALL dbcsr_deallocate_matrix(numer_cosmat(i,j))
+!            CALL dbcsr_deallocate_matrix(numer_sinmat(i,j))
+!         END DO
+!      END DO
+!      DO i = 1, 2
+!            CALL dbcsr_deallocate_matrix(numcos(i))
+!            CALL dbcsr_deallocate_matrix(numsin(i))
+!      END DO
+
+      CALL timestop(handle)
+
+   END SUBROUTINE
+
+! **************************************************************************************************
+!> \brief ...
+!> \param qs_env ...
+!> \param cosmat ...
+!> \param sinmat ...
+!> \param kvec ...
+!> \param sab_orb_external ...
+!> \param basis_type ...
+!> \param nderivative ... Order of derivative wrt k
+!> \param dkcos dksin ... First derivative wrt k of moment matrix
+!> \param d2kcos d2ksin ... Second derivative wrt k of  moment matrix
+! **************************************************************************************************
+   SUBROUTINE build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec, &
+                                         sab_orb_external, basis_type, nderivative, &
+                                         dkcos, dksin, d2kcos, d2ksin)
+
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(dbcsr_type), POINTER                          :: cosmat, sinmat
+      REAL(KIND=dp), DIMENSION(3), INTENT(IN)            :: kvec
+      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
+         OPTIONAL, POINTER                               :: sab_orb_external
+      CHARACTER(len=*), OPTIONAL                         :: basis_type
+      INTEGER, INTENT(IN), OPTIONAL                      :: nderivative
+      TYPE(dbcsr_type), DIMENSION(:), &
+         OPTIONAL, POINTER                               :: dkcos, dksin, d2kcos, d2ksin 
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'build_berry_moment_matrix3', &
+         routineP = moduleN//':'//routineN
+
+      INTEGER :: handle, iatom, icol, ikind, inode, irow, iset, jatom, jkind, jset, ldab, ldsa, &
+         ldsb, ldwork, natom, ncoa, ncob, nkind, nseta, nsetb, sgfa, sgfb
+      INTEGER, DIMENSION(:), POINTER                     :: la_max, la_min, lb_max, lb_min, npgfa, &
+                                                            npgfb, nsgfa, nsgfb
+      INTEGER, DIMENSION(:, :), POINTER                  :: first_sgfa, first_sgfb
+      LOGICAL                                            :: found
+      REAL(dp), DIMENSION(:, :), POINTER                 :: cblock, sblock, work
+      REAL(KIND=dp)                                      :: dab
+      REAL(KIND=dp), DIMENSION(3)                        :: ra, rab, rb
+      REAL(KIND=dp), DIMENSION(:), POINTER               :: set_radius_a, set_radius_b
+      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: rpgfa, rpgfb, sphi_a, sphi_b, zeta, zetb
+      TYPE(cell_type), POINTER                           :: cell
+      TYPE(gto_basis_set_p_type), DIMENSION(:), POINTER  :: basis_set_list
+      TYPE(gto_basis_set_type), POINTER                  :: basis_set_a, basis_set_b
+      TYPE(neighbor_list_iterator_p_type), &
+         DIMENSION(:), POINTER                           :: nl_iterator
+      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
+         POINTER                                         :: sab_orb
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
+      TYPE(qs_kind_type), POINTER                        :: qs_kind
+ 
+      ! fbelle
+      INTEGER                                            :: maxder, nder, i
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: cosmint, sinmint
+      REAL(dp), DIMENSION(:, :), POINTER                 :: ckblk1, ckblk2, ckblk3
+      REAL(dp), DIMENSION(:, :), POINTER                 :: skblk1, skblk2, skblk3
+      REAL(dp), DIMENSION(:, :), POINTER                 :: c2kblk1,c2kblk2,c2kblk3,c2kblk4,c2kblk5,c2kblk6
+      REAL(dp), DIMENSION(:, :), POINTER                 :: s2kblk1,s2kblk2,s2kblk3,s2kblk4,s2kblk5,s2kblk6
+
+      CALL timeset(routineN, handle)
+
+      NULLIFY (qs_kind_set, particle_set, sab_orb, cell)
+      CALL get_qs_env(qs_env=qs_env, &
+                      qs_kind_set=qs_kind_set, &
+                      particle_set=particle_set, cell=cell, &
+                      sab_orb=sab_orb)
+
+      IF (PRESENT(sab_orb_external)) sab_orb => sab_orb_external
+
+      CALL dbcsr_set(sinmat, 0.0_dp)
+      CALL dbcsr_set(cosmat, 0.0_dp)
+
+      IF (PRESENT(dkcos) .AND. PRESENT(dksin)) THEN
+         DO i = 1, 3
+            CALL dbcsr_set(dkcos(i), 0.0_dp)
+            CALL dbcsr_set(dksin(i), 0.0_dp)
+         END DO
+      END IF
+      
+      IF (PRESENT(d2kcos) .AND. PRESENT(d2ksin)) THEN
+         DO i = 1, 6
+            CALL dbcsr_set(d2kcos(i), 0.0_dp)
+            CALL dbcsr_set(d2ksin(i), 0.0_dp)
+         END DO
+      END IF
+
+      CALL get_qs_kind_set(qs_kind_set=qs_kind_set, maxco=ldwork, basis_type=basis_type)
+      ldab = ldwork
+
+      ! derivative size
+      IF (PRESENT(nderivative)) THEN
+         nder = nderivative
+      ELSE
+         nder = 0
+      END IF
+      maxder = ncoset(nder)
+
+      ! Allocate array for (a|eikr|b) intrgral and its derivatives
+      ALLOCATE(cosmint(ldab, ldab, maxder))
+      ALLOCATE(sinmint(ldab, ldab, maxder))
+      ALLOCATE (work(ldwork, ldwork))
+
+      nkind = SIZE(qs_kind_set)
+      natom = SIZE(particle_set)
+
+      ALLOCATE (basis_set_list(nkind))
+      DO ikind = 1, nkind
+         qs_kind => qs_kind_set(ikind)
+         CALL get_qs_kind(qs_kind=qs_kind, basis_set=basis_set_a, basis_type=basis_type)
+         IF (ASSOCIATED(basis_set_a)) THEN
+            basis_set_list(ikind)%gto_basis_set => basis_set_a
+         ELSE
+            NULLIFY (basis_set_list(ikind)%gto_basis_set)
+         END IF
+      END DO
+      CALL neighbor_list_iterator_create(nl_iterator, sab_orb)
+      DO WHILE (neighbor_list_iterate(nl_iterator) == 0)
+         CALL get_iterator_info(nl_iterator, ikind=ikind, jkind=jkind, inode=inode, &
+                                iatom=iatom, jatom=jatom, r=rab)
+         basis_set_a => basis_set_list(ikind)%gto_basis_set
+         IF (.NOT. ASSOCIATED(basis_set_a)) CYCLE
+         basis_set_b => basis_set_list(jkind)%gto_basis_set
+         IF (.NOT. ASSOCIATED(basis_set_b)) CYCLE
+         ! basis ikind
+         first_sgfa => basis_set_a%first_sgf
+         la_max => basis_set_a%lmax
+         la_min => basis_set_a%lmin
+         npgfa => basis_set_a%npgf
+         nseta = basis_set_a%nset
+         nsgfa => basis_set_a%nsgf_set
+         rpgfa => basis_set_a%pgf_radius
+         set_radius_a => basis_set_a%set_radius
+         sphi_a => basis_set_a%sphi
+         zeta => basis_set_a%zet
+         ! basis jkind
+         first_sgfb => basis_set_b%first_sgf
+         lb_max => basis_set_b%lmax
+         lb_min => basis_set_b%lmin
+         npgfb => basis_set_b%npgf
+         nsetb = basis_set_b%nset
+         nsgfb => basis_set_b%nsgf_set
+         rpgfb => basis_set_b%pgf_radius
+         set_radius_b => basis_set_b%set_radius
+         sphi_b => basis_set_b%sphi
+         zetb => basis_set_b%zet
+         
+         ldsa = SIZE(sphi_a, 1)
+         ldsb = SIZE(sphi_b, 1)
+
+         IF (iatom <= jatom) THEN
+            irow = iatom
+            icol = jatom
+         ELSE
+            irow = jatom
+            icol = iatom
+         END IF
+
+         NULLIFY (cblock)
+         CALL dbcsr_get_block_p(matrix=cosmat, &
+                                row=irow, col=icol, BLOCK=cblock, found=found)
+         NULLIFY (sblock)
+         CALL dbcsr_get_block_p(matrix=sinmat, &
+                                row=irow, col=icol, BLOCK=sblock, found=found)
+   
+         IF(PRESENT(dkcos) .AND. PRESENT(dksin)) THEN
+!            WRITE(*,*) "dkcos - associate blocks"
+           
+            ! THIS IS AWEFUL - but 'BLOCK' wants a pointer
+            NULLIFY (ckblk1,ckblk2,ckblk3)
+            NULLIFY (skblk1,skblk2,skblk3)
+
+               CALL dbcsr_get_block_p(matrix=dkcos(1), &
+                                      row=irow, col=icol, BLOCK=ckblk1, found=found)
+               CALL dbcsr_get_block_p(matrix=dkcos(2), &
+                                      row=irow, col=icol, BLOCK=ckblk2, found=found)
+               CALL dbcsr_get_block_p(matrix=dkcos(3), &
+                                      row=irow, col=icol, BLOCK=ckblk3, found=found)
+               CALL dbcsr_get_block_p(matrix=dksin(1), &
+                                      row=irow, col=icol, BLOCK=skblk1, found=found)
+               CALL dbcsr_get_block_p(matrix=dksin(2), &
+                                      row=irow, col=icol, BLOCK=skblk2, found=found)
+               CALL dbcsr_get_block_p(matrix=dksin(3), &
+                                      row=irow, col=icol, BLOCK=skblk3, found=found)
+         END IF         
+
+         IF(PRESENT(d2kcos) .AND. PRESENT(d2ksin)) THEN
+!            WRITE(*,*) "d2kcos - associate blocks"
+      
+            ! THIS IS AWEFUL - but 'BLOCK' wants a pointer
+            NULLIFY (c2kblk1,c2kblk2,c2kblk3,c2kblk4,c2kblk5,c2kblk6)
+            NULLIFY (s2kblk1,s2kblk2,s2kblk3,s2kblk4,s2kblk5,s2kblk6)
+
+               CALL dbcsr_get_block_p(matrix=d2kcos(1), &
+                                      row=irow, col=icol, BLOCK=c2kblk1, found=found)
+               CALL dbcsr_get_block_p(matrix=d2kcos(2), &
+                                      row=irow, col=icol, BLOCK=c2kblk2, found=found)
+               CALL dbcsr_get_block_p(matrix=d2kcos(3), &
+                                      row=irow, col=icol, BLOCK=c2kblk3, found=found)
+               CALL dbcsr_get_block_p(matrix=d2kcos(4), &
+                                      row=irow, col=icol, BLOCK=c2kblk4, found=found)
+               CALL dbcsr_get_block_p(matrix=d2ksin(5), &
+                                      row=irow, col=icol, BLOCK=c2kblk5, found=found)
+               CALL dbcsr_get_block_p(matrix=d2kcos(6), &
+                                      row=irow, col=icol, BLOCK=c2kblk6, found=found)
+
+               CALL dbcsr_get_block_p(matrix=d2ksin(1), &
+                                      row=irow, col=icol, BLOCK=s2kblk1, found=found)
+               CALL dbcsr_get_block_p(matrix=d2ksin(2), &
+                                      row=irow, col=icol, BLOCK=s2kblk2, found=found)
+               CALL dbcsr_get_block_p(matrix=d2ksin(3), &
+                                      row=irow, col=icol, BLOCK=s2kblk3, found=found)
+               CALL dbcsr_get_block_p(matrix=d2ksin(4), &
+                                      row=irow, col=icol, BLOCK=s2kblk4, found=found)
+               CALL dbcsr_get_block_p(matrix=d2ksin(5), &
+                                      row=irow, col=icol, BLOCK=s2kblk5, found=found)
+               CALL dbcsr_get_block_p(matrix=d2ksin(6), &
+                                      row=irow, col=icol, BLOCK=s2kblk6, found=found)
+         END IF         
+
+         IF (ASSOCIATED(cblock) .AND. .NOT. ASSOCIATED(sblock) .OR. &
+             .NOT. ASSOCIATED(cblock) .AND. ASSOCIATED(sblock)) THEN
+            CPABORT("")
+         ENDIF
+
+         IF (ASSOCIATED(cblock) .AND. ASSOCIATED(sblock)) THEN
+
+            ra(:) = pbc(particle_set(iatom)%r(:), cell)
+            rb(:) = ra+rab
+            dab = SQRT(rab(1)*rab(1)+rab(2)*rab(2)+rab(3)*rab(3))
+
+            DO iset = 1, nseta
+
+               ncoa = npgfa(iset)*ncoset(la_max(iset))
+               sgfa = first_sgfa(1, iset)
+               
+               DO jset = 1, nsetb
+
+                  IF (set_radius_a(iset)+set_radius_b(jset) < dab) CYCLE
+
+                  ncob = npgfb(jset)*ncoset(lb_max(jset))
+                  sgfb = first_sgfb(1, jset)
+
+                  ! Calculate the (a|exp(-ikr)|b) integrals and derivatives (a|(-ir)^nder*exp(-ikr)|b)
+                  ! Careful, this derivative is wrt k, NOT the ion positions
+                  SELECT CASE (nder)
+                  CASE(0)
+                    CALL cossin2(la_max(iset), npgfa(iset), zeta(:, iset), rpgfa(:, iset), la_min(iset), &
+                                lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset), &
+                                ra, rb, kvec, cosab = cosmint(:, :, 1), sinab = sinmint(:, :, 1))
+        
+                  CASE(1)
+!                    WRITE(*,*) "cossin2 - First Derivative"
+                    CALL cossin2(la_max(iset), npgfa(iset), zeta(:, iset), rpgfa(:, iset), la_min(iset), &
+                                lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset), &
+                                ra, rb, kvec, cosab = cosmint(:, :, 1), sinab = sinmint(:, :, 1), &
+                                dksc = cosmint(:, :, 2:4), dkss = sinmint(:, :, 2:4))
+
+                  CASE(2)
+!                    WRITE(*,*) "cossin2 - Second Derivative"
+                    CALL cossin2(la_max(iset), npgfa(iset), zeta(:, iset), rpgfa(:, iset), la_min(iset), &
+                                lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset), &
+                                ra, rb, kvec, cosab=cosmint(:, :, 1), sinab=sinmint(:, :, 1), &
+                                dksc=cosmint(:, :, 2:4), dkss=sinmint(:, :, 2:4), &
+                                ddksc=cosmint(:, :, 5:10), ddkss=sinmint(:, :, 5:10))
+        
+                  CASE DEFAULT
+                     CPABORT("Derivatives of (a|exp(-ikr)|b) only up to second order")
+                  END SELECT
+
+                 
+                  ! Contraction from cartesian to spherical basis functions 
+                  !WRITE(*,*) "Contract cosmint(:, :, 1)"
+                  CALL contract_cossin(cblock, sblock, &
+                                       iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                       jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                       cosmint(:, :, 1), sinmint(:, :, 1), ldab, work, ldwork)
+
+                  IF (nder >= 1) THEN
+                    ! Contraction of matrices storing first derivatives
+                    !WRITE(*,*) "Contract cosmint(:, :, 2:4)"
+                    CALL contract_cossin(ckblk1, skblk1, &
+                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                         cosmint(:, :, 2), sinmint(:, :, 2), ldab, work, ldwork)
+                    CALL contract_cossin(ckblk2, skblk2, &
+                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                         cosmint(:, :, 3), sinmint(:, :, 3), ldab, work, ldwork)
+                    CALL contract_cossin(ckblk3, skblk3, &
+                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                         cosmint(:, :, 4), sinmint(:, :, 4), ldab, work, ldwork)
+                  END IF
+
+                  IF (nder >= 2) THEN
+                    ! Contraction of matrices storing second derivatives
+                    !WRITE(*,*) "Contract cosmint(:, :, 5:10)"
+                    CALL contract_cossin(c2kblk1, s2kblk1, &
+                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                         cosmint(:, :, 5), sinmint(:, :, 5), ldab, work, ldwork)
+                    CALL contract_cossin(c2kblk2, s2kblk2, &
+                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                         cosmint(:, :, 6), sinmint(:, :, 6), ldab, work, ldwork)
+                    CALL contract_cossin(c2kblk3, s2kblk3, &
+                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                         cosmint(:, :, 7), sinmint(:, :, 7), ldab, work, ldwork)
+                    CALL contract_cossin(c2kblk4, s2kblk4, &
+                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                         cosmint(:, :, 8), sinmint(:, :, 8), ldab, work, ldwork)
+                    CALL contract_cossin(c2kblk5, s2kblk5, &
+                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                         cosmint(:, :, 9), sinmint(:, :, 9), ldab, work, ldwork)
+                    CALL contract_cossin(c2kblk6, s2kblk6, &
+                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                         cosmint(:, :, 10), sinmint(:, :, 10), ldab, work, ldwork)
+                  END IF
+
+               END DO
+            END DO
+
+         ENDIF
+
+      END DO
+
+!      WRITE(*,*) ""
+!      WRITE(*,*) "Integral:"
+!      CALL dbcsr_print(cosmat)
+!      CALL dbcsr_print(sinmat)
+!      CALL dbcsr_print(dkcos(1))
+!      CALL dbcsr_print(dkcos(2))
+!      CALL dbcsr_print(dkcos(3))
+
+      CALL neighbor_list_iterator_release(nl_iterator)
+
+      DEALLOCATE (cosmint)
+      DEALLOCATE (sinmint)
+      DEALLOCATE (work)
+      DEALLOCATE (basis_set_list)
+
+      CALL timestop(handle)
+
+!      WRITE(*,*) "build_berry_moment_matrix3 - END"
+
+   END SUBROUTINE build_berry_moment_matrix3
+
+
 ! **************************************************************************************************
 !> \brief ...
 !> \param qs_env ...
@@ -574,7 +1222,8 @@ CONTAINS
 !> \param nderivative ... Order of derivative wrt k
 ! **************************************************************************************************
    SUBROUTINE build_berry_moment_matrix2(qs_env, cosmat, sinmat, kvec, &
-                                         sab_orb_external, basis_type, nderivative)
+                                         sab_orb_external, basis_type, nderivative, &
+                                         dkcos, dksin, dk2cos, dk2sin )
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(dbcsr_type), POINTER                          :: cosmat, sinmat
@@ -583,6 +1232,9 @@ CONTAINS
          OPTIONAL, POINTER                               :: sab_orb_external
       CHARACTER(len=*), OPTIONAL                         :: basis_type
       INTEGER, INTENT(IN), OPTIONAL                      :: nderivative
+      TYPE(dbcsr_type), DIMENSION(:), &
+         OPTIONAL, POINTER                               :: dkcos, dksin, dk2cos, dk2sin 
+
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'build_berry_moment_matrix2', &
          routineP = moduleN//':'//routineN
@@ -610,9 +1262,12 @@ CONTAINS
       TYPE(qs_kind_type), POINTER                        :: qs_kind
  
       ! fbelle
-      INTEGER                                            :: maxder, nder
+      INTEGER                                            :: maxder, nder, i, j
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: cosmint, sinmint
+      REAL(dp), DIMENSION(:, :, :), POINTER              :: ckblock, skblock
+      REAL(dp), DIMENSION(:, :), POINTER                 :: cos_block, sin_block
 
+      WRITE(*,*) "build_berry_moment_matrix2"
 
       CALL timeset(routineN, handle)
 
@@ -627,6 +1282,23 @@ CONTAINS
       CALL dbcsr_set(sinmat, 0.0_dp)
       CALL dbcsr_set(cosmat, 0.0_dp)
 
+      IF (PRESENT(dkcos) .AND. PRESENT(dksin)) THEN
+
+         WRITE(*,*) "SIZE(dkcos, 1)", SIZE(dkcos, 1)
+
+         DO i = 1, 3
+            CALL dbcsr_set(dkcos(i), 0.0_dp)
+            CALL dbcsr_set(dksin(i), 0.0_dp)
+         END DO
+      END IF
+      
+      IF (PRESENT(dk2cos) .AND. PRESENT(dk2sin)) THEN
+         DO i = 1, 6
+            CALL dbcsr_set(dk2cos(i), 0.0_dp)
+            CALL dbcsr_set(dk2sin(i), 0.0_dp)
+         END DO
+      END IF
+
       CALL get_qs_kind_set(qs_kind_set=qs_kind_set, maxco=ldwork, basis_type=basis_type)
       ldab = ldwork
 
@@ -638,10 +1310,12 @@ CONTAINS
       END IF
       maxder = ncoset(nder)
 
-      ! Allocate array for (a|ekir|b) intrgral and its derivatives
+      ! Allocate array for (a|eikr|b) intrgral and its derivatives
       ALLOCATE(cosmint(ldab, ldab, maxder))
       ALLOCATE(sinmint(ldab, ldab, maxder))
       ALLOCATE (work(ldwork, ldwork))
+
+      WRITE(*,*) "ldab", ldab
 
       nkind = SIZE(qs_kind_set)
       natom = SIZE(particle_set)
@@ -725,6 +1399,23 @@ CONTAINS
          NULLIFY (sblock)
          CALL dbcsr_get_block_p(matrix=sinmat, &
                                 row=irow, col=icol, BLOCK=sblock, found=found)
+   
+         IF(ASSOCIATED(dkcos) .AND. ASSOCIATED(dksin)) THEN
+            NULLIFY (ckblock)
+            NULLIFY (skblock)
+            DO i = 1, 3
+!               cos_block => ckblock(:, :, i)
+!               sin_block => skblock(:, :, i)
+               CALL dbcsr_get_block_p(matrix=dkcos(i), &
+                                      row=irow, col=icol, BLOCK=cos_block, found=found)
+               CALL dbcsr_get_block_p(matrix=dksin(i), &
+                                      row=irow, col=icol, BLOCK=sin_block, found=found)
+            END DO
+         END IF         
+                       
+                       
+                       
+                       
          IF (ASSOCIATED(cblock) .AND. .NOT. ASSOCIATED(sblock) .OR. &
              .NOT. ASSOCIATED(cblock) .AND. ASSOCIATED(sblock)) THEN
             CPABORT("")
@@ -755,31 +1446,72 @@ CONTAINS
                     CALL cossin2(la_max(iset), npgfa(iset), zeta(:, iset), rpgfa(:, iset), la_min(iset), &
                                 lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset), &
                                 ra, rb, kvec, cosab = cosmint(:, :, 1), sinab = sinmint(:, :, 1))
+
+                    ! Contraction from cartesian to spherical basis functions 
+                    CALL contract_cossin(cblock, sblock, &
+                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                         cosmint(:, :, 1), sinmint(:, :, 1), ldab, work, ldwork)
+        
                   CASE(1)
+                    WRITE(*,*) "cossin2 - First Derivative"
                     CALL cossin2(la_max(iset), npgfa(iset), zeta(:, iset), rpgfa(:, iset), la_min(iset), &
                                 lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset), &
                                 ra, rb, kvec, cosab = cosmint(:, :, 1), sinab = sinmint(:, :, 1), &
-                                dsc = cosmint(:, :, 2:4), dss = sinmint(:, :, 2:4))
+                                dksc = cosmint(:, :, 2:4), dkss = sinmint(:, :, 2:4))
+
+                    ! Contraction from cartesian to spherical basis functions 
+                    CALL contract_cossin(cblock, sblock, &
+                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                         cosmint(:, :, 1), sinmint(:, :, 1), ldab, work, ldwork)
+                    ! Contraction of matrices storing first derivatives
+                    DO i = 1, 3
+                       j = i + 1
+                       CALL dbcsr_get_block_p(matrix=dkcos(i), &
+                                              row=irow, col=icol, BLOCK=cos_block, found=found)
+                       CALL dbcsr_get_block_p(matrix=dksin(i), &
+                                              row=irow, col=icol, BLOCK=sin_block, found=found)
+                       
+                       CALL contract_cossin(cos_block, sin_block, &
+                                            iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                            jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                            cosmint(:, :, j), sinmint(:, :, j), ldab, work, ldwork)
+                    END DO
+
                   CASE(2)
+                    WRITE(*,*) "cossin2 - Second Derivative"
                     CALL cossin2(la_max(iset), npgfa(iset), zeta(:, iset), rpgfa(:, iset), la_min(iset), &
                                 lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset), &
                                 ra, rb, kvec, cosab=cosmint(:, :, 1), sinab=sinmint(:, :, 1), &
-                                dsc=cosmint(:, :, 2:4), dss=sinmint(:, :, 2:4), &
-                                ddsc=cosmint(:, :, 5:10), ddss=sinmint(:, :, 5:10))
+                                dksc=cosmint(:, :, 2:4), dkss=sinmint(:, :, 2:4), &
+                                ddksc=cosmint(:, :, 5:10), ddkss=sinmint(:, :, 5:10))
                   CASE DEFAULT
                      CPABORT("Derivatives of (a|exp(-ikr)|b) only up to second order")
                   END SELECT
 
-                  CALL contract_cossin(cblock, sblock, &
-                                       iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
-                                       jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
-                                       cosmint(:, :, 1), sinmint(:, :, 1), ldab, work, ldwork)
+!                  CALL contract_cossin(cblock, sblock, &
+!                                       iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+!                                       jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+!                                       cosmint(:, :, 1), sinmint(:, :, 1), ldab, work, ldwork)
                END DO
             END DO
 
          ENDIF
 
       END DO
+
+      WRITE(*,*) ""
+      WRITE(*,*) "Integral:"
+      CALL dbcsr_print(cosmat)
+      CALL dbcsr_print(sinmat)
+
+      CALL dbcsr_print(dkcos(1))
+      CALL dbcsr_print(dkcos(2))
+      CALL dbcsr_print(dkcos(3))
+
+
+
       CALL neighbor_list_iterator_release(nl_iterator)
 
       DEALLOCATE (cosmint)
@@ -788,6 +1520,8 @@ CONTAINS
       DEALLOCATE (basis_set_list)
 
       CALL timestop(handle)
+
+      WRITE(*,*) "build_berry_moment_matrix2 - END"
 
    END SUBROUTINE build_berry_moment_matrix2
 
@@ -1253,9 +1987,9 @@ CONTAINS
       ! fbelle
       COMPLEX(dp)                                        :: d1(4,3), d2(4, 3), d3(4, 3, 3), &
                                                             d4(4, 3, 3, 3)
+      TYPE(dbcsr_type), DIMENSION(:), POINTER            :: dkcos, dksin
 
    
-
       CPASSERT(ASSOCIATED(qs_env))
 
       WRITE(*,*) "qs_moment_berry_phase2 - BEGINNING"
@@ -1287,7 +2021,12 @@ CONTAINS
       WRITE(*,*) "nmom", nmom
       WRITE(*,*) "nm", nm
       WRITE(*,*) "SIZE(rmom,1)", SIZE(rmom,1)
-    
+   
+
+     ! fbelle
+     ! DEBUGGING OF DERIVATIVES
+     CALL debug_berry_moment_matrix(qs_env, nmoments = 1)
+
 
       NULLIFY (dft_control, rho, cell, particle_set, results, para_env, &
                local_particles, matrix_s, mos, rho_ao)
@@ -1312,6 +2051,24 @@ CONTAINS
       CALL dbcsr_copy(sinmat, matrix_s(1)%matrix, 'SIN MOM')
       CALL dbcsr_set(cosmat, 0.0_dp)
       CALL dbcsr_set(sinmat, 0.0_dp)
+
+      ! Initialize and allocate matrices to store derivatives
+      IF(nmom >= 1) THEN
+         NULLIFY(dkcos, dksin)
+         ALLOCATE(dkcos(3), dksin(3))
+         DO i = 1, 3
+            CALL dbcsr_copy(dkcos(i), matrix_s(1)%matrix, 'DKCOS MOM')
+            CALL dbcsr_copy(dksin(i), matrix_s(1)%matrix, 'DKSIN MOM')
+            CALL dbcsr_set(dkcos(i), 0.0_dp)
+            CALL dbcsr_set(dksin(i), 0.0_dp)
+         END DO
+      END IF
+
+!      WRITE(*,*) "cosmat"
+!      CALL dbcsr_print(cosmat) 
+!      CALL dbcsr_print(dkcos(1))
+!      CALL dbcsr_print(dkcos(2))
+!      CALL dbcsr_print(dkcos(3))
 
       ALLOCATE (op_fm_set(2, dft_control%nspins))
       ALLOCATE (opvec(dft_control%nspins))
@@ -1363,8 +2120,6 @@ CONTAINS
       END DO
       ria = twopi*MATMUL(cell%h_inv, rcc)
       zphase = CMPLX(COS(ria), SIN(ria), dp)**rmom(1, 2)
-
-      WRITE(*,*) "zphase", zphase
 
       zi = 0._dp
       zij = 0._dp
@@ -1463,16 +2218,12 @@ CONTAINS
 !               WRITE(*,* )  "zij(i, :)",  zij(i, :)
             END DO
 
-
-
-
-
             cij = 0.5_dp*cij/twopi/twopi
             cij = MATMUL(MATMUL(cell%hmat, cij), TRANSPOSE(cell%hmat))
 
-            DO i = 1, 3
-               WRITE(*,* )  "cij(i, :)",  cij(i, :)
-            END DO
+!            DO i = 1, 3
+!               WRITE(*,* )  "cij(i, :)",  cij(i, :)
+!            END DO
             DO k = 4, 9
 !               ! old implementation - does not correctly map
 !               ix = indco(1, k+1)
@@ -1538,8 +2289,11 @@ CONTAINS
             ! Dipole
             DO i = 1, 3
                kvec(:) = twopi*cell%h_inv(i, :)
-               WRITE(*,*) "kvec(:)", kvec(:)
-               CALL build_berry_moment_matrix(qs_env, cosmat, sinmat, kvec)
+!               WRITE(*,*) "kvec(:)", kvec(:)
+               CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec, &
+                                               nderivative = 1, dkcos = dkcos, dksin = dksin)
+               !CALL build_berry_moment_matrix2(qs_env, cosmat, sinmat, kvec, &
+               !                                nderivative = 1, dkcos = dkcos, dksin = dksin)
                IF (qs_env%run_rtp) THEN
                   CALL get_qs_env(qs_env, rtp=rtp)
                   CALL get_rtp(rtp, mos_new=mos_new)
@@ -1683,6 +2437,10 @@ CONTAINS
 
       CALL dbcsr_deallocate_matrix(cosmat)
       CALL dbcsr_deallocate_matrix(sinmat)
+
+      DEALLOCATE(dkcos)
+      DEALLOCATE(dksin)
+
 
       DO ispin = 1, dft_control%nspins
          CALL cp_fm_release(opvec(ispin)%matrix)
