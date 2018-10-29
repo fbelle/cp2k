@@ -180,6 +180,8 @@ MODULE qs_scf_post_gpw
    USE qs_mo_types,                     ONLY: get_mo_set,&
                                               mo_set_p_type
    USE qs_moments,                      ONLY: qs_moment_berry_phase,&
+                                              qs_moment_berry_phase2,&
+                                              qs_moment_berry_phase3,&
                                               qs_moment_locop
    USE qs_neighbor_list_types,          ONLY: get_iterator_info,&
                                               get_neighbor_list_set_p,&
@@ -1442,8 +1444,12 @@ CONTAINS
             CPWARN("Moments not implemented for k-point calculations!")
          ELSE
             IF (periodic) THEN
-               CALL qs_moment_berry_phase(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
+               !WRITE(*,*) "qs_scf_post_moments - periodic"
+               !CALL qs_moment_berry_phase(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
+               CALL qs_moment_berry_phase2(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
+               !CALL qs_moment_berry_phase3(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
             ELSE
+               !WRITE(*,*) "qs_scf_post_moments - non periodic"
                CALL qs_moment_locop(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
             END IF
          END IF
