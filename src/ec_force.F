@@ -551,7 +551,7 @@ CONTAINS
 
     ! store these forces contributions in ec_env%force
     !                  to            from
-    CALL qs_axpy_force(ec_env%force, force, alpha = -1.0_dp)
+    CALL qs_axpy_force(ec_env%force, force, alpha = 1.0_dp)
 
     ! Sweet spot - all forces are saved in ec_env%force, and force is about to be purged
     ! can replicate and print force right here, right now
@@ -807,7 +807,7 @@ CONTAINS
       CALL qs_rho_get(ec_env%old_rho, rho_ao_kp = old_rho_ao )
 
       CALL build_overlap_matrix(ks_env, &
-                                nderivative = nder, &
+                                !nderivative = nder, &
                                 !matrixkp_s = ec_env%matrix_s, &
                                 matrixkp_s = matrix_s_proj, &
                                 matrix_name = "OVERLAP MATRIX", &

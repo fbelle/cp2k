@@ -16,7 +16,9 @@ MODULE ec_response_solver
                                               get_atomic_kind_set
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_dbcsr_operations,             ONLY: dbcsr_allocate_matrix_set,&
-                                              dbcsr_deallocate_matrix_set
+                                              dbcsr_deallocate_matrix_set, &
+                                              copy_dbcsr_to_fm, &
+                                              copy_fm_to_dbcsr
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_type
    USE cp_output_handling,              ONLY: cp_p_file,&
@@ -39,7 +41,8 @@ MODULE ec_response_solver
                                               dbcsr_type,&
                                               dbcsr_type_symmetric,&
                                               dbcsr_type_no_symmetry,&
-                                              dbcsr_norm
+                                              dbcsr_norm, &
+                                              dbcsr_hadamard_product
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
                                               section_vals_type,&
                                               section_vals_val_get
@@ -130,6 +133,7 @@ MODULE ec_response_solver
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               copy_fm_to_dbcsr
    USE cp_fm_types,                     ONLY: cp_fm_create,&
+                                              cp_fm_p_type,&
                                               cp_fm_release,&
                                               cp_fm_set_all,&
                                               cp_fm_to_fm_triangular,&
@@ -143,6 +147,9 @@ MODULE ec_response_solver
    USE cp_fm_cholesky,                  ONLY: cp_fm_cholesky_decompose
    USE kg_tnadd_mat,                    ONLY: build_tnadd_mat
    USE input_constants,                 ONLY: kg_tnadd_atomic
+   USE qs_mo_types,                     ONLY: get_mo_set,&
+                                              mo_set_p_type
+
 
 #include "./base/base_uses.f90"
 
@@ -195,7 +202,16 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_s
       TYPE(dbcsr_type)                                   :: matrix_tmp
       TYPE(dbcsr_type)                                   :: matrix_buf1, matrix_buf2
-  
+
+      ! Hadamard product 
+      INTEGER                                            :: nsize
+!      INTEGER                                            :: irow, icol
+      TYPE(cp_fm_p_type), DIMENSION(:), POINTER          :: g2_fm_matrix
+      TYPE(cp_fm_struct_type), POINTER                   :: tmp_fm_struct
+!      REAL(dp)                                           :: elem
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+      REAL(KIND=dp)                                      :: eps_filter
+
   !!---------------------------------------------------------------------------------------
   !!  Initial general setup
   !!---------------------------------------------------------------------------------------
@@ -214,11 +230,12 @@ CONTAINS
                       kg_env = kg_env,&
                       dft_control = dft_control,&
                       ks_env = ks_env)
-  
+
       ! shortcut to ec_type
       !  ec_build_neighborlist has been built during kg_energy_correction call
       ec_env => kg_env%ec_env
       nspins = dft_control%nspins
+      eps_filter = dft_control%qs_control%eps_filter_matrix
   
       NULLIFY (g2_matrix, g2_matrix_inv, matrix_l2, identity_matrix)
   
@@ -252,7 +269,7 @@ CONTAINS
 !         CALL dbcsr_create(matrix_tmp(ispin,1)%matrix, &
 !                           template = ref_matrix, matrix_type = dbcsr_type_no_symmetry)
 !         CALL dbcsr_set(matrix_tmp(ispin, 1)%matrix, 0.0_dp)
-!--------
+         !--------
 
          CALL dbcsr_allocate_matrix_set(identity_matrix, nspins, 1)
          ALLOCATE (identity_matrix(ispin,1)%matrix)
@@ -278,29 +295,79 @@ CONTAINS
       ! Calculate g2_matrix
       CALL ec_g2_matrix(qs_env, ec_env, g2_matrix)
   
-!      IF(para_env%mepos==0) THEN
-!        WRITE(*,*) " ec_response_density - g2_matrix", ASSOCIATED(g2_matrix)
-!        IF(ASSOCIATED(g2_matrix)) THEN
-!              CALL dbcsr_print(g2_matrix(1,1)%matrix)
-!        END IF
-!      END IF
+      IF(para_env%mepos==0) THEN
+        WRITE(*,*) " ec_response_density - g2_matrix", ASSOCIATED(g2_matrix)
+        IF(ASSOCIATED(g2_matrix)) THEN
+              CALL dbcsr_print(g2_matrix(1,1)%matrix, matlab_format = .TRUE.)
+        END IF
+      END IF
   
       ! Calculate g2_matrix^-1
       CALL matrix_inversion(qs_env, matrix_inv = g2_matrix_inv , matrix_in = g2_matrix)
 
+      !------------------------------------------------------------------------
+      ! ELEMENT BY ELEMENT INVERSION
+      !------------------------------------------------------------------------
+     
+      ! Fm matrix init
+      ALLOCATE (g2_fm_matrix(dft_control%nspins))
+      DO ispin = 1, nspins
+         NULLIFY (tmp_fm_struct, blacs_env)
+         CALL get_qs_env(qs_env=qs_env, blacs_env=blacs_env)
+
+         CALL dbcsr_get_info(matrix_s(1, 1)%matrix, nfullrows_total=nsize)
+         CALL cp_fm_struct_create(tmp_fm_struct, nrow_global=nsize, &
+                                  ncol_global=nsize, para_env=para_env, context=blacs_env)
+         NULLIFY (g2_fm_matrix(ispin)%matrix)
+         CALL cp_fm_create(g2_fm_matrix(ispin)%matrix, tmp_fm_struct)
+         CALL cp_fm_struct_release(tmp_fm_struct)
+
+!         !dbcsr -> fm 
+!         CALL copy_dbcsr_to_fm(g2_matrix(ispin, 1)%matrix, g2_fm_matrix(ispin)%matrix)
+!
+!         DO irow = 1, nsize
+!            DO icol = 1, nsize
+!               elem = g2_fm_matrix(ispin)%matrix%local_data(irow, icol)
+!               ! set fm matrix element to its reciprocal
+!               IF(elem .LE. eps_filter) THEN
+!                  g2_fm_matrix(ispin)%matrix%local_data(irow, icol) = 0.0_dp
+!               ELSE
+!                  g2_fm_matrix(ispin)%matrix%local_data(irow, icol) = 1.0_dp / elem
+!               END IF
+!            END DO
+!         END DO
+!
+!         ! fm -> dbcsr
+!         CALL copy_fm_to_dbcsr(g2_fm_matrix(ispin)%matrix, g2_matrix_inv(ispin, 1)%matrix)
+      END DO
+
+      DO ispin = 1, dft_control%nspins
+         CALL cp_fm_release(g2_fm_matrix(ispin)%matrix)
+      END DO
+      
+      DEALLOCATE (g2_fm_matrix)
+
       IF(para_env%mepos==0) THEN
-        WRITE(*,*) " ec_response_density - g2_matrix_inv", ASSOCIATED(g2_matrix)
-        IF(ASSOCIATED(g2_matrix)) THEN
-              CALL dbcsr_print(g2_matrix(1,1)%matrix)
+        WRITE(*,*) " ec_response_density - g2_matrix_inv", ASSOCIATED(g2_matrix_inv)
+        IF(ASSOCIATED(g2_matrix_inv)) THEN
+              CALL dbcsr_print(g2_matrix_inv(1,1)%matrix, matlab_format = .TRUE.)
+        END IF
+      END IF
+      IF(para_env%mepos==0) THEN
+        WRITE(*,*) " ec_response_density - matrix_nsc", ASSOCIATED(ec_env%matrix_nsc)
+        IF(ASSOCIATED(ec_env%matrix_nsc)) THEN
+              CALL dbcsr_print(ec_env%matrix_nsc(1,1)%matrix, matlab_format = .TRUE.)
         END IF
       END IF
 
+      !------------------------------------------------------------------------
+
       !--------------------------------------------------------------------------
   
-      ! test matrix inversion
-      CALL dbcsr_multiply("N", "N", 1.0_dp, g2_matrix(1,1)%matrix, &
-                          g2_matrix_inv(1,1)%matrix, 0.0_dp, identity_matrix(1,1)%matrix)
-  
+!      ! test matrix inversion
+!      CALL dbcsr_multiply("N", "N", 1.0_dp, g2_matrix(1,1)%matrix, &
+!                          g2_matrix_inv(1,1)%matrix, 0.0_dp, identity_matrix(1,1)%matrix)
+!  
 !      IF(para_env%mepos==0) THEN
 !        WRITE(*,*) " ec_response_density - identity_matrix", ASSOCIATED(identity_matrix)
 !        IF(ASSOCIATED(identity_matrix)) THEN
@@ -311,13 +378,15 @@ CONTAINS
       !--------------------------------------------------------------------------
 
       IF(para_env%mepos==0) THEN
-         WRITE(*,*) " ec_response_density - matrix_l2", ASSOCIATED(matrix_l2)
+         WRITE(*,*) " ec_response_density - matrix_l2 - before filled", ASSOCIATED(matrix_l2)
          IF(ASSOCIATED(matrix_l2)) THEN
                CALL dbcsr_print(matrix_l2(1,1)%matrix)
          END IF
       END IF
 
+      !--------------------------------------------------------------------------
       ! Calculate response density
+      !--------------------------------------------------------------------------
       ! [nsc_matrix] * [g2_matrix]^-1 = lambda2 
       DO ispin = 1 , nspins
 
@@ -331,47 +400,62 @@ CONTAINS
 !         CALL dbcsr_desymmetrize(ec_env%matrix_nsc(ispin, 1)%matrix, matrix_buf1)
 !         CALL dbcsr_desymmetrize(g2_matrix_inv(ispin, 1)%matrix, matrix_buf2)
 
-         WRITE(*,*) "matrix_buf1"
-         CALL dbcsr_print(matrix_buf1)
-         WRITE(*,*) "matrix_buf2"
-         CALL dbcsr_print(matrix_buf2)
-
-         CALL dbcsr_multiply("N", "N", 1.0_dp, ec_env%matrix_nsc(ispin,1)%matrix, &
-                             g2_matrix_inv(ispin,1)%matrix, 0.0_dp, matrix_tmp)
-         !CALL dbcsr_multiply("N", "N", 1.0_dp, ec_env%matrix_nsc(ispin,1)%matrix, &
-         !                    g2_matrix_inv(ispin,1)%matrix, 0.0_dp, matrix_l2(ispin,1)%matrix)
-
-!         CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_buf1, &
-!                             matrix_buf2, 0.0_dp, matrix_tmp)
-
-         WRITE(*,*) "matrix_tmp"
-         CALL dbcsr_print(matrix_tmp)
-
-         ! test, "make" a symmetrized response density matrix
-         ! 0.5*(matrix + tranposed_matrix)
-         CALL matrix_symmetrize(matrix_out = matrix_buf1, &
-                                matrix_in = matrix_tmp, &
-                                ref_matrix = ref_matrix)
-         
-         CALL dbcsr_copy(matrix_l2(ispin,1)%matrix, matrix_buf1, name="RESPONSE", keep_sparsity = .TRUE.)
-      END DO
+!         WRITE(*,*) "matrix_buf1"
+!         CALL dbcsr_print(matrix_buf1)
+!         WRITE(*,*) "matrix_buf2"
+!         CALL dbcsr_print(matrix_buf2)
+!
+!         CALL dbcsr_multiply("N", "N", 1.0_dp, ec_env%matrix_nsc(ispin,1)%matrix, &
+!                             g2_matrix_inv(ispin,1)%matrix, 0.0_dp, matrix_tmp)
+!         CALL dbcsr_multiply("N", "N", 1.0_dp, ec_env%matrix_nsc(ispin,1)%matrix, &
+!                             g2_matrix_inv(ispin,1)%matrix, 0.0_dp, matrix_l2(ispin,1)%matrix)
+!
+!!         CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_buf1, &
+!!                             matrix_buf2, 0.0_dp, matrix_tmp)
+!
+!         WRITE(*,*) "matrix_tmp"
+!         CALL dbcsr_print(matrix_tmp)
+!
+!         ! test, "make" a symmetrized response density matrix
+!         ! 0.5*(matrix + tranposed_matrix)
+!         CALL matrix_symmetrize(matrix_out = matrix_buf1, &
+!                                matrix_in = matrix_tmp, &
+!                                ref_matrix = ref_matrix)
+!         
+!         CALL dbcsr_copy(matrix_l2(ispin,1)%matrix, matrix_buf1, name="RESPONSE", keep_sparsity = .TRUE.)
  
-      CALL dbcsr_release(matrix_tmp)
-      CALL dbcsr_release(matrix_buf1)
-      CALL dbcsr_release(matrix_buf2)
+         CALL dbcsr_release(matrix_tmp)
+         CALL dbcsr_release(matrix_buf1)
+         CALL dbcsr_release(matrix_buf2)
+
+      END DO
+
+      !--------------------------------------------------------------------------
+
+      !--------------------------------------------------------------------------
+      ! Calculate response density via HADAMARD PRODUCT
+      !--------------------------------------------------------------------------
+
+      ! [nsc_matrix] * [g2_matrix]^-1 = lambda2 
+      DO ispin = 1 , nspins
+         CALL dbcsr_hadamard_product(matrix_a = ec_env%matrix_nsc(ispin,1)%matrix, &
+                                     matrix_b = g2_matrix_inv(ispin,1)%matrix, &
+                                     matrix_c = matrix_l2(ispin,1)%matrix)
+      END DO
+      !--------------------------------------------------------------------------
 
       IF(para_env%mepos==0) THEN
-         WRITE(*,*) " ec_response_density - g2_matrix_inv", ASSOCIATED(g2_matrix_inv)
-         IF(ASSOCIATED(g2_matrix_inv)) THEN
-               CALL dbcsr_print(g2_matrix_inv(1,1)%matrix)
-         END IF
+!         WRITE(*,*) " ec_response_density - g2_matrix_inv", ASSOCIATED(g2_matrix_inv)
+!         IF(ASSOCIATED(g2_matrix_inv)) THEN
+!               CALL dbcsr_print(g2_matrix_inv(1,1)%matrix)
+!         END IF
 !         WRITE(*,*) " ec_response_density - matrix_tmp", ASSOCIATED(matrix_tmp)
 !         IF(ASSOCIATED(matrix_tmp)) THEN
 !               CALL dbcsr_print(matrix_tmp(1,1)%matrix)
 !         END IF
          WRITE(*,*) " ec_response_density - matrix_l2", ASSOCIATED(matrix_l2)
          IF(ASSOCIATED(matrix_l2)) THEN
-               CALL dbcsr_print(matrix_l2(1,1)%matrix)
+               CALL dbcsr_print(matrix_l2(1,1)%matrix, matlab_format = .TRUE.)
          END IF
       END IF
  
@@ -626,19 +710,19 @@ CONTAINS
          CALL cp_dbcsr_alloc_block_from_nbl(matrix_w(ispin, 1)%matrix, sab_orb)
          CALL dbcsr_set(matrix_w(ispin, 1)%matrix, 0.0_dp)
       END DO
-      
+
       CALL ec_w2_matrix(qs_env, matrix_w = matrix_w, matrix_p = response_matrix, matrix_ks = matrix_ks)
+      
+      CALL dbcsr_print(matrix_w(1,1)%matrix, matlab_format = .TRUE.)
+!      CALL dbcsr_print(matrix_s(1,1)%matrix, matlab_format = .TRUE.)
 
-
-      CALL dbcsr_print(matrix_w(1,1)%matrix)
-      CALL dbcsr_print(matrix_ks(1,1)%matrix)
-
-      CALL build_overlap_force(ks_env, &
-                               force = overlap_force, &
-                               basis_type_a = "ORB", &
-                               basis_type_b = "ORB", &
-                               sab_nl = sab_orb, &
-                               matrix_p = matrix_w(1,1)%matrix)
+      CALL build_overlap_matrix(ks_env, &
+                                matrixkp_s = matrix_s, &
+                                basis_type_a = "ORB", &
+                                basis_type_b = "ORB", &
+                                sab_nl = sab_orb, &
+                                calculate_forces = calculate_forces, &
+                                matrixkp_p = matrix_w)
     
       CALL dbcsr_deallocate_matrix_set(matrix_w)
   

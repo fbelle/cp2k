@@ -185,10 +185,10 @@ CONTAINS
 !         CALL calculate_ptrace(matrix_ks, rho_ao, trace, dft_control%nspins)
 !         WRITE(*,*) "trace[ks_out*p_out]", trace
 
-         WRITE(*,*) " qs_energies - tnadd_mat", ASSOCIATED(kg_env%tnadd_mat)
-         IF(ASSOCIATED(kg_env%tnadd_mat)) THEN
-         CALL dbcsr_print(kg_env%tnadd_mat(1)%matrix)
-         END IF
+!         WRITE(*,*) " qs_energies - tnadd_mat", ASSOCIATED(kg_env%tnadd_mat)
+!         IF(ASSOCIATED(kg_env%tnadd_mat)) THEN
+!         CALL dbcsr_print(kg_env%tnadd_mat(1)%matrix)
+!         END IF
 
       END IF
 

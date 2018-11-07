@@ -688,7 +688,6 @@ CONTAINS
 
 
         CALL build_overlap_matrix(ks_env, &
-                                  nderivative = nder, &
                                   matrixkp_s = ec_env%matrix_s, &
                                   !matrixkp_s = matrix_s, &
                                   matrix_name = "OVERLAP MATRIX", &
@@ -710,7 +709,6 @@ CONTAINS
       ELSE
          
          CALL build_overlap_matrix(ks_env, &
-                                   nderivative = nder, &
                                    matrixkp_s = ec_env%matrix_s, &
                                    matrix_name=  "OVERLAP MATRIX", &
                                    basis_type_a = "HARRIS", &

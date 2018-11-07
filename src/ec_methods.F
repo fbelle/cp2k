@@ -331,7 +331,7 @@ CONTAINS
       INTEGER                                            :: handle, ispin, nspins
       REAL(KIND=dp)                                      :: scaling
       TYPE(dbcsr_type)                                   :: matrix_tmp1, matrix_tmp2, matrix_tmp3, &
-                                                            ref_matrix
+                                                            ref_matrix, matrix_tmp4
       TYPE(dft_control_type), POINTER                    :: dft_control
       REAL(KIND=dp)                                      :: eps_filter
       TYPE(cp_para_env_type), POINTER                    :: para_env
@@ -350,6 +350,7 @@ CONTAINS
       CALL dbcsr_create(matrix_tmp1, template=ref_matrix, matrix_type=dbcsr_type_no_symmetry)
       CALL dbcsr_create(matrix_tmp2, template=ref_matrix, matrix_type=dbcsr_type_no_symmetry)
       CALL dbcsr_create(matrix_tmp3, template=ref_matrix, matrix_type=dbcsr_type_no_symmetry)
+      CALL dbcsr_create(matrix_tmp4, template=ref_matrix, matrix_type=dbcsr_type_no_symmetry)
 
       IF (nspins == 1) THEN
          scaling = 0.5_dp
@@ -359,27 +360,34 @@ CONTAINS
 
       ! perform multiplication W = P*KS*P
       DO ispin = 1, nspins
+         ! Desymmetrize density matrix
          CALL dbcsr_copy(matrix_tmp3, matrix_ks(ispin, 1)%matrix)
+         CALL dbcsr_desymmetrize(matrix_p(ispin, 1)%matrix, matrix_tmp4)
          CALL dbcsr_filter(matrix_tmp3, eps_filter)
+!         CALL dbcsr_multiply("N", "N", scaling, matrix_tmp4, matrix_tmp3, &
+!                             0.0_dp, matrix_tmp1)
          CALL dbcsr_multiply("N", "N", scaling, matrix_p(ispin, 1)%matrix, matrix_tmp3, &
-                             0.0_dp, matrix_tmp1, filter_eps = eps_filter)
+                             0.0_dp, matrix_tmp1)
+!         CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_tmp1, matrix_tmp4, &
+!                             0.0_dp, matrix_tmp2)
          CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_tmp1, matrix_p(ispin, 1)%matrix, &
-                             0.0_dp, matrix_tmp2, filter_eps = eps_filter)
-                 
+                             0.0_dp, matrix_tmp2)
          CALL dbcsr_copy(matrix_w(ispin,1)%matrix, matrix_tmp2, name="W MATRIX", keep_sparsity = .TRUE.)
       ENDDO
 
 !      WRITE(*,*) "matrix_tmp3"
-!      CALL dbcsr_print(matrix_tmp3)
+!      CALL dbcsr_print(matrix_tmp3, matlab_format = .TRUE.)
 !      WRITE(*,*) "matrix_tmp1"
-!      CALL dbcsr_print(matrix_tmp1)
+!      CALL dbcsr_print(matrix_tmp1, matlab_format = .TRUE.)
 !      WRITE(*,*) "matrix_tmp2"
-!      CALL dbcsr_print(matrix_tmp2)
-!      CALL dbcsr_print(matrix_w(1,1)%matrix)
+!      CALL dbcsr_print(matrix_tmp2, matlab_format = .TRUE.)
+!      WRITE(*,*) "matrix_w - OUTPUT"
+!      CALL dbcsr_print(matrix_w(1,1)%matrix, matlab_format = .TRUE.)
 
       CALL dbcsr_release(matrix_tmp1)
       CALL dbcsr_release(matrix_tmp2)
       CALL dbcsr_release(matrix_tmp3)
+      CALL dbcsr_release(matrix_tmp4)
 
       CALL timestop(handle)
 
@@ -582,7 +590,6 @@ CONTAINS
 
       CALL timeset(routineN, handle)
       
-      NULLIFY (mos)
       NULLIFY (ao_mo_fm_pools, dft_control, mos)
       NULLIFY (mo_coeff)
 
