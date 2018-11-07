@@ -1446,8 +1446,8 @@ CONTAINS
             IF (periodic) THEN
                !WRITE(*,*) "qs_scf_post_moments - periodic"
                !CALL qs_moment_berry_phase(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
-               CALL qs_moment_berry_phase2(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
-               !CALL qs_moment_berry_phase3(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
+               !CALL qs_moment_berry_phase2(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
+               CALL qs_moment_berry_phase3(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
             ELSE
                !WRITE(*,*) "qs_scf_post_moments - non periodic"
                CALL qs_moment_locop(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)

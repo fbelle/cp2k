@@ -332,7 +332,6 @@ CONTAINS
                   dss(3, 1) = rap(2)*dss(1, 1)+f2*kvec(2)*sc(1, 1)+f2*kvec(2)*dsc(1, 1)
                   dss(4, 1) = rap(3)*dss(1, 1)+f2*kvec(3)*sc(1, 1)+f2*kvec(3)*dsc(1, 1)
 
-
 !                  dsc(2, 1) = rap(1)*dsc(1, 1)-f2*ss(1, 1)-f2*kvec(1)*dss(1, 1)
 !                  dsc(3, 1) = rap(2)*dsc(1, 1)-f2*ss(1, 1)-f2*kvec(2)*dss(1, 1)
 !                  dsc(4, 1) = rap(3)*dsc(1, 1)-f2*ss(1, 1)-f2*kvec(3)*dss(1, 1)
@@ -1809,10 +1808,8 @@ CONTAINS
 
       ! first derivative 
       IF (PRESENT(dksc) .AND. PRESENT(dkss)) THEN
-         DO i = 1, 3
-            dksc(1:na, 1:nb, i) = 0.0_dp
-            dkss(1:na, 1:nb, i) = 0.0_dp
-         END DO
+            dksc(1:na, 1:nb, :) = 0.0_dp
+            dkss(1:na, 1:nb, :) = 0.0_dp
       END IF
       ! second derivative
       IF (PRESENT(ddksc) .AND. PRESENT(ddkss)) THEN
