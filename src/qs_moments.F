@@ -14,6 +14,7 @@ MODULE qs_moments
    USE ai_moments,                      ONLY: contract_cossin,&
                                               cossin,&
                                               cossin2,&
+                                              cossin4,&
                                               moment
    USE atomic_kind_types,               ONLY: atomic_kind_type,&
                                               get_atomic_kind
@@ -22,16 +23,23 @@ MODULE qs_moments
    USE block_p_types,                   ONLY: block_p_type
    USE cell_types,                      ONLY: cell_type,&
                                               pbc
-   USE cp_cfm_basic_linalg,             ONLY: cp_cfm_lu_decompose
+   USE cp_cfm_basic_linalg,             ONLY: cp_cfm_lu_decompose,&
+                                              cp_cfm_gemm,&
+                                              cp_cfm_lu_invert,&
+                                              cp_cfm_schur_product,&
+                                              cp_cfm_trace
    USE cp_cfm_types,                    ONLY: cp_cfm_create,&
                                               cp_cfm_get_info,&
                                               cp_cfm_p_type,&
-                                              cp_cfm_release
+                                              cp_cfm_release,&
+                                              cp_cfm_to_fm, &
+                                              cp_fm_to_cfm
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_sm_fm_multiply,&
                                               dbcsr_allocate_matrix_set,&
-                                              dbcsr_deallocate_matrix_set
+                                              dbcsr_deallocate_matrix_set, &
+                                              cp_fm_to_dbcsr_row_template
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
                                               cp_fm_struct_double,&
                                               cp_fm_struct_release,&
@@ -41,7 +49,9 @@ MODULE qs_moments
                                               cp_fm_p_type,&
                                               cp_fm_release,&
                                               cp_fm_set_all,&
-                                              cp_fm_type
+                                              cp_fm_type, &
+                                              cp_fm_to_fm_triangular, &
+                                              cp_fm_write_formatted
    USE cp_gemm_interface,               ONLY: cp_gemm
    USE cp_para_types,                   ONLY: cp_para_env_type
    USE cp_result_methods,               ONLY: cp_results_erase,&
@@ -50,14 +60,16 @@ MODULE qs_moments
    USE dbcsr_api,                       ONLY: &
         dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_distribution_type, &
         dbcsr_get_block_p, dbcsr_p_type, dbcsr_set, dbcsr_trace, dbcsr_type, dbcsr_type_symmetric, &
-        dbcsr_print, dbcsr_scale
+        dbcsr_print, dbcsr_scale, dbcsr_multiply, dbcsr_filter, dbcsr_norm, dbcsr_type_no_symmetry, &
+         dbcsr_get_info, dbcsr_init_p, dbcsr_release
    USE distribution_1d_types,           ONLY: distribution_1d_type
    USE kinds,                           ONLY: default_string_length,&
                                               dp
    USE kpoint_types,                    ONLY: get_kpoint_info,&
                                               kpoint_type
    USE mathconstants,                   ONLY: pi,&
-                                              twopi
+                                              twopi,&
+                                              z_one
    USE message_passing,                 ONLY: mp_sum
    USE moments_utils,                   ONLY: get_reference_point
    USE orbital_pointers,                ONLY: current_maxl,&
@@ -86,6 +98,16 @@ MODULE qs_moments
                                               qs_rho_type
    USE rt_propagation_types,            ONLY: get_rtp,&
                                               rt_prop_type
+!fbelle
+   USE cp_blacs_env,                    ONLY: cp_blacs_env_type 
+   USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm, &
+                                              copy_fm_to_dbcsr
+   USE cp_fm_cholesky,                  ONLY: cp_fm_cholesky_decompose
+   USE cp_fm_basic_linalg,              ONLY: cp_fm_triangular_invert, &
+                                              cp_fm_trace, &
+                                              cp_fm_scale, &
+                                              cp_complex_fm_gemm
+
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -102,6 +124,8 @@ MODULE qs_moments
    PUBLIC :: build_berry_kpoint_matrix
    PUBLIC :: qs_moment_berry_phase, qs_moment_locop
    PUBLIC :: qs_moment_berry_phase2
+   PUBLIC :: qs_moment_berry_phase3
+   PUBLIC :: numer_berry_moment_matrix
 
 CONTAINS
 
@@ -148,6 +172,7 @@ CONTAINS
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_kind_type), POINTER                        :: qs_kind
+      INTEGER                                            :: k
 
       IF (nmoments < 1) RETURN
 
@@ -171,6 +196,9 @@ CONTAINS
       CALL get_qs_kind_set(qs_kind_set=qs_kind_set, &
                            maxco=maxco, maxsgf=maxsgf)
 
+      WRITE(*,*) "maxco", maxco
+      WRITE(*,*) "nm", nm
+
       ALLOCATE (mab(maxco, maxco, nm))
       mab(:, :, :) = 0.0_dp
 
@@ -192,8 +220,11 @@ CONTAINS
             NULLIFY (basis_set_list(ikind)%gto_basis_set)
          END IF
       END DO
+      k = 0
       CALL neighbor_list_iterator_create(nl_iterator, sab_orb)
       DO WHILE (neighbor_list_iterate(nl_iterator) == 0)
+         k = k + 1
+         WRITE(*,*) "NEIGHBORLIST ITERATION", k
          CALL get_iterator_info(nl_iterator, ikind=ikind, jkind=jkind, inode=inode, &
                                 iatom=iatom, jatom=jatom, r=rab)
          basis_set_a => basis_set_list(ikind)%gto_basis_set
@@ -284,6 +315,13 @@ CONTAINS
                            lb_max(jset), npgfb(jset), zetb(:, jset), &
                            rpgfb(:, jset), nmoments, rac, rbc, mab)
 
+               WRITE(*,*) "moment:"
+               WRITE(*,*) "SIZE(mab,1)", SIZE(mab,1)
+               WRITE(*,*) "SIZE(mab,2)", SIZE(mab,2)
+               WRITE(*,*) "SIZE(mab,3)", SIZE(mab,3)
+               WRITE(*,*) "mab(:,:)", mab(:,:,:)
+
+
                ! Contraction step
                DO i = 1, nm
 
@@ -309,6 +347,10 @@ CONTAINS
                                 SIZE(mint(i)%block, 1))
 
                   END IF
+
+                  WRITE(*,*) "After contraction", i
+                  WRITE(*,*) "mint(i)%block", mint(i)%block(1,1)
+
 
                END DO
 
@@ -568,6 +610,137 @@ CONTAINS
 
 
 ! **************************************************************************************************
+!> \brief NUMERICAL CALCULATION OF FIRST DERIVATIVE 
+!>        
+!> \param qs_env ...
+!> \param cosmat ...
+!> \param sinmat ...
+!> \param kvec ...
+!> \param sab_orb_external ...
+!> \param basis_type ...
+!> \param nderivative ... Order of derivative wrt k
+! **************************************************************************************************
+   SUBROUTINE numer_berry_moment_matrix(qs_env, kvec, nmoments, dkc, dks)
+   
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      INTEGER, INTENT(IN)                                :: nmoments
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER, OPTIONAL :: dkc, dks
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'numer_berry_moment_matrix', &
+         routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: handle, j, k, nm, nmom
+      REAL(dp), DIMENSION(3)                             :: kvec
+      REAL(dp)                                           :: std_value
+      TYPE(cell_type), POINTER                           :: cell
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
+      TYPE(dbcsr_type), POINTER                          :: cosmat, sinmat
+
+      ! fbelle
+      REAL(KIND=dp)                                      :: dx   
+
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER        :: numer_cosmat, numer_sinmat
+      TYPE(cp_para_env_type), POINTER                    :: para_env
+
+
+      CALL timeset(routineN, handle)
+
+      ! restrict maximum moment available
+      nmom = MIN(nmoments, 1)
+
+      nm = (6+11*nmom+6*nmom**2+nmom**3)/6-1
+
+      NULLIFY (cell, matrix_s)
+
+      CALL get_qs_env(qs_env, &
+                      cell = cell, &
+                       matrix_s = matrix_s)
+      CALL get_qs_env(qs_env, para_env=para_env)
+
+
+      NULLIFY (cosmat, sinmat)
+      ALLOCATE (cosmat, sinmat)
+      CALL dbcsr_copy(cosmat, matrix_s(1)%matrix, 'COS MOM')
+      CALL dbcsr_copy(sinmat, matrix_s(1)%matrix, 'SIN MOM')
+      CALL dbcsr_set(cosmat, 0.0_dp)
+      CALL dbcsr_set(sinmat, 0.0_dp)
+
+      ! Init matrices to store numerically calculated matrices
+      NULLIFY (numer_cosmat, numer_sinmat)
+      CALL dbcsr_allocate_matrix_set(numer_cosmat, 3)
+      CALL dbcsr_allocate_matrix_set(numer_sinmat, 3)
+
+      DO j = 1, 3
+         ALLOCATE (numer_cosmat(j)%matrix, numer_sinmat(j)%matrix)
+         CALL dbcsr_copy(numer_cosmat(j)%matrix, matrix_s(1)%matrix, 'COS NUMER')
+         CALL dbcsr_copy(numer_sinmat(j)%matrix, matrix_s(1)%matrix, 'SIN NUMER')
+         CALL dbcsr_set(numer_cosmat(j)%matrix, 0.0_dp)
+         CALL dbcsr_set(numer_sinmat(j)%matrix, 0.0_dp)
+      END DO
+
+      ! Deviation
+      dx = 1.0E-5
+
+      !------------------------------------------------------------------------
+      ! Numerical calculation 
+      !------------------------------------------------------------------------
+
+      IF(para_env%mepos==0) THEN
+!         WRITE(*,*) "----------------------------------------------"
+!         WRITE(*,*) "NUMERIC DERIVATIVE"
+!         WRITE(*,*) "----------------------------------------------"
+      END IF
+
+      ! loop over the 3 derivation directions (k is 3D vector)
+      DO k = 1, 3
+         ! save inital value of kvec in direction k
+         std_value = kvec(k)
+         CALL dbcsr_set(cosmat, 0.0_dp)
+         CALL dbcsr_set(sinmat, 0.0_dp)
+         DO j = 1, 2
+            ! Apply deviation on kvecs direction k
+            kvec(k) = std_value-(-1.0_dp)**j*dx
+            ! Compute cosmat and sinmat
+            CALL build_berry_moment_matrix3(qs_env = qs_env, &
+                                            cosmat = cosmat, &
+                                            sinmat = sinmat, &
+                                            kvec = kvec)
+
+            IF (j == 1) THEN
+               CALL dbcsr_copy(numer_cosmat(k)%matrix, cosmat)
+               CALL dbcsr_copy(numer_sinmat(k)%matrix, sinmat)
+            ELSE
+               CALL dbcsr_add(numer_cosmat(k)%matrix, cosmat, 1.0_dp, -1.0_dp)
+               CALL dbcsr_add(numer_sinmat(k)%matrix, sinmat, 1.0_dp, -1.0_dp)
+            END IF
+
+         END DO
+         kvec(k) = std_value
+
+         ! dividing by 0.5*dx
+         CALL dbcsr_scale(numer_cosmat(k)%matrix, 0.5_dp/dx)
+         CALL dbcsr_scale(numer_sinmat(k)%matrix, 0.5_dp/dx)
+
+         CALL dbcsr_copy(dkc(k)%matrix, numer_cosmat(k)%matrix)
+         CALL dbcsr_copy(dks(k)%matrix, numer_sinmat(k)%matrix)
+
+      END DO ! k
+
+      CALL dbcsr_deallocate_matrix(cosmat)
+      CALL dbcsr_deallocate_matrix(sinmat)
+
+      CALL dbcsr_deallocate_matrix_set(numer_cosmat)
+      CALL dbcsr_deallocate_matrix_set(numer_sinmat)
+
+      CALL timestop(handle)
+
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) "numer_berry_moment_matrix - END"      
+      END IF
+
+   END SUBROUTINE
+
+! **************************************************************************************************
 !> \brief Debugging of moments integral cossin, and its derivatives wrt k
 !>        Check analytical integrals using the numerical integrals as refernce
 !> \param qs_env ...
@@ -586,7 +759,7 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER :: routineN = 'debug_berry_moment_matrix', &
          routineP = moduleN//':'//routineN
 
-      INTEGER                                            :: i, j, k, l, nmom, handle
+      INTEGER                                            :: handle, i, j, k, l, nm, nmom
       REAL(dp), DIMENSION(3)                             :: kvec
       REAL(dp)                                           :: std_value
       TYPE(cell_type), POINTER                           :: cell
@@ -594,26 +767,32 @@ CONTAINS
       TYPE(dbcsr_type), POINTER                          :: cosmat, sinmat
 
       ! fbelle
-      TYPE(dbcsr_type), DIMENSION(:), POINTER            :: dkcos, dksin
-      TYPE(dbcsr_type), DIMENSION(:), POINTER            :: d2kcos, d2ksin
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: dkcos, dksin
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: d2kcos, d2ksin
       REAL(KIND=dp)                                      :: dx   
 
-      TYPE(dbcsr_type), DIMENSION(:,:), POINTER          :: analyt_cosmat, analyt_sinmat
-      TYPE(dbcsr_type), DIMENSION(:,:), POINTER          :: numer_cosmat, numer_sinmat
-!      TYPE(dbcsr_type), DIMENSION(:), POINTER            :: numcos, numsin
+      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: analyt_cosmat, analyt_sinmat
+      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: numer_cosmat, numer_sinmat
       REAL (KIND=dp), DIMENSION(3,3)                     :: anactrace, anastrace
       REAL (KIND=dp), DIMENSION(3,3)                     :: numctrace, numstrace
+      REAL (KIND=dp), DIMENSION(3,3)                     :: diffcnorm, diffsnorm
+      TYPE(cp_para_env_type), POINTER                    :: para_env
+
 
       CALL timeset(routineN, handle)
 
       ! restrict maximum moment available
       nmom = MIN(nmoments, 2)
 
+      nm = (6+11*nmom+6*nmom**2+nmom**3)/6-1
+
       NULLIFY (cell, matrix_s)
 
       CALL get_qs_env(qs_env, &
                       cell = cell, &
-                      matrix_s = matrix_s)
+                       matrix_s = matrix_s)
+      CALL get_qs_env(qs_env, para_env=para_env)
+
 
       NULLIFY (cosmat, sinmat)
       ALLOCATE (cosmat, sinmat)
@@ -624,64 +803,70 @@ CONTAINS
 
       ! Init matrices to store analytically calculated matrices
       NULLIFY (analyt_cosmat, analyt_sinmat)
-      ALLOCATE (analyt_cosmat(3,3), analyt_sinmat(3,3))
+      CALL dbcsr_allocate_matrix_set(analyt_cosmat, 3, 3)
+      CALL dbcsr_allocate_matrix_set(analyt_sinmat, 3, 3)
       ! Init matrices to store numerically calculated matrices
       NULLIFY (numer_cosmat, numer_sinmat)
-      ALLOCATE (numer_cosmat(3,3), numer_sinmat(3,3))
+      CALL dbcsr_allocate_matrix_set(numer_cosmat, 3, 3)
+      CALL dbcsr_allocate_matrix_set(numer_sinmat, 3, 3)
 
       DO i = 1, 3
          DO j = 1, 3
-            CALL dbcsr_copy(analyt_cosmat(i,j), matrix_s(1)%matrix, 'COS ANAL')
-            CALL dbcsr_copy(analyt_sinmat(i,j), matrix_s(1)%matrix, 'SIN ANAL')
-            CALL dbcsr_set(analyt_cosmat(i,j), 0.0_dp)
-            CALL dbcsr_set(analyt_sinmat(i,j), 0.0_dp)
+            ALLOCATE (analyt_cosmat(i,j)%matrix, analyt_sinmat(i,j)%matrix)
+            CALL dbcsr_copy(analyt_cosmat(i,j)%matrix, matrix_s(1)%matrix, 'COS ANAL')
+            CALL dbcsr_copy(analyt_sinmat(i,j)%matrix, matrix_s(1)%matrix, 'SIN ANAL')
+            CALL dbcsr_set(analyt_cosmat(i,j)%matrix, 0.0_dp)
+            CALL dbcsr_set(analyt_sinmat(i,j)%matrix, 0.0_dp)
 
-            CALL dbcsr_copy(numer_cosmat(i,j), matrix_s(1)%matrix, 'COS NUMER')
-            CALL dbcsr_copy(numer_sinmat(i,j), matrix_s(1)%matrix, 'SIN NUMER')
-            CALL dbcsr_set(numer_cosmat(i,j), 0.0_dp)
-            CALL dbcsr_set(numer_sinmat(i,j), 0.0_dp)
+            ALLOCATE (numer_cosmat(i,j)%matrix, numer_sinmat(i,j)%matrix)
+            CALL dbcsr_copy(numer_cosmat(i,j)%matrix, matrix_s(1)%matrix, 'COS NUMER')
+            CALL dbcsr_copy(numer_sinmat(i,j)%matrix, matrix_s(1)%matrix, 'SIN NUMER')
+            CALL dbcsr_set(numer_cosmat(i,j)%matrix, 0.0_dp)
+            CALL dbcsr_set(numer_sinmat(i,j)%matrix, 0.0_dp)
          END DO
       END DO         
 
-!      ! more matrices for numer storage
-!      NULLIFY (numcos, numsin)
-!      ALLOCATE (numcos(2), numsin(2))
-!
-!      DO i = 1, 2
-!         CALL dbcsr_copy(numcos(i), matrix_s(1)%matrix, 'COS MOM')
-!         CALL dbcsr_copy(numsin(i), matrix_s(1)%matrix, 'SIN MOM')
-!         CALL dbcsr_set(numcos(i), 0.0_dp)
-!         CALL dbcsr_set(numsin(i), 0.0_dp)
-!      END DO         
-
       ! Initialize and allocate matrices to store derivatives
       IF(nmom >= 1) THEN
+
          NULLIFY(dkcos, dksin)
-         ALLOCATE(dkcos(3), dksin(3))
+         CALL dbcsr_allocate_matrix_set(dkcos, 3)
+         CALL dbcsr_allocate_matrix_set(dksin, 3)
          DO i = 1, 3
-            CALL dbcsr_copy(dkcos(i), matrix_s(1)%matrix, 'DKCOS MOM')
-            CALL dbcsr_copy(dksin(i), matrix_s(1)%matrix, 'DKSIN MOM')
-            CALL dbcsr_set(dkcos(i), 0.0_dp)
-            CALL dbcsr_set(dksin(i), 0.0_dp)
-         END DO
-      END IF
-      IF(nmom >= 2) THEN
-         NULLIFY(d2kcos, d2ksin)
-         ALLOCATE(d2kcos(6), d2ksin(6))
-         DO i = 1, 6
-            CALL dbcsr_copy(d2kcos(i), matrix_s(1)%matrix, 'D2KCOS MOM')
-            CALL dbcsr_copy(d2ksin(i), matrix_s(1)%matrix, 'D2KSIN MOM')
-            CALL dbcsr_set(d2kcos(i), 0.0_dp)
-            CALL dbcsr_set(d2ksin(i), 0.0_dp)
+            ALLOCATE(dkcos(i)%matrix, dksin(i)%matrix)
+            CALL dbcsr_copy(dkcos(i)%matrix, matrix_s(1)%matrix, 'DKCOS MOM')
+            CALL dbcsr_copy(dksin(i)%matrix, matrix_s(1)%matrix, 'DKSIN MOM')
+            CALL dbcsr_set(dkcos(i)%matrix, 0.0_dp)
+            CALL dbcsr_set(dksin(i)%matrix, 0.0_dp)
          END DO
       END IF
 
+      IF(nmom >= 2) THEN
+         NULLIFY(d2kcos, d2ksin)
+         CALL dbcsr_allocate_matrix_set(dkcos, 6)
+         CALL dbcsr_allocate_matrix_set(dksin, 6)
+         DO i = 1, 6
+            ALLOCATE(d2kcos(i)%matrix, d2ksin(i)%matrix)
+            CALL dbcsr_copy(d2kcos(i)%matrix, matrix_s(1)%matrix, 'D2KCOS MOM')
+            CALL dbcsr_copy(d2ksin(i)%matrix, matrix_s(1)%matrix, 'D2KSIN MOM')
+            CALL dbcsr_set(d2kcos(i)%matrix, 0.0_dp)
+            CALL dbcsr_set(d2ksin(i)%matrix, 0.0_dp)
+         END DO
+      END IF
+
+
       ! Deviation
-      dx = 1.0E-3
+      dx = 1.0E-5
 
       !------------------------------------------------------------------------
       ! Analytic call of cossin
       !------------------------------------------------------------------------
+
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) "----------------------------------------------"
+         WRITE(*,*) "ANALYTIC DERIVATIVE "
+         WRITE(*,*) "----------------------------------------------"
+      END IF
 
       ! 3 distinct kvecs -> each gives 3 first derivs
       !                  -> each gives 6 second derivs
@@ -692,33 +877,37 @@ CONTAINS
          CASE (1)
             ! Dipole
             DO i = 1, 3
-
                kvec(:) = twopi*cell%h_inv(i, :)
                CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec, &
                                                nderivative = 1, dkcos = dkcos, dksin = dksin)
-       
                DO j = 1, 3
                   ! copy cosmat sinmat into separate array
-                  CALL dbcsr_copy(analyt_cosmat(i, j), dkcos(j)) 
-                  CALL dbcsr_copy(analyt_sinmat(i, j), dksin(j)) 
+                  CALL dbcsr_copy(analyt_cosmat(i, j)%matrix, dkcos(j)%matrix) 
+                  CALL dbcsr_copy(analyt_sinmat(i, j)%matrix, dksin(j)%matrix) 
 
                   ! store only trace
-                  CALL dbcsr_trace(analyt_cosmat(i, j), anactrace(i, j))
-                  CALL dbcsr_trace(analyt_cosmat(i, j), anastrace(i, j))
+                  CALL dbcsr_trace(analyt_cosmat(i, j)%matrix, anactrace(i, j))
+                  CALL dbcsr_trace(analyt_sinmat(i, j)%matrix, anastrace(i, j))
                END DO
             END DO
-
          CASE (2)
             ! Quadrupole
             DO i = 1, 3
                DO j = i, 3
                   kvec(:) = twopi*(cell%h_inv(i, :)+cell%h_inv(j, :))
-                  CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec, & 
-                                                  nderivative = 2, dkcos = dkcos, dksin = dksin, &
-                                                  d2kcos = d2kcos, d2ksin = d2ksin)
-                  ! copy cosmat sinmat into separate array
-!                  analyt_cosmat(i, j, 1:6) = d2kcos(1:6) 
-!                  analyt_sinmat(i, j, 1:6) = d2ksin(1:6) 
+!                  CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec, & 
+!                                                  nderivative = 2, dkcos = dkcos, dksin = dksin, &
+!                                                  d2kcos = d2kcos, d2ksin = d2ksin)
+                  !DO k = 1, 6
+                  !   ! copy cosmat sinmat into separate array
+                  !   CALL dbcsr_copy(analyt_cosmat(i, j), d2kcos(j)) 
+                  !   CALL dbcsr_copy(analyt_sinmat(i, j), d2ksin(j)) 
+
+                  !   ! store only trace
+                  !   CALL dbcsr_trace(analyt_cosmat(i, j), anactrace(i, j))
+                  !   CALL dbcsr_trace(analyt_sinmat(i, j), anastrace(i, j))
+                  !END DO
+
                END DO
             END DO
          CASE (3)
@@ -732,130 +921,131 @@ CONTAINS
          END SELECT
       END DO
 
-      WRITE(*,*) "----------------------------------------------"
-      WRITE(*,*) "ANALYTIC DERIVATIVE analyt_cosmat(1, 1)"
-      WRITE(*,*) "----------------------------------------------"
-      ! print analytic matrices
-      CALL dbcsr_print(analyt_cosmat(1, 1))
-      CALL dbcsr_print(analyt_cosmat(1, 2))
-      CALL dbcsr_print(analyt_cosmat(1, 3))
+      ! Traces of first derivatives
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) "TRACE OF #1 ANALYTIC DERIVATIVE"
+         WRITE(*,*) "TRACE dcos:", anactrace(1,1:3)
+         WRITE(*,*) "TRACE dcos:", anactrace(2,1:3)
+         WRITE(*,*) "TRACE dcos:", anactrace(3,1:3)
+         WRITE(*,*) ""
+         WRITE(*,*) "TRACE dsin:", anastrace(1,1:3)
+         WRITE(*,*) "TRACE dsin:", anastrace(2,1:3)
+         WRITE(*,*) "TRACE dsin:", anastrace(3,1:3)
+         WRITE(*,*) "----------------------------------------------"
+      END IF
 
-      WRITE(*,*) "TRACE dcos:", anactrace(i,1:3)
-      WRITE(*,*) "TRACE dsin:", anastrace(i,1:3)
-
-      WRITE(*,*) "----------------------------------------------"
-    
       !------------------------------------------------------------------------
       ! Numerical calculation 
       !------------------------------------------------------------------------
 
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) "----------------------------------------------"
+         WRITE(*,*) "NUMERIC DERIVATIVE" 
+         WRITE(*,*) "----------------------------------------------"
+      END IF
+
       ! kvec is a 3D object, needs to be perturbed in all 3 directions
       ! just like particle position in forces
       DO i = 1, 3
-
          ! do each kvec twice: (+) deviation and (-) deviation
          kvec(:) = twopi*cell%h_inv(i, :)
-
-         ! loop over the 3 derivation directions 
+         ! loop over the 3 derivation directions (k is 3D vector)
          DO k = 1, 3
             ! save inital value of kvec in direction k
             std_value = kvec(k)
-
+            CALL dbcsr_set(cosmat, 0.0_dp)
+            CALL dbcsr_set(sinmat, 0.0_dp)
             DO j = 1, 2
-               CALL dbcsr_set(cosmat, 0.0_dp)
-               CALL dbcsr_set(sinmat, 0.0_dp)
                ! Apply deviation on kvecs direction k
                kvec(k) = std_value-(-1.0_dp)**j*dx
-
                ! Compute cosmat and sinmat
-!               cosmat => numcos(j)
-!               sinmat => numsin(j)
                CALL build_berry_moment_matrix3(qs_env = qs_env, &
                                                cosmat = cosmat, &
                                                sinmat = sinmat, &
                                                kvec = kvec)
-               IF (j = 1) THEN
-                  CALL dbcsr_copy(numer_cosmat(i, k), cosmat)
-                  CALL dbcsr_copy(numer_sinmat(i, k), sinmat)
-                  ! Numcos within j loop
-               END IF
-               IF (j = 2) THEN
-                  CALL dbcsr_copy(numer_cosmat(i,k), cosmat)
-                  CALL dbcsr_copy(numer_cosmat(i,k), sinmat)
+
+               IF (j == 1) THEN
+                  CALL dbcsr_copy(numer_cosmat(i, k)%matrix, cosmat)
+                  CALL dbcsr_copy(numer_sinmat(i, k)%matrix, sinmat)
+               ELSE
+                  CALL dbcsr_add(numer_cosmat(i, k)%matrix, cosmat, 1.0_dp, -1.0_dp)
+                  CALL dbcsr_add(numer_sinmat(i, k)%matrix, sinmat, 1.0_dp, -1.0_dp)
                END IF
 
             END DO
             kvec(k) = std_value
 
-            ! Numerical calculation: 
-            ! analyt_cosmat ~~ numer_cosmat = (numcos(2) - numcos(1))/dx
+            ! dividing by 0.5*dx
+            CALL dbcsr_scale(numer_cosmat(i, k)%matrix, 0.5_dp/dx)
+            CALL dbcsr_scale(numer_sinmat(i, k)%matrix, 0.5_dp/dx)
 
-!            CALL dbcsr_add(numer_cosmat(i, k), numcos(2), 1.0_dp, -1.0_dp)
-!            CALL dbcsr_add(numer_sinmat(i, k), numsin(2), 1.0_dp, -1.0_dp)
-
-            ! dividing by dx
-            !CALL dbcsr_scale(numer_cosmat(i, k), 1000.0_dp)
-            !CALL dbcsr_scale(numer_sinmat(i, k), 1000.0_dp)
-
-            ! store only trace
-!            CALL dbcsr_trace(numer_cosmat(i,k), numctrace(i,k))
-!            CALL dbcsr_trace(numer_cosmat(i,k), numstrace(i,k))
-
-         END DO
-
+            ! store trace(i,k)
+            CALL dbcsr_trace(numer_cosmat(i,k)%matrix, numctrace(i,k))
+            CALL dbcsr_trace(numer_sinmat(i,k)%matrix, numstrace(i,k))
+         END DO ! k
       END DO
 
-      WRITE(*,*) "----------------------------------------------"
-      WRITE(*,*) "NUMERIC DERIVATIVE numer_cosmat(1, 1)"
-      WRITE(*,*) "----------------------------------------------"
-      CALL dbcsr_print(numer_cosmat(1, 1))
-      CALL dbcsr_print(numer_cosmat(1, 2))
-      CALL dbcsr_print(numer_cosmat(1, 3))
-!      DO k = 1, 3
-!         WRITE(*,*) "TRACE dcos:", numctrace(i,1:3)
-!         WRITE(*,*) "TRACE dsin:", numstrace(i,1:3)
-!      END DO
-      WRITE(*,*) "----------------------------------------------"
+      !CALL dbcsr_print(analyt_cosmat(3,1)%matrix)
+      !CALL dbcsr_print(numer_cosmat(3,1)%matrix)
 
+      ! Norm of Differnce: NORM(ANALYT - NUMER)
+      DO i = 1, 3
+         DO k = 1, 3
+            CALL dbcsr_add(analyt_cosmat(i,k)%matrix, numer_cosmat(i,k)%matrix, 1.0_dp, -1.0_dp)
+            CALL dbcsr_norm(matrix = analyt_cosmat(i,k)%matrix, which_norm = 1, norm_scalar = diffcnorm(i,k)) 
+            CALL dbcsr_add(analyt_sinmat(i,k)%matrix, numer_sinmat(i,k)%matrix, 1.0_dp, -1.0_dp)
+            CALL dbcsr_norm(matrix = analyt_sinmat(i,k)%matrix, which_norm = 1, norm_scalar = diffsnorm(i,k)) 
+         END DO
+      END DO
 
+!      CALL dbcsr_print(analyt_cosmat(1,2)%matrix)
+!      CALL dbcsr_print(analyt_sinmat(1,2)%matrix)
 
-
-
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) "TRACE OF #1 NUMERICAL DERIVATIVE"
+         WRITE(*,*) "TRACE dcos:", numctrace(1,1:3)
+         WRITE(*,*) "TRACE dcos:", numctrace(2,1:3)
+         WRITE(*,*) "TRACE dcos:", numctrace(3,1:3)
+         WRITE(*,*) ""
+         WRITE(*,*) "TRACE dsin:", numstrace(1,1:3)
+         WRITE(*,*) "TRACE dsin:", numstrace(2,1:3)
+         WRITE(*,*) "TRACE dsin:", numstrace(3,1:3)
+         WRITE(*,*) "----------------------------------------------"
+         WRITE(*,*) "MATRIX NORM( ANALYT - NUM )"
+         WRITE(*,*) "", diffcnorm(1,:)
+         WRITE(*,*) "", diffcnorm(2,:)
+         WRITE(*,*) "", diffcnorm(3,:)
+         WRITE(*,*) "" 
+         WRITE(*,*) "", diffsnorm(1,:)
+         WRITE(*,*) "", diffsnorm(2,:)
+         WRITE(*,*) "", diffsnorm(3,:)
+         WRITE(*,*) "----------------------------------------------"
+      END IF
 
       CALL dbcsr_deallocate_matrix(cosmat)
       CALL dbcsr_deallocate_matrix(sinmat)
 
+      IF(nmom >= 1) THEN
+         CALL dbcsr_deallocate_matrix_set(dkcos)
+         CALL dbcsr_deallocate_matrix_set(dksin)
+      END IF
 
-      DEALLOCATE(analyt_cosmat)
-      DEALLOCATE(analyt_sinmat)
-      DEALLOCATE(numer_cosmat)
-      DEALLOCATE(numer_sinmat)
+      IF(nmom >= 2) THEN
+         CALL dbcsr_deallocate_matrix_set(d2kcos)
+         CALL dbcsr_deallocate_matrix_set(d2ksin)
+      END IF
 
+      CALL dbcsr_deallocate_matrix_set(analyt_cosmat)
+      CALL dbcsr_deallocate_matrix_set(analyt_sinmat)
 
-
-!      CALL dbcsr_deallocate_matrix(analyt_cosmat)
-!      CALL dbcsr_deallocate_matrix(analyt_sinmat)
-!      CALL dbcsr_deallocate_matrix(numer_cosmat)
-!      CALL dbcsr_deallocate_matrix(numer_sinmat)
-!      CALL dbcsr_deallocate_matrix(numcos)
-!      CALL dbcsr_deallocate_matrix(numsin)
-
-
-!      DO i = 1, 3
-!         DO j = 1, 3
-!            CALL dbcsr_deallocate_matrix(analyt_cosmat(i,j))
-!            CALL dbcsr_deallocate_matrix(analyt_sinmat(i,j))
-!           
-!            CALL dbcsr_deallocate_matrix(numer_cosmat(i,j))
-!            CALL dbcsr_deallocate_matrix(numer_sinmat(i,j))
-!         END DO
-!      END DO
-!      DO i = 1, 2
-!            CALL dbcsr_deallocate_matrix(numcos(i))
-!            CALL dbcsr_deallocate_matrix(numsin(i))
-!      END DO
+      CALL dbcsr_deallocate_matrix_set(numer_cosmat)
+      CALL dbcsr_deallocate_matrix_set(numer_sinmat)
 
       CALL timestop(handle)
+
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) "debug_berry_moment_matrix - END"      
+      END IF
 
    END SUBROUTINE
 
@@ -882,7 +1072,7 @@ CONTAINS
          OPTIONAL, POINTER                               :: sab_orb_external
       CHARACTER(len=*), OPTIONAL                         :: basis_type
       INTEGER, INTENT(IN), OPTIONAL                      :: nderivative
-      TYPE(dbcsr_type), DIMENSION(:), &
+      TYPE(dbcsr_p_type), DIMENSION(:), &
          OPTIONAL, POINTER                               :: dkcos, dksin, d2kcos, d2ksin 
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'build_berry_moment_matrix3', &
@@ -911,20 +1101,29 @@ CONTAINS
       TYPE(qs_kind_type), POINTER                        :: qs_kind
  
       ! fbelle
-      INTEGER                                            :: maxder, nder, i
+      INTEGER                                            :: maxder, nder, i, k
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: cosmint, sinmint
       REAL(dp), DIMENSION(:, :), POINTER                 :: ckblk1, ckblk2, ckblk3
       REAL(dp), DIMENSION(:, :), POINTER                 :: skblk1, skblk2, skblk3
       REAL(dp), DIMENSION(:, :), POINTER                 :: c2kblk1,c2kblk2,c2kblk3,c2kblk4,c2kblk5,c2kblk6
       REAL(dp), DIMENSION(:, :), POINTER                 :: s2kblk1,s2kblk2,s2kblk3,s2kblk4,s2kblk5,s2kblk6
+      TYPE(cp_para_env_type), POINTER                    :: para_env
 
       CALL timeset(routineN, handle)
 
+      CALL get_qs_env(qs_env,para_env=para_env)
       NULLIFY (qs_kind_set, particle_set, sab_orb, cell)
       CALL get_qs_env(qs_env=qs_env, &
                       qs_kind_set=qs_kind_set, &
                       particle_set=particle_set, cell=cell, &
                       sab_orb=sab_orb)
+
+     IF(para_env%mepos==0) THEN
+        WRITE(*,*) "build_berry_moment_matrix3"
+     END IF
+
+
+
 
       IF (PRESENT(sab_orb_external)) sab_orb => sab_orb_external
 
@@ -933,15 +1132,15 @@ CONTAINS
 
       IF (PRESENT(dkcos) .AND. PRESENT(dksin)) THEN
          DO i = 1, 3
-            CALL dbcsr_set(dkcos(i), 0.0_dp)
-            CALL dbcsr_set(dksin(i), 0.0_dp)
+            CALL dbcsr_set(dkcos(i)%matrix, 0.0_dp)
+            CALL dbcsr_set(dksin(i)%matrix, 0.0_dp)
          END DO
       END IF
       
       IF (PRESENT(d2kcos) .AND. PRESENT(d2ksin)) THEN
          DO i = 1, 6
-            CALL dbcsr_set(d2kcos(i), 0.0_dp)
-            CALL dbcsr_set(d2ksin(i), 0.0_dp)
+            CALL dbcsr_set(d2kcos(i)%matrix, 0.0_dp)
+            CALL dbcsr_set(d2ksin(i)%matrix, 0.0_dp)
          END DO
       END IF
 
@@ -975,7 +1174,11 @@ CONTAINS
          END IF
       END DO
       CALL neighbor_list_iterator_create(nl_iterator, sab_orb)
+
+      k = 0
       DO WHILE (neighbor_list_iterate(nl_iterator) == 0)
+         k = k + 1
+         WRITE(*,*) "NEIGHBORLIST ITERATION", k
          CALL get_iterator_info(nl_iterator, ikind=ikind, jkind=jkind, inode=inode, &
                                 iatom=iatom, jatom=jatom, r=rab)
          basis_set_a => basis_set_list(ikind)%gto_basis_set
@@ -1004,7 +1207,12 @@ CONTAINS
          set_radius_b => basis_set_b%set_radius
          sphi_b => basis_set_b%sphi
          zetb => basis_set_b%zet
-         
+        
+         IF(para_env%mepos==0) THEN
+!            WRITE(*,*) "la_max", la_max
+!            WRITE(*,*) "lb_max", lb_max
+         END IF
+
          ldsa = SIZE(sphi_a, 1)
          ldsb = SIZE(sphi_b, 1)
 
@@ -1022,7 +1230,9 @@ CONTAINS
          NULLIFY (sblock)
          CALL dbcsr_get_block_p(matrix=sinmat, &
                                 row=irow, col=icol, BLOCK=sblock, found=found)
-   
+  
+!         WRITE(*,*) "SIZE(cblock, 1)", SIZE(cblock, 1)
+
          IF(PRESENT(dkcos) .AND. PRESENT(dksin)) THEN
 !            WRITE(*,*) "dkcos - associate blocks"
            
@@ -1030,18 +1240,21 @@ CONTAINS
             NULLIFY (ckblk1,ckblk2,ckblk3)
             NULLIFY (skblk1,skblk2,skblk3)
 
-               CALL dbcsr_get_block_p(matrix=dkcos(1), &
+               CALL dbcsr_get_block_p(matrix=dkcos(1)%matrix, &
                                       row=irow, col=icol, BLOCK=ckblk1, found=found)
-               CALL dbcsr_get_block_p(matrix=dkcos(2), &
+               CALL dbcsr_get_block_p(matrix=dkcos(2)%matrix, &
                                       row=irow, col=icol, BLOCK=ckblk2, found=found)
-               CALL dbcsr_get_block_p(matrix=dkcos(3), &
+               CALL dbcsr_get_block_p(matrix=dkcos(3)%matrix, &
                                       row=irow, col=icol, BLOCK=ckblk3, found=found)
-               CALL dbcsr_get_block_p(matrix=dksin(1), &
+                                   
+               CALL dbcsr_get_block_p(matrix=dksin(1)%matrix, &
                                       row=irow, col=icol, BLOCK=skblk1, found=found)
-               CALL dbcsr_get_block_p(matrix=dksin(2), &
+               CALL dbcsr_get_block_p(matrix=dksin(2)%matrix, &
                                       row=irow, col=icol, BLOCK=skblk2, found=found)
-               CALL dbcsr_get_block_p(matrix=dksin(3), &
+               CALL dbcsr_get_block_p(matrix=dksin(3)%matrix, &
                                       row=irow, col=icol, BLOCK=skblk3, found=found)
+
+!               WRITE(*,*) "SIZE(ckblk1, 1)", SIZE(ckblk1, 1)
          END IF         
 
          IF(PRESENT(d2kcos) .AND. PRESENT(d2ksin)) THEN
@@ -1051,30 +1264,30 @@ CONTAINS
             NULLIFY (c2kblk1,c2kblk2,c2kblk3,c2kblk4,c2kblk5,c2kblk6)
             NULLIFY (s2kblk1,s2kblk2,s2kblk3,s2kblk4,s2kblk5,s2kblk6)
 
-               CALL dbcsr_get_block_p(matrix=d2kcos(1), &
+               CALL dbcsr_get_block_p(matrix=d2kcos(1)%matrix, &
                                       row=irow, col=icol, BLOCK=c2kblk1, found=found)
-               CALL dbcsr_get_block_p(matrix=d2kcos(2), &
+               CALL dbcsr_get_block_p(matrix=d2kcos(2)%matrix, &
                                       row=irow, col=icol, BLOCK=c2kblk2, found=found)
-               CALL dbcsr_get_block_p(matrix=d2kcos(3), &
+               CALL dbcsr_get_block_p(matrix=d2kcos(3)%matrix, &
                                       row=irow, col=icol, BLOCK=c2kblk3, found=found)
-               CALL dbcsr_get_block_p(matrix=d2kcos(4), &
+               CALL dbcsr_get_block_p(matrix=d2kcos(4)%matrix, &
                                       row=irow, col=icol, BLOCK=c2kblk4, found=found)
-               CALL dbcsr_get_block_p(matrix=d2ksin(5), &
+               CALL dbcsr_get_block_p(matrix=d2ksin(5)%matrix, &
                                       row=irow, col=icol, BLOCK=c2kblk5, found=found)
-               CALL dbcsr_get_block_p(matrix=d2kcos(6), &
+               CALL dbcsr_get_block_p(matrix=d2kcos(6)%matrix, &
                                       row=irow, col=icol, BLOCK=c2kblk6, found=found)
 
-               CALL dbcsr_get_block_p(matrix=d2ksin(1), &
+               CALL dbcsr_get_block_p(matrix=d2ksin(1)%matrix, &
                                       row=irow, col=icol, BLOCK=s2kblk1, found=found)
-               CALL dbcsr_get_block_p(matrix=d2ksin(2), &
+               CALL dbcsr_get_block_p(matrix=d2ksin(2)%matrix, &
                                       row=irow, col=icol, BLOCK=s2kblk2, found=found)
-               CALL dbcsr_get_block_p(matrix=d2ksin(3), &
+               CALL dbcsr_get_block_p(matrix=d2ksin(3)%matrix, &
                                       row=irow, col=icol, BLOCK=s2kblk3, found=found)
-               CALL dbcsr_get_block_p(matrix=d2ksin(4), &
+               CALL dbcsr_get_block_p(matrix=d2ksin(4)%matrix, &
                                       row=irow, col=icol, BLOCK=s2kblk4, found=found)
-               CALL dbcsr_get_block_p(matrix=d2ksin(5), &
+               CALL dbcsr_get_block_p(matrix=d2ksin(5)%matrix, &
                                       row=irow, col=icol, BLOCK=s2kblk5, found=found)
-               CALL dbcsr_get_block_p(matrix=d2ksin(6), &
+               CALL dbcsr_get_block_p(matrix=d2ksin(6)%matrix, &
                                       row=irow, col=icol, BLOCK=s2kblk6, found=found)
          END IF         
 
@@ -1106,80 +1319,106 @@ CONTAINS
                   SELECT CASE (nder)
                   CASE(0)
                     CALL cossin2(la_max(iset), npgfa(iset), zeta(:, iset), rpgfa(:, iset), la_min(iset), &
-                                lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset), &
-                                ra, rb, kvec, cosab = cosmint(:, :, 1), sinab = sinmint(:, :, 1))
+                                 lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset), &
+                                 ra, rb, kvec, cosab = cosmint(:, :, 1), sinab = sinmint(:, :, 1))
         
                   CASE(1)
-!                    WRITE(*,*) "cossin2 - First Derivative"
                     CALL cossin2(la_max(iset), npgfa(iset), zeta(:, iset), rpgfa(:, iset), la_min(iset), &
-                                lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset), &
-                                ra, rb, kvec, cosab = cosmint(:, :, 1), sinab = sinmint(:, :, 1), &
-                                dksc = cosmint(:, :, 2:4), dkss = sinmint(:, :, 2:4))
+                                 lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset), &
+                                 ra, rb, kvec, cosab = cosmint(:, :, 1), sinab = sinmint(:, :, 1), &
+                                 dksc = cosmint(:, :, 2:4), dkss = sinmint(:, :, 2:4))
+
+!                    WRITE(*,*) "AFTER COSSIN"
+!                    WRITE(*,*) "SIZE(cosmint(:, :, 1),1)", SIZE(cosmint(:, :, 1),1)
+!                    WRITE(*,*) "SIZE(cosmint(:, :, 2:4),1)", SIZE(cosmint(:, :, 2:4),1)
+                    WRITE(*,*) "cosmint(1, 1, 1)", cosmint(1, 1, 1) 
+!                    IF(ldab >= 2) THEN
+!                       WRITE(*,*) "cosmint(2, 1, 1)", cosmint(2, 1, 1) 
+!                       WRITE(*,*) "cosmint(1, 2, 1)", cosmint(1, 2, 1) 
+!                       WRITE(*,*) "cosmint(2, 2, 1)", cosmint(2, 2, 1) 
+!                    END IF
+                    WRITE(*,*) "cosmint(1, 1, 2:4)", cosmint(1, 1, 2:4) 
+!                    IF(ldab >= 2) THEN
+!                      WRITE(*,*) "cosmint(2, 1, 2:4)", cosmint(2, 1, 2:4) 
+!                       WRITE(*,*) "cosmint(1, 2, 2:4)", cosmint(1, 2, 2:4) 
+!                       WRITE(*,*) "cosmint(2, 2, 2:4)", cosmint(2, 2, 2:4) 
+!                    END IF
 
                   CASE(2)
-!                    WRITE(*,*) "cossin2 - Second Derivative"
                     CALL cossin2(la_max(iset), npgfa(iset), zeta(:, iset), rpgfa(:, iset), la_min(iset), &
-                                lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset), &
-                                ra, rb, kvec, cosab=cosmint(:, :, 1), sinab=sinmint(:, :, 1), &
-                                dksc=cosmint(:, :, 2:4), dkss=sinmint(:, :, 2:4), &
-                                ddksc=cosmint(:, :, 5:10), ddkss=sinmint(:, :, 5:10))
+                                 lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset), &
+                                 ra, rb, kvec, cosab=cosmint(:, :, 1), sinab=sinmint(:, :, 1), &
+                                 dksc=cosmint(:, :, 2:4), dkss=sinmint(:, :, 2:4), &
+                                 ddksc=cosmint(:, :, 5:10), ddkss=sinmint(:, :, 5:10))
         
                   CASE DEFAULT
                      CPABORT("Derivatives of (a|exp(-ikr)|b) only up to second order")
                   END SELECT
-
                  
                   ! Contraction from cartesian to spherical basis functions 
-                  !WRITE(*,*) "Contract cosmint(:, :, 1)"
                   CALL contract_cossin(cblock, sblock, &
                                        iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
                                        jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
                                        cosmint(:, :, 1), sinmint(:, :, 1), ldab, work, ldwork)
 
                   IF (nder >= 1) THEN
-                    ! Contraction of matrices storing first derivatives
-                    !WRITE(*,*) "Contract cosmint(:, :, 2:4)"
-                    CALL contract_cossin(ckblk1, skblk1, &
-                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
-                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
-                                         cosmint(:, :, 2), sinmint(:, :, 2), ldab, work, ldwork)
-                    CALL contract_cossin(ckblk2, skblk2, &
-                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
-                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
-                                         cosmint(:, :, 3), sinmint(:, :, 3), ldab, work, ldwork)
-                    CALL contract_cossin(ckblk3, skblk3, &
-                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
-                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
-                                         cosmint(:, :, 4), sinmint(:, :, 4), ldab, work, ldwork)
+                     ! Contraction of matrices storing first derivatives
+                     CALL contract_cossin(ckblk1, skblk1, &
+                                          iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                          jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                          cosmint(:, :, 2), sinmint(:, :, 2), ldab, work, ldwork)
+                     CALL contract_cossin(ckblk2, skblk2, &
+                                          iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                          jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                          cosmint(:, :, 3), sinmint(:, :, 3), ldab, work, ldwork)
+                     CALL contract_cossin(ckblk3, skblk3, &
+                                          iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                          jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                          cosmint(:, :, 4), sinmint(:, :, 4), ldab, work, ldwork)
+
+!                     WRITE(*,*) "AFTER CONTRACTION"
+!                     WRITE(*,*) "cblock(1, 1)", cblock(1, 1) 
+!                     IF( SIZE(cblock,1) >= 2) THEN
+!                        WRITE(*,*) "cblock(2, 1)", cblock(2, 1) 
+!                        WRITE(*,*) "cblock(1, 2)", cblock(1, 2) 
+!                        WRITE(*,*) "cblock(2, 2)", cblock(2, 2) 
+!                     END IF
+!                     WRITE(*,*) "ckblck(1, 1)", ckblk1(1, 1), ckblk2(1, 1), ckblk3(1, 1) 
+!                     IF( SIZE(ckblk1,1) >= 2) THEN
+!                        WRITE(*,*) "ckblk1(2, 1:4)", ckblk1(2, 1), ckblk2(2,1), ckblk3(2,1) 
+!                        WRITE(*,*) "ckblk1(1, 2:4)", ckblk1(1, 2), ckblk2(1,2), ckblk3(1,2) 
+!                        WRITE(*,*) "ckblk1(2, 2:4)", ckblk1(2, 2), ckblk2(2,2), ckblk3(2,2)
+!                     END IF
+
+
                   END IF
 
                   IF (nder >= 2) THEN
-                    ! Contraction of matrices storing second derivatives
-                    !WRITE(*,*) "Contract cosmint(:, :, 5:10)"
-                    CALL contract_cossin(c2kblk1, s2kblk1, &
-                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
-                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
-                                         cosmint(:, :, 5), sinmint(:, :, 5), ldab, work, ldwork)
-                    CALL contract_cossin(c2kblk2, s2kblk2, &
-                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
-                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
-                                         cosmint(:, :, 6), sinmint(:, :, 6), ldab, work, ldwork)
-                    CALL contract_cossin(c2kblk3, s2kblk3, &
-                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
-                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
-                                         cosmint(:, :, 7), sinmint(:, :, 7), ldab, work, ldwork)
-                    CALL contract_cossin(c2kblk4, s2kblk4, &
-                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
-                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
-                                         cosmint(:, :, 8), sinmint(:, :, 8), ldab, work, ldwork)
-                    CALL contract_cossin(c2kblk5, s2kblk5, &
-                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
-                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
-                                         cosmint(:, :, 9), sinmint(:, :, 9), ldab, work, ldwork)
-                    CALL contract_cossin(c2kblk6, s2kblk6, &
-                                         iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
-                                         jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
-                                         cosmint(:, :, 10), sinmint(:, :, 10), ldab, work, ldwork)
+                     ! Contraction of matrices storing second derivatives
+                     CALL contract_cossin(c2kblk1, s2kblk1, &
+                                          iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                          jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                          cosmint(:, :, 5), sinmint(:, :, 5), ldab, work, ldwork)
+                     CALL contract_cossin(c2kblk2, s2kblk2, &
+                                          iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                          jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                          cosmint(:, :, 6), sinmint(:, :, 6), ldab, work, ldwork)
+                     CALL contract_cossin(c2kblk3, s2kblk3, &
+                                          iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                          jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                          cosmint(:, :, 7), sinmint(:, :, 7), ldab, work, ldwork)
+                     CALL contract_cossin(c2kblk4, s2kblk4, &
+                                          iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                          jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                          cosmint(:, :, 8), sinmint(:, :, 8), ldab, work, ldwork)
+                     CALL contract_cossin(c2kblk5, s2kblk5, &
+                                          iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                          jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                          cosmint(:, :, 9), sinmint(:, :, 9), ldab, work, ldwork)
+                     CALL contract_cossin(c2kblk6, s2kblk6, &
+                                          iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                          jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                          cosmint(:, :, 10), sinmint(:, :, 10), ldab, work, ldwork)
                   END IF
 
                END DO
@@ -1188,14 +1427,6 @@ CONTAINS
          ENDIF
 
       END DO
-
-!      WRITE(*,*) ""
-!      WRITE(*,*) "Integral:"
-!      CALL dbcsr_print(cosmat)
-!      CALL dbcsr_print(sinmat)
-!      CALL dbcsr_print(dkcos(1))
-!      CALL dbcsr_print(dkcos(2))
-!      CALL dbcsr_print(dkcos(3))
 
       CALL neighbor_list_iterator_release(nl_iterator)
 
@@ -1206,10 +1437,7 @@ CONTAINS
 
       CALL timestop(handle)
 
-!      WRITE(*,*) "build_berry_moment_matrix3 - END"
-
    END SUBROUTINE build_berry_moment_matrix3
-
 
 ! **************************************************************************************************
 !> \brief ...
@@ -1271,6 +1499,7 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
+
       NULLIFY (qs_kind_set, particle_set, sab_orb, cell)
       CALL get_qs_env(qs_env=qs_env, &
                       qs_kind_set=qs_kind_set, &
@@ -1314,8 +1543,6 @@ CONTAINS
       ALLOCATE(cosmint(ldab, ldab, maxder))
       ALLOCATE(sinmint(ldab, ldab, maxder))
       ALLOCATE (work(ldwork, ldwork))
-
-      WRITE(*,*) "ldab", ldab
 
       nkind = SIZE(qs_kind_set)
       natom = SIZE(particle_set)
@@ -1380,7 +1607,6 @@ CONTAINS
 !         WRITE(*,*) "set_radius_b",  basis_set_b%set_radius
 !         WRITE(*,*) "zetb", basis_set_b%zet
 !         WRITE(*,*) ""
-
 
          ldsa = SIZE(sphi_a, 1)
          ldsb = SIZE(sphi_b, 1)
@@ -1460,6 +1686,7 @@ CONTAINS
                                 ra, rb, kvec, cosab = cosmint(:, :, 1), sinab = sinmint(:, :, 1), &
                                 dksc = cosmint(:, :, 2:4), dkss = sinmint(:, :, 2:4))
 
+
                     ! Contraction from cartesian to spherical basis functions 
                     CALL contract_cossin(cblock, sblock, &
                                          iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
@@ -1501,17 +1728,6 @@ CONTAINS
 
       END DO
 
-      WRITE(*,*) ""
-      WRITE(*,*) "Integral:"
-      CALL dbcsr_print(cosmat)
-      CALL dbcsr_print(sinmat)
-
-      CALL dbcsr_print(dkcos(1))
-      CALL dbcsr_print(dkcos(2))
-      CALL dbcsr_print(dkcos(3))
-
-
-
       CALL neighbor_list_iterator_release(nl_iterator)
 
       DEALLOCATE (cosmint)
@@ -1520,8 +1736,6 @@ CONTAINS
       DEALLOCATE (basis_set_list)
 
       CALL timestop(handle)
-
-      WRITE(*,*) "build_berry_moment_matrix2 - END"
 
    END SUBROUTINE build_berry_moment_matrix2
 
@@ -1937,7 +2151,7 @@ CONTAINS
 !> \param ref_point ...
 !> \param unit_number ...
 ! **************************************************************************************************
-   SUBROUTINE qs_moment_berry_phase2(qs_env, magnetic, nmoments, reference, ref_point, unit_number)
+   SUBROUTINE qs_moment_berry_phase3(qs_env, magnetic, nmoments, reference, ref_point, unit_number)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       LOGICAL, INTENT(IN)                                :: magnetic
@@ -1955,7 +2169,7 @@ CONTAINS
                                                             zijkl(3, 3, 3, 3), zphase(3), zz
       INTEGER                                            :: handle, i, ia, idim, ikind, ispin, ix, &
                                                             iy, iz, j, k, l, nao, nm, nmo, nmom, &
-                                                            nmotot, tmp_dim
+                                                            nmotot
       LOGICAL                                            :: floating, ghost, uniform
       REAL(dp)                                           :: charge, ci(3), cij(3, 3), dd, occ, trace
       REAL(dp), ALLOCATABLE, DIMENSION(:)                :: mmom
@@ -1980,19 +2194,43 @@ CONTAINS
       TYPE(qs_rho_type), POINTER                         :: rho
       TYPE(rt_prop_type), POINTER                        :: rtp
 
-!      REAL(dp)   :: normz1, rediv1, imdiv1
-!      REAL(dp)   :: normz2, rediv2, imdiv2
-!      COMPLEX(dp)                                        :: z1
-
       ! fbelle
-      COMPLEX(dp)                                        :: d1(4,3), d2(4, 3), d3(4, 3, 3), &
-                                                            d4(4, 3, 3, 3)
-      TYPE(dbcsr_type), DIMENSION(:), POINTER            :: dkcos, dksin
+      TYPE(cp_fm_p_type), DIMENSION(:, :), POINTER       :: tmp_op_fm_set
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: dkcos, dksin
+      TYPE(cp_fm_p_type), DIMENSION(:, :), POINTER       :: dop_fm_set
 
-   
+      COMPLEX(dp)                                        :: zdi(3), zdij(3,3)
+      REAL(dp)                                           :: newci(3)
+      REAL(dp)                                           :: newrmom(3)
+      INTEGER                                            :: tmp_dim
+
+      ! fbelle - inversion craze
+      TYPE(dbcsr_type), POINTER                          :: fraccos, fracsin
+      TYPE(dbcsr_type), POINTER                          :: cosinv, sininv
+      COMPLEX(dp)                                        :: trcumul
+      REAL(dp)                                           :: tracei(3), sintrace, strace
+
+      REAL(dp)                                           :: relem, ielem
+      !COMPLEX(dp)                                        :: zelem, invelem
+      COMPLEX(dp)                                        :: invelem
+      INTEGER                                            :: icol, irow
+
+      ! nao x nao
+      TYPE(cp_fm_p_type), DIMENSION(:), POINTER          :: nao_op_fm_set
+      TYPE(cp_fm_p_type), DIMENSION(:), POINTER          :: nao_dop_fm_set
+      TYPE(cp_fm_struct_type), POINTER                   :: nao_fm_struct
+      TYPE(cp_cfm_p_type), POINTER                       :: deigrmat
+      TYPE(cp_cfm_p_type), POINTER                       :: deriveigrmat
+      TYPE(cp_cfm_p_type), POINTER                       :: inveigrmat
+      TYPE(cp_cfm_p_type), POINTER                       :: cumulant_matrix
+
+      INTEGER                                            :: ncol_local, nrow_local
+      TYPE(cp_fm_p_type), POINTER                        :: unit_matrix
+
+
       CPASSERT(ASSOCIATED(qs_env))
 
-      WRITE(*,*) "qs_moment_berry_phase2 - BEGINNING"
+      WRITE(*,*) "qs_moment_berry_phase3 - BEGINNING"
 
       IF (ASSOCIATED(qs_env%ls_scf_env)) THEN
          IF (unit_number > 0) WRITE (unit_number, *) "Periodic moment calculation not implemented in linear scaling code"
@@ -2018,15 +2256,9 @@ CONTAINS
          mmom = 0._dp
       END IF
 
-      WRITE(*,*) "nmom", nmom
-      WRITE(*,*) "nm", nm
-      WRITE(*,*) "SIZE(rmom,1)", SIZE(rmom,1)
-   
-
      ! fbelle
      ! DEBUGGING OF DERIVATIVES
      CALL debug_berry_moment_matrix(qs_env, nmoments = 1)
-
 
       NULLIFY (dft_control, rho, cell, particle_set, results, para_env, &
                local_particles, matrix_s, mos, rho_ao)
@@ -2045,6 +2277,10 @@ CONTAINS
 
       CALL qs_rho_get(rho, rho_ao=rho_ao)
 
+!----------------
+! DBCSR NAO x NAO
+!----------------
+
       NULLIFY (cosmat, sinmat)
       ALLOCATE (cosmat, sinmat)
       CALL dbcsr_copy(cosmat, matrix_s(1)%matrix, 'COS MOM')
@@ -2052,42 +2288,121 @@ CONTAINS
       CALL dbcsr_set(cosmat, 0.0_dp)
       CALL dbcsr_set(sinmat, 0.0_dp)
 
+      ALLOCATE (cosinv, sininv)
+      CALL dbcsr_copy(cosinv, matrix_s(1)%matrix, 'COS MOM')
+      CALL dbcsr_copy(sininv, matrix_s(1)%matrix, 'SIN MOM')
+      CALL dbcsr_set(cosinv, 0.0_dp)
+      CALL dbcsr_set(sininv, 0.0_dp)
+
+      NULLIFY (fraccos, fracsin)
+      ALLOCATE (fraccos, fracsin)
+      CALL dbcsr_copy(fraccos, matrix_s(1)%matrix, 'COS MOM')
+      CALL dbcsr_copy(fracsin, matrix_s(1)%matrix, 'SIN MOM')
+      CALL dbcsr_set(fraccos, 0.0_dp)
+      CALL dbcsr_set(fracsin, 0.0_dp)
+      
       ! Initialize and allocate matrices to store derivatives
       IF(nmom >= 1) THEN
          NULLIFY(dkcos, dksin)
-         ALLOCATE(dkcos(3), dksin(3))
+         CALL dbcsr_allocate_matrix_set(dkcos, 3)
+         CALL dbcsr_allocate_matrix_set(dksin, 3)
          DO i = 1, 3
-            CALL dbcsr_copy(dkcos(i), matrix_s(1)%matrix, 'DKCOS MOM')
-            CALL dbcsr_copy(dksin(i), matrix_s(1)%matrix, 'DKSIN MOM')
-            CALL dbcsr_set(dkcos(i), 0.0_dp)
-            CALL dbcsr_set(dksin(i), 0.0_dp)
+            ALLOCATE(dkcos(i)%matrix, dksin(i)%matrix)
+            CALL dbcsr_copy(dkcos(i)%matrix, matrix_s(1)%matrix, 'DKCOS MOM')
+            CALL dbcsr_copy(dksin(i)%matrix, matrix_s(1)%matrix, 'DKSIN MOM')
+            CALL dbcsr_set(dkcos(i)%matrix, 0.0_dp)
+            CALL dbcsr_set(dksin(i)%matrix, 0.0_dp)
          END DO
       END IF
+      
+!----------------
 
-!      WRITE(*,*) "cosmat"
-!      CALL dbcsr_print(cosmat) 
-!      CALL dbcsr_print(dkcos(1))
-!      CALL dbcsr_print(dkcos(2))
-!      CALL dbcsr_print(dkcos(3))
+!----------------
+! FM NMO x NMO
+!----------------
 
       ALLOCATE (op_fm_set(2, dft_control%nspins))
+      ALLOCATE (tmp_op_fm_set(2, dft_control%nspins))
       ALLOCATE (opvec(dft_control%nspins))
       ALLOCATE (eigrmat(dft_control%nspins))
+      
+      ! Initialize and allocate matrices to store derivatives
+      IF(nmom >= 1) THEN
+         ALLOCATE (dop_fm_set(2, dft_control%nspins))
+      END IF
+
+      ! fbelle - Store projected derivatives 
       nmotot = 0
       DO ispin = 1, dft_control%nspins
          NULLIFY (tmp_fm_struct, mo_coeff)
          CALL get_mo_set(mo_set=mos(ispin)%mo_set, mo_coeff=mo_coeff, nao=nao, nmo=nmo)
          nmotot = nmotot+nmo
+         WRITE(*,*) "nmo", nmo
+         WRITE(*,*) "nao", nao
+         WRITE(*,*) "nmotot", nmotot
          CALL cp_fm_create(opvec(ispin)%matrix, mo_coeff%matrix_struct)
          CALL cp_fm_struct_create(tmp_fm_struct, nrow_global=nmo, &
                                   ncol_global=nmo, para_env=para_env, context=mo_coeff%matrix_struct%context)
          DO i = 1, SIZE(op_fm_set, 1)
             NULLIFY (op_fm_set(i, ispin)%matrix)
+            NULLIFY (dop_fm_set(i, ispin)%matrix)
+            NULLIFY (tmp_op_fm_set(i, ispin)%matrix)
             CALL cp_fm_create(op_fm_set(i, ispin)%matrix, tmp_fm_struct)
+            CALL cp_fm_create(dop_fm_set(i, ispin)%matrix, tmp_fm_struct)
+            CALL cp_fm_create(tmp_op_fm_set(i, ispin)%matrix, tmp_fm_struct)
          END DO
          CALL cp_cfm_create(eigrmat(ispin)%matrix, op_fm_set(1, ispin)%matrix%matrix_struct)
+
+         ! Create unit matrix 
+         ALLOCATE(unit_matrix)
+         NULLIFY(unit_matrix%matrix)
+         CALL cp_fm_create(unit_matrix%matrix, tmp_fm_struct)
+
          CALL cp_fm_struct_release(tmp_fm_struct)
       END DO
+
+     ! set unit amtrix
+     CALL cp_fm_set_all(unit_matrix%matrix, 0.0_dp, 1.0_dp) 
+
+
+     WRITE(*,*) "Molecular orbital"
+     CALL cp_fm_write_formatted(mo_coeff, 6)
+
+     WRITE(*,*) "Eigenvalue"
+     WRITE(*,*) "mos(1)%mo_set%eigenvalues(:)", mos(1)%mo_set%eigenvalues(:)
+
+
+!----------------
+! FM NAO x NAO
+!----------------
+
+      ! nao x nao
+      IF(nmom >= 1) THEN
+
+         NULLIFY (nao_fm_struct)
+         ALLOCATE (nao_op_fm_set(2))
+         ALLOCATE (nao_dop_fm_set(2))
+
+         ALLOCATE (deriveigrmat)
+         ALLOCATE (deigrmat)
+         ALLOCATE (inveigrmat)
+         ALLOCATE (cumulant_matrix)
+         CALL cp_fm_struct_create(nao_fm_struct, nrow_global=nao, &
+                                  ncol_global=nao, para_env=para_env, context=mo_coeff%matrix_struct%context)
+         DO i = 1, SIZE(nao_op_fm_set, 1)
+            NULLIFY (nao_op_fm_set(i)%matrix)
+            NULLIFY (nao_dop_fm_set(i)%matrix)
+            CALL cp_fm_create(nao_op_fm_set(i)%matrix, nao_fm_struct)
+            CALL cp_fm_create(nao_dop_fm_set(i)%matrix, nao_fm_struct)
+         END DO
+         CALL cp_cfm_create(deriveigrmat%matrix, nao_op_fm_set(1)%matrix%matrix_struct)
+         CALL cp_cfm_create(deigrmat%matrix, nao_op_fm_set(1)%matrix%matrix_struct)
+         CALL cp_cfm_create(inveigrmat%matrix, nao_op_fm_set(1)%matrix%matrix_struct)
+         CALL cp_cfm_create(cumulant_matrix%matrix, nao_op_fm_set(1)%matrix%matrix_struct)
+      END IF
+      CALL cp_fm_struct_release(nao_fm_struct)
+
+!----------------
 
       ! occupation
       DO ispin = 1, dft_control%nspins
@@ -2130,7 +2445,7 @@ CONTAINS
          SELECT CASE (l)
          CASE (1)
             ! Dipole
-            WRITE(*,*) "Dipole - Nuclear"
+!            WRITE(*,*) "Dipole - Nuclear"
             zi(:) = CMPLX(1._dp, 0._dp, dp)
             DO ia = 1, SIZE(particle_set)
                atomic_kind => particle_set(ia)%atomic_kind
@@ -2144,7 +2459,6 @@ CONTAINS
                      dd = SUM(kvec(:)*ria(:))
                      zdeta = CMPLX(COS(dd), SIN(dd), KIND=dp)**charge
                      zi(i) = zi(i)*zdeta
-!                     WRITE(*,*) "ia", ia, "zi", zi
                   END DO
                ENDIF
             END DO
@@ -2173,57 +2487,18 @@ CONTAINS
                   END DO
                END DO
             END DO
-!            DO i = 1, 3
-!              WRITE(*,*) "zij(i,:)", zij(i,:) 
-!            END DO
-
-
-!            DO i = 1, 3
-!               DO j = 1, 3
-!                  zij(i, j) = zij(i, j)*zphase(i)*zphase(j)
-!               END DO
-!            END DO
 
             DO i = 1, 3
                DO j = 1, 3
-!                  WRITE(*,*) "Indices", i, j
                   zij(i, j) = zij(i, j)*zphase(i)*zphase(j)
-!                  WRITE(*,*) "zi(i)", zi(i)
-!                  WRITE(*,*) "zi(j)", zi(j)
-!                  WRITE(*,*) "zij(i,j)", zij(i,j)
-!                  
-!                  normz1 = Real(zi(i))*Real(zi(i)) + AIMAG(zi(i))*AIMAG(zi(i))
-!                  rediv1 = (Real(zij(i,j))*Real(zi(i)) + AIMAG(zij(i,j))*AIMAG(zi(i)))/normz1 
-!                  imdiv1 = (AIMAG(zij(i,j))*Real(zi(i)) - Real(zij(i,j))*AIMAG(zi(i)))/normz1
-!                  
-!                  WRITE(*,*) "normz1", normz1
-!                  WRITE(*,*) "rediv1", rediv1
-!                  WRITE(*,*) "imdiv1", imdiv1
-!
-!                  z1 = zij(i, j)/zi(i)
-!                  WRITE(*,*) "z1", z1
-!
-!                  normz2 = Real(zi(j))*Real(zi(j)) + AIMAG(zi(j))*AIMAG(zi(j))
-!                  rediv2 = (rediv1*Real(zi(j)) + imdiv1*AIMAG(zi(j)))/normz2 
-!                  imdiv2 = (imdiv1*Real(zi(j)) - imdiv1*AIMAG(zi(j)))/normz2
-!
-!                  WRITE(*,*) "normz2", normz2
-!                  WRITE(*,*) "rediv2", rediv2
-!                  WRITE(*,*) "imdiv2", imdiv2
-!
                   zz = zij(i, j)/zi(i)/zi(j)
-!                  WRITE(*,*) "zz", zz
                   cij(i, j) = AIMAG(LOG(zz))/twopi
                END DO
-!               WRITE(*,* )  "zij(i, :)",  zij(i, :)
             END DO
 
             cij = 0.5_dp*cij/twopi/twopi
             cij = MATMUL(MATMUL(cell%hmat, cij), TRANSPOSE(cell%hmat))
 
-!            DO i = 1, 3
-!               WRITE(*,* )  "cij(i, :)",  cij(i, :)
-!            END DO
             DO k = 4, 9
 !               ! old implementation - does not correctly map
 !               ix = indco(1, k+1)
@@ -2264,7 +2539,7 @@ CONTAINS
 
       ria = twopi*REAL(nmotot, dp)*occ*MATMUL(cell%h_inv, rcc)
       xphase = CMPLX(COS(ria), SIN(ria), dp)
-
+      
       ! charge
       trace = 0.0_dp
       DO ispin = 1, dft_control%nspins
@@ -2277,23 +2552,21 @@ CONTAINS
       zijk = 0._dp
       zijkl = 0._dp
 
-      ! fraction components
-      d1 = 0._dp
-      d2 = 0._dp
-      d3 = 0._dp
-      d4 = 0._dp
+      zdi = 0._dp
+      zdij = 0._dp
 
+      tracei = 0._dp
+
+      ! MODFIED ONLY TAKES DIAGONAL DERIV
       DO l = 1, nmom
          SELECT CASE (l)
          CASE (1)
+            ! OLD OLD OLD OLD OLD OLD
             ! Dipole
             DO i = 1, 3
+               WRITE(*,*) "DIPOLE DIRECTION i IN OLD", i
                kvec(:) = twopi*cell%h_inv(i, :)
-!               WRITE(*,*) "kvec(:)", kvec(:)
-               CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec, &
-                                               nderivative = 1, dkcos = dkcos, dksin = dksin)
-               !CALL build_berry_moment_matrix2(qs_env, cosmat, sinmat, kvec, &
-               !                                nderivative = 1, dkcos = dkcos, dksin = dksin)
+               CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec)
                IF (qs_env%run_rtp) THEN
                   CALL get_qs_env(qs_env, rtp=rtp)
                   CALL get_rtp(rtp, mos_new=mos_new)
@@ -2301,9 +2574,16 @@ CONTAINS
                ELSE
                   CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
                END IF
+!               WRITE(*,*) "cosmat" 
+!               CALL dbcsr_print(cosmat)
+!               WRITE(*,*) "op_fm_set - COS"
+!               CALL cp_fm_write_formatted(op_fm_set(1, 1)%matrix, 6)
+!               WRITE(*,*) "op_fm_set - SIN"
+!               CALL cp_fm_write_formatted(op_fm_set(2, 1)%matrix, 6)
                zdet = CMPLX(1._dp, 0._dp, dp)
                DO ispin = 1, dft_control%nspins
                   CALL cp_cfm_get_info(eigrmat(ispin)%matrix, ncol_local=tmp_dim)
+                  WRITE(*,*) "tmp_dim", tmp_dim
                   DO idim = 1, tmp_dim
                      eigrmat(ispin)%matrix%local_data(:, idim) = &
                         CMPLX(op_fm_set(1, ispin)%matrix%local_data(:, idim), &
@@ -2311,7 +2591,6 @@ CONTAINS
                   END DO
                   CALL cp_cfm_lu_decompose(eigrmat(ispin)%matrix, zdeta)
                   zdet = zdet*zdeta
-                  ! multiply twice, account for double occupation
                   IF (dft_control%nspins == 1) THEN
                      zdet = zdet*zdeta
                   ENDIF
@@ -2319,26 +2598,209 @@ CONTAINS
                zi(i) = zdet
             END DO
             zi = zi*xphase
+            ! OLD OLD OLD OLD OLD OLD
+
+            ! Dipole
+            DO i = 1, 3
+               WRITE(*,*) "DIPOLE DIRECTION i", i
+               kvec(:) = twopi*cell%h_inv(i, :)
+               ! (a|e^ikr|b)
+               CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec, &
+                                               nderivative = 1, dkcos = dkcos, dksin = dksin)
+
+!               CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec)
+
+               ! Numerical calculation of derivatives 
+!               WRITE(*,*) "numer_berry_moment_matrix"
+!               CALL numer_berry_moment_matrix(qs_env, kvec, nmoments = 1, dkc = dkcos, dks = dksin)
+
+               !-------------------------------------------
+               ! INVERSE BEFORE TRANSFORMATION
+               !-------------------------------------------
+             
+               ! dbcsr to fm
+               ! nao x nao
+               CALL copy_dbcsr_to_fm(cosmat, nao_op_fm_set(1)%matrix)
+               CALL copy_dbcsr_to_fm(sinmat, nao_op_fm_set(2)%matrix)
+               CALL copy_dbcsr_to_fm(dkcos(i)%matrix, nao_dop_fm_set(1)%matrix)
+               CALL copy_dbcsr_to_fm(dksin(i)%matrix, nao_dop_fm_set(2)%matrix)
+
+!                WRITE(*,*) "cosmat"
+!                CALL dbcsr_print(cosmat)
+!                WRITE(*,*) "sinmat"
+!                CALL dbcsr_print(sinmat)
+!                WRITE(*,*) "dkcos(i)%matrix"
+!                CALL dbcsr_print(dkcos(i)%matrix)
+!                WRITE(*,*) "dksin(i)%matrix"
+!                CALL dbcsr_print(dksin(i)%matrix)
+!                WRITE(*,*) "nao_op_fm_set - COS"
+!                CALL cp_fm_write_formatted(nao_op_fm_set(1)%matrix, 6)
+!                WRITE(*,*) "nao_op_fm_set - SIN"
+!                CALL cp_fm_write_formatted(nao_op_fm_set(2)%matrix, 6)
+!                WRITE(*,*) "nao_dop_fm_set - COS"
+!                CALL cp_fm_write_formatted(nao_dop_fm_set(1)%matrix, 6)
+!                WRITE(*,*) "nao_dop_fm_set - SIN"
+!                CALL cp_fm_write_formatted(nao_dop_fm_set(2)%matrix, 6)
+
+                ! Store dkcos_fm and dksin_fm in complex matrix
+                ! nao x nao
+               CALL cp_cfm_get_info(deriveigrmat%matrix, ncol_local = ncol_local, nrow_local = nrow_local)
+
+               ! element by element inversion
+               ! nao x nao
+               DO icol = 1, ncol_local
+                  DO irow = 1, nrow_local
+                     relem = nao_op_fm_set(1)%matrix%local_data(irow, icol)
+                     ielem = -1.0_dp*nao_op_fm_set(2)%matrix%local_data(irow, icol)
+                     ! set cfm matrix element to its inverse
+                     IF(relem == 0.0_dp .AND. ielem == 0.0_dp) THEN
+                        invelem = CMPLX(0.0_dp, 0.0_dp, dp)
+                     ELSE
+                        invelem = CMPLX(relem/(relem**2+ielem**2), -1.0_dp*ielem/(relem**2+ielem**2), dp)
+                     END IF
+                     inveigrmat%matrix%local_data(irow, icol) = invelem
+                  END DO
+               END DO
+
+               CALL cp_fm_scale(-1.0_dp, nao_dop_fm_set(2)%matrix)
+               CALL cp_fm_to_cfm(msourcer = nao_dop_fm_set(1)%matrix, &
+                                 msourcei = nao_dop_fm_set(2)%matrix, &
+                                 mtarget = deriveigrmat%matrix)
+
+               ! Write derivative matrix
+               CALL cp_cfm_to_fm(msource = deriveigrmat%matrix, &
+                                 mtargetr = nao_op_fm_set(1)%matrix, &
+                                 mtargeti = nao_op_fm_set(2)%matrix)
+               WRITE(*,*) "deriveigrmat - COS deriv"
+               CALL cp_fm_write_formatted(nao_op_fm_set(1)%matrix, 6)
+               WRITE(*,*) "deriveigrmat - SIN deriv"
+               CALL cp_fm_write_formatted(nao_op_fm_set(2)%matrix, 6)
+
+               ! Write inversed matrix
+               CALL cp_cfm_to_fm(msource = inveigrmat%matrix, &
+                                 mtargetr = nao_op_fm_set(1)%matrix, &
+                                 mtargeti = nao_op_fm_set(2)%matrix)
+               WRITE(*,*) "nao_op_fm_set - COS inv"
+               CALL cp_fm_write_formatted(nao_op_fm_set(1)%matrix, 6)
+               WRITE(*,*) "nao_op_fm_set - SIN inv"
+               CALL cp_fm_write_formatted(nao_op_fm_set(2)%matrix, 6)
+
+               ! Multiplying Hadamard 
+               CALL cp_cfm_schur_product(inveigrmat%matrix, deriveigrmat%matrix, &
+                                         cumulant_matrix%matrix)
+
+               ! cfm -> fm
+               ! nao x nao 
+               CALL cp_cfm_to_fm(msource = cumulant_matrix%matrix, &
+                                 mtargetr = nao_op_fm_set(1)%matrix, &
+                                 mtargeti = nao_op_fm_set(2)%matrix)
+
+!               WRITE(*,*) "nao_op_fm_set - COS - AFTER HADAMARD"
+!               CALL cp_fm_write_formatted(nao_op_fm_set(1)%matrix, 6)
+               WRITE(*,*) "nao_op_fm_set - SIN - AFTER HADAMARD"
+               CALL cp_fm_write_formatted(nao_op_fm_set(2)%matrix, 6)
+
+               ! fm -> dbcsr
+               CALL copy_fm_to_dbcsr(nao_op_fm_set(1)%matrix, cosmat)
+               CALL copy_fm_to_dbcsr(nao_op_fm_set(2)%matrix, sinmat)
+
+!               WRITE(*,*) "AFTER HADAMARD - COS"
+!               CALL dbcsr_print(cosmat)
+!               WRITE(*,*) "AFTER HADAMARD - SIN"
+!               CALL dbcsr_print(sinmat)
+
+!               ! Trace with rho
+!               strace = 0._dp
+!               sintrace = 0._dp
+!               DO ispin = 1, dft_control%nspins
+!                  CALL dbcsr_trace(rho_ao(ispin)%matrix, sinmat, sintrace)
+!                  strace = strace + sintrace
+!!                  WRITE(*,*) "TRACE RHO_AO*SINMAT"
+!!                  WRITE(*,*) "sintrace", sintrace
+!!                  WRITE(*,*) "strace", strace
+!               END DO
+
+
+
+
+               ! project cosmat and dkcos
+               ! nao x nao -> nmo x nmo
+               ! spin
+               CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
+
+!               WRITE(*,*) "op_fm_set - COS - after orbbas"
+!               CALL cp_fm_write_formatted(op_fm_set(1, 1)%matrix, 6)
+!               WRITE(*,*) "op_fm_set - SIN - after orbbas"
+!               CALL cp_fm_write_formatted(op_fm_set(2, 1)%matrix, 6)
+
+               strace = 0._dp
+               sintrace = 0._dp
+               DO ispin = 1, dft_control%nspins 
+                  CALL cp_fm_trace(unit_matrix%matrix, op_fm_set(2, ispin)%matrix, sintrace) 
+
+                  strace = strace + sintrace
+
+!                  WRITE(*,*) "TRACE AFTER ROTATION"
+!                  WRITE(*,*) "sintrace", sintrace
+!                  WRITE(*,*) "strace", strace
+               END DO
+               zdi(i) = trcumul
+               tracei(i) = strace
+               !-------------------------------------------
+               !-------------------------------------------
+!               WRITE(*,*) "dop_fm_set - DCOS"
+!               CALL cp_fm_write_formatted(dop_fm_set(1, 1)%matrix, 6)
+!               WRITE(*,*) "dop_fm_set - DSIN"
+!               CALL cp_fm_write_formatted(dop_fm_set(2, 1)%matrix, 6)
+!               WRITE(*,*) "SIZE(dop_fm_set(1, 1)%matrix%local_data,1)", SIZE(dop_fm_set(1, 1)%matrix%local_data,1)
+!               WRITE(*,*) "SIZE(dop_fm_set(1, 1)%matrix%local_data,2)", SIZE(dop_fm_set(1, 1)%matrix%local_data,2)
+
+!
+!                  WRITE(*,*) "dop_fm_set - COS"
+!                  CALL cp_fm_write_formatted(dop_fm_set(1, 1)%matrix, 6)
+!                  WRITE(*,*) "dop_fm_set - SIN"
+!                  CALL cp_fm_write_formatted(dop_fm_set(2, 1)%matrix, 6)
+
+            END DO ! i
+            zdi = zdi*xphase
+
+            WRITE(*,*) "tracei(i)", tracei(:)
+
          CASE (2)
             ! Quadrupole
 !            CPABORT("Berry phase moments bigger than 1 not implemented")
             DO i = 1, 3
                DO j = i, 3
                   kvec(:) = twopi*(cell%h_inv(i, :)+cell%h_inv(j, :))
-                  CALL build_berry_moment_matrix(qs_env, cosmat, sinmat, kvec)
+                  ! (a|e^ikr|b)
+                  CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec, &
+                                                 nderivative = 1, dkcos = dkcos, dksin = dksin)
                   IF (qs_env%run_rtp) THEN
                      CALL get_qs_env(qs_env, rtp=rtp)
                      CALL get_rtp(rtp, mos_new=mos_new)
                      CALL op_orbbas_rtp(cosmat, sinmat, mos, op_fm_set, mos_new)
                   ELSE
+
+                  CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
+                  ! First derivs 
+                  DO k = 1, 3
                      CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
+                  END DO
+                  ! Second derivs
+                     DO k = 1, 6
+                        cosmat => dkcos(k)%matrix
+                        sinmat => dksin(k)%matrix
+                        !!!!!!!! OVERWRITING OF op_fm_set
+                        CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
+                     END DO
+
                   END IF
                   zdet = CMPLX(1._dp, 0._dp, dp)
                   DO ispin = 1, dft_control%nspins
                      CALL cp_cfm_get_info(eigrmat(ispin)%matrix, ncol_local=tmp_dim)
                      DO idim = 1, tmp_dim
                         eigrmat(ispin)%matrix%local_data(:, idim) = &
-                           ! exp(-ikr) = cos(kr) - i*sin(kr)
+                           ! e^ikr -> exp(-ikr) = cos(kr) - i*sin(kr)
                            CMPLX(op_fm_set(1, ispin)%matrix%local_data(:, idim), &
                                  -op_fm_set(2, ispin)%matrix%local_data(:, idim), dp)
                      END DO
@@ -2362,9 +2824,11 @@ CONTAINS
             CPABORT("Berry phase moments bigger than 4 not implemented")
          END SELECT
       END DO
+!------------------------------------------------------------------------------
       DO l = 1, nmom
          SELECT CASE (l)
          CASE (1)
+
             ! Dipole (apply periodic (2 Pi) boundary conditions)
             ci = AIMAG(LOG(zi))
             DO i = 1, 3
@@ -2372,6 +2836,33 @@ CONTAINS
                IF (qq(i)+ci(i) < -pi) ci(i) = ci(i)+twopi
             END DO
             rmom(2:4, 1) = MATMUL(cell%hmat, ci)/twopi
+
+            !newci = AIMAG(zdi)
+            newci = tracei
+
+            DO i = 1, 3
+               IF (qq(i)+newci(i) > pi) newci(i) = newci(i)-twopi
+               IF (qq(i)+newci(i) < -pi) newci(i) = newci(i)+twopi
+            END DO
+           ! newrmom = MATMUL(cell%hmat, newci)/twopi
+!            newrmom = 2.0_dp*newci
+            newrmom = newci
+            
+            IF(para_env%mepos==0) THEN 
+               WRITE(*,*) "ci", ci
+               WRITE(*,*) "new ci", newci
+               WRITE(*,*) ""
+               WRITE(*,*) "rmom(2:4, 1)", rmom(2:4, 1)
+               WRITE(*,*) "newrmom", newrmom
+               WRITE(*,*) ""
+               WRITE(*,*) "DIVIDE: old / new"
+            
+               IF (newrmom(1) .NE. 0) WRITE(*,*) rmom(2,1) / newrmom(1)
+               IF (newrmom(2) .NE. 0) WRITE(*,*) rmom(3,1) / newrmom(2)
+               IF (newrmom(3) .NE. 0) WRITE(*,*) rmom(4,1) / newrmom(3)
+               WRITE(*,*) ""
+            END IF
+
          CASE (2)
             ! Quadrupole
 !            CPABORT("Berry phase moments bigger than 1 not implemented")
@@ -2383,19 +2874,6 @@ CONTAINS
             END DO
             cij = 0.5_dp*cij/twopi/twopi
             cij = MATMUL(MATMUL(cell%hmat, cij), TRANSPOSE(cell%hmat))
-! old code - coordinate mapping issue
-!            DO k = 4, 9
-!               ix = indco(1, k+1)
-!               iy = indco(2, k+1)
-!               iz = indco(3, k+1)
-!               IF (ix == 0) THEN
-!                  rmom(k+1, 1) = cij(iy, iz)
-!               ELSE IF (iy == 0) THEN
-!                  rmom(k+1, 1) = cij(ix, iz)
-!               ELSE IF (iz == 0) THEN
-!                  rmom(k+1, 1) = cij(ix, iy)
-!               END IF
-!            END DO
  
             ! Hardcoding of upper triangular matrix elements of cij
             ! into moment vector
@@ -2417,8 +2895,9 @@ CONTAINS
             CPABORT("Berry phase moments bigger than 4 not implemented")
          END SELECT
       END DO
-
+!------------------------------------------------------------------------------
       rmom(:, 3) = rmom(:, 1)+rmom(:, 2)
+
       description = "[DIPOLE]"
       CALL cp_results_erase(results=results, description=description)
       CALL put_results(results=results, description=description, &
@@ -2438,20 +2917,835 @@ CONTAINS
       CALL dbcsr_deallocate_matrix(cosmat)
       CALL dbcsr_deallocate_matrix(sinmat)
 
-      DEALLOCATE(dkcos)
-      DEALLOCATE(dksin)
+!---------------
+      CALL dbcsr_deallocate_matrix(cosinv)
+      CALL dbcsr_deallocate_matrix(sininv)
 
+      CALL dbcsr_deallocate_matrix(fraccos)
+      CALL dbcsr_deallocate_matrix(fracsin)
+!---------------
+
+      CALL dbcsr_deallocate_matrix_set(dkcos)
+      CALL dbcsr_deallocate_matrix_set(dksin)
+
+      CALL cp_cfm_release(deigrmat%matrix)
+      CALL cp_cfm_release(inveigrmat%matrix)
+      CALL cp_cfm_release(cumulant_matrix%matrix)
+      CALL cp_cfm_release(deriveigrmat%matrix)
+ 
+      CALL cp_fm_release(unit_matrix%matrix)
 
       DO ispin = 1, dft_control%nspins
          CALL cp_fm_release(opvec(ispin)%matrix)
          CALL cp_cfm_release(eigrmat(ispin)%matrix)
          DO i = 1, SIZE(op_fm_set, 1)
             CALL cp_fm_release(op_fm_set(i, ispin)%matrix)
+            CALL cp_fm_release(tmp_op_fm_set(i, ispin)%matrix)
+            CALL cp_fm_release(dop_fm_set(i, ispin)%matrix)
          END DO
       END DO
+      DO i = 1, SIZE(nao_op_fm_set, 1)
+         CALL cp_fm_release(nao_op_fm_set(i)%matrix)
+         CALL cp_fm_release(nao_dop_fm_set(i)%matrix)
+      END DO
+
       DEALLOCATE (op_fm_set)
+      DEALLOCATE (dop_fm_set)
+      DEALLOCATE (tmp_op_fm_set)
       DEALLOCATE (opvec)
       DEALLOCATE (eigrmat)
+      DEALLOCATE (deigrmat)
+      DEALLOCATE (inveigrmat)
+      DEALLOCATE (deriveigrmat)
+      DEALLOCATE (cumulant_matrix)
+
+      DEALLOCATE (nao_op_fm_set)
+      DEALLOCATE (nao_dop_fm_set)
+
+      DEALLOCATE (unit_matrix)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE qs_moment_berry_phase3
+
+! **************************************************************************************************
+!> \brief ...
+!> \param qs_env ...
+!> \param magnetic ...
+!> \param nmoments ...
+!> \param reference ...
+!> \param ref_point ...
+!> \param unit_number ...
+! **************************************************************************************************
+   SUBROUTINE qs_moment_berry_phase2(qs_env, magnetic, nmoments, reference, ref_point, unit_number)
+
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      LOGICAL, INTENT(IN)                                :: magnetic
+      INTEGER, INTENT(IN)                                :: nmoments, reference
+      REAL(dp), DIMENSION(:), POINTER                    :: ref_point
+      INTEGER, INTENT(IN)                                :: unit_number
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'qs_moment_berry_phase2', &
+         routineP = moduleN//':'//routineN
+
+      CHARACTER(LEN=8), ALLOCATABLE, DIMENSION(:)        :: rlab
+      CHARACTER(LEN=default_string_length)               :: description
+      COMPLEX(dp)                                        :: xphase(3), zdet, zdeta, zi(3), &
+                                                            zij(3, 3), zijk(3, 3, 3), &
+                                                            zijkl(3, 3, 3, 3), zphase(3), zz
+      INTEGER                                            :: handle, i, ia, idim, ikind, ispin, ix, &
+                                                            iy, iz, j, k, l, nao, nm, nmo, nmom, &
+                                                            nmotot
+      LOGICAL                                            :: floating, ghost, uniform
+      REAL(dp)                                           :: charge, ci(3), cij(3, 3), dd, occ, trace
+      REAL(dp), ALLOCATABLE, DIMENSION(:)                :: mmom
+      REAL(dp), ALLOCATABLE, DIMENSION(:, :)             :: rmom
+      REAL(dp), DIMENSION(3)                             :: kvec, qq, rcc, ria
+      TYPE(atomic_kind_type), POINTER                    :: atomic_kind
+      TYPE(cell_type), POINTER                           :: cell
+      TYPE(cp_cfm_p_type), DIMENSION(:), POINTER         :: eigrmat
+      TYPE(cp_fm_p_type), DIMENSION(:), POINTER          :: mos_new, opvec
+      TYPE(cp_fm_p_type), DIMENSION(:, :), POINTER       :: op_fm_set
+      TYPE(cp_fm_struct_type), POINTER                   :: tmp_fm_struct
+      TYPE(cp_fm_type), POINTER                          :: mo_coeff
+      TYPE(cp_para_env_type), POINTER                    :: para_env
+      TYPE(cp_result_type), POINTER                      :: results
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s, rho_ao
+      TYPE(dbcsr_type), POINTER                          :: cosmat, sinmat
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(distribution_1d_type), POINTER                :: local_particles
+      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
+      TYPE(qs_rho_type), POINTER                         :: rho
+      TYPE(rt_prop_type), POINTER                        :: rtp
+
+      ! fbelle
+      TYPE(cp_fm_p_type), DIMENSION(:, :), POINTER       :: tmp_op_fm_set
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: dkcos, dksin
+      TYPE(cp_fm_p_type), DIMENSION(:, :), POINTER       :: dop_fm_set
+      TYPE(cp_cfm_p_type), DIMENSION(:), POINTER         :: deigrmat
+      TYPE(cp_cfm_p_type), DIMENSION(:), POINTER         :: inveigrmat
+      TYPE(cp_cfm_p_type), DIMENSION(:), POINTER         :: cumulant_matrix
+
+      COMPLEX(dp)                                        :: zdi(3), zdij(3,3)
+      REAL(dp)                                           :: newci(3)
+      REAL(dp)                                           :: newrmom(3)
+      INTEGER                                            :: tmp_dim
+
+      ! fbelle - inversion craze
+      TYPE(dbcsr_type), POINTER                          :: fraccos, fracsin
+      TYPE(dbcsr_type), POINTER                          :: cosinv, sininv
+      COMPLEX(dp)                                        :: trcumul
+      REAL(dp)                                           :: tracei(3), sintrace, strace
+
+      REAL(dp)                                           :: relem, ielem
+      COMPLEX(dp)                                        :: zelem, invelem
+      INTEGER                                            :: icol, irow
+      TYPE(cp_fm_p_type), POINTER                        :: unit_matrix
+
+      CPASSERT(ASSOCIATED(qs_env))
+
+!      WRITE(*,*) "qs_moment_berry_phase2 - BEGINNING"
+
+      IF (ASSOCIATED(qs_env%ls_scf_env)) THEN
+         IF (unit_number > 0) WRITE (unit_number, *) "Periodic moment calculation not implemented in linear scaling code"
+         RETURN
+      ENDIF
+
+      CALL timeset(routineN, handle)
+
+      ! restrict maximum moment available
+      nmom = MIN(nmoments, 2)
+
+      nm = (6+11*nmom+6*nmom**2+nmom**3)/6-1
+      ! rmom(:,1)=electronic
+      ! rmom(:,2)=nuclear
+      ! rmom(:,3)=total
+      ALLOCATE (rmom(nm+1, 3))
+      ALLOCATE (rlab(nm+1))
+      rmom = 0.0_dp
+      rlab = ""
+      IF (magnetic) THEN
+         nm = 3
+         ALLOCATE (mmom(nm))
+         mmom = 0._dp
+      END IF
+
+     ! fbelle
+     ! DEBUGGING OF DERIVATIVES
+     CALL debug_berry_moment_matrix(qs_env, nmoments = 1)
+
+      NULLIFY (dft_control, rho, cell, particle_set, results, para_env, &
+               local_particles, matrix_s, mos, rho_ao)
+
+      CALL get_qs_env(qs_env, &
+                      dft_control=dft_control, &
+                      rho=rho, &
+                      cell=cell, &
+                      results=results, &
+                      particle_set=particle_set, &
+                      qs_kind_set=qs_kind_set, &
+                      para_env=para_env, &
+                      local_particles=local_particles, &
+                      matrix_s=matrix_s, &
+                      mos=mos)
+
+      CALL qs_rho_get(rho, rho_ao=rho_ao)
+
+      NULLIFY (cosmat, sinmat)
+      ALLOCATE (cosmat, sinmat)
+      CALL dbcsr_copy(cosmat, matrix_s(1)%matrix, 'COS MOM')
+      CALL dbcsr_copy(sinmat, matrix_s(1)%matrix, 'SIN MOM')
+      CALL dbcsr_set(cosmat, 0.0_dp)
+      CALL dbcsr_set(sinmat, 0.0_dp)
+
+!----------------
+      NULLIFY (cosinv, sininv)
+      ALLOCATE (cosinv, sininv)
+      CALL dbcsr_copy(cosinv, matrix_s(1)%matrix, 'COS MOM')
+      CALL dbcsr_copy(sininv, matrix_s(1)%matrix, 'SIN MOM')
+      CALL dbcsr_set(cosinv, 0.0_dp)
+      CALL dbcsr_set(sininv, 0.0_dp)
+
+      NULLIFY (fraccos, fracsin)
+      ALLOCATE (fraccos, fracsin)
+      CALL dbcsr_copy(fraccos, matrix_s(1)%matrix, 'COS MOM')
+      CALL dbcsr_copy(fracsin, matrix_s(1)%matrix, 'SIN MOM')
+      CALL dbcsr_set(fraccos, 0.0_dp)
+      CALL dbcsr_set(fracsin, 0.0_dp)
+!----------------
+
+      ALLOCATE (op_fm_set(2, dft_control%nspins))
+      ALLOCATE (tmp_op_fm_set(2, dft_control%nspins))
+      ALLOCATE (opvec(dft_control%nspins))
+      ALLOCATE (eigrmat(dft_control%nspins))
+      ALLOCATE (inveigrmat(dft_control%nspins))
+
+      ! Initialize and allocate matrices to store derivatives
+      IF(nmom >= 1) THEN
+         ALLOCATE (dop_fm_set(2, dft_control%nspins))
+         ALLOCATE (deigrmat(dft_control%nspins))
+         ALLOCATE (cumulant_matrix(dft_control%nspins))
+
+         NULLIFY(dkcos, dksin)
+         CALL dbcsr_allocate_matrix_set(dkcos, 3)
+         CALL dbcsr_allocate_matrix_set(dksin, 3)
+         DO i = 1, 3
+            ALLOCATE(dkcos(i)%matrix, dksin(i)%matrix)
+            CALL dbcsr_copy(dkcos(i)%matrix, matrix_s(1)%matrix, 'DKCOS MOM')
+            CALL dbcsr_copy(dksin(i)%matrix, matrix_s(1)%matrix, 'DKSIN MOM')
+            CALL dbcsr_set(dkcos(i)%matrix, 0.0_dp)
+            CALL dbcsr_set(dksin(i)%matrix, 0.0_dp)
+         END DO
+      END IF
+
+      ! fbelle - Store projected derivatives 
+      nmotot = 0
+      DO ispin = 1, dft_control%nspins
+         NULLIFY (tmp_fm_struct, mo_coeff)
+         CALL get_mo_set(mo_set=mos(ispin)%mo_set, mo_coeff=mo_coeff, nao=nao, nmo=nmo)
+         nmotot = nmotot+nmo
+         WRITE(*,*) "nmo", nmo
+         WRITE(*,*) "nao", nao
+         WRITE(*,*) "nmotot", nmotot
+         CALL cp_fm_create(opvec(ispin)%matrix, mo_coeff%matrix_struct)
+         CALL cp_fm_struct_create(tmp_fm_struct, nrow_global=nmo, &
+                                  ncol_global=nmo, para_env=para_env, context=mo_coeff%matrix_struct%context)
+         DO i = 1, SIZE(op_fm_set, 1)
+            NULLIFY (op_fm_set(i, ispin)%matrix)
+            NULLIFY (dop_fm_set(i, ispin)%matrix)
+            NULLIFY (tmp_op_fm_set(i, ispin)%matrix)
+            CALL cp_fm_create(op_fm_set(i, ispin)%matrix, tmp_fm_struct)
+            CALL cp_fm_create(dop_fm_set(i, ispin)%matrix, tmp_fm_struct)
+            CALL cp_fm_create(tmp_op_fm_set(i, ispin)%matrix, tmp_fm_struct)
+         END DO
+
+         CALL cp_cfm_create(eigrmat(ispin)%matrix, op_fm_set(1, ispin)%matrix%matrix_struct)
+         CALL cp_cfm_create(deigrmat(ispin)%matrix, op_fm_set(1, ispin)%matrix%matrix_struct)
+         CALL cp_cfm_create(inveigrmat(ispin)%matrix, op_fm_set(1, ispin)%matrix%matrix_struct)
+         CALL cp_cfm_create(cumulant_matrix(ispin)%matrix, op_fm_set(1, ispin)%matrix%matrix_struct)
+         
+         ! Create unit matrix 
+         ALLOCATE(unit_matrix)
+         NULLIFY(unit_matrix%matrix)
+         CALL cp_fm_create(unit_matrix%matrix, tmp_fm_struct)
+         
+         CALL cp_fm_struct_release(tmp_fm_struct)
+      END DO
+
+     ! set unit amtrix
+     CALL cp_fm_set_all(unit_matrix%matrix, 0.0_dp, 1.0_dp) 
+
+
+
+      ! occupation
+      DO ispin = 1, dft_control%nspins
+         CALL get_mo_set(mo_set=mos(ispin)%mo_set, maxocc=occ, uniform_occupation=uniform)
+         IF (.NOT. uniform) THEN
+            CPABORT("Berry phase moments for non uniform MOs' occupation numbers not implemented")
+         END IF
+      END DO
+
+      ! reference point
+      CALL get_reference_point(rcc, qs_env=qs_env, reference=reference, ref_point=ref_point)
+      rcc = pbc(rcc, cell)
+
+      ! label
+      DO l = 1, nm
+         ix = indco(1, l+1)
+         iy = indco(2, l+1)
+         iz = indco(3, l+1)
+         CALL set_label(rlab(l+1), ix, iy, iz)
+      END DO
+
+      ! nuclear contribution
+      DO ia = 1, SIZE(particle_set)
+         atomic_kind => particle_set(ia)%atomic_kind
+         CALL get_atomic_kind(atomic_kind, kind_number=ikind)
+         CALL get_qs_kind(qs_kind_set(ikind), core_charge=charge, ghost=ghost, floating=floating)
+         IF (.NOT. ghost .AND. .NOT. floating) THEN
+            rmom(1, 2) = rmom(1, 2)-charge
+         ENDIF
+      END DO
+      ria = twopi*MATMUL(cell%h_inv, rcc)
+      zphase = CMPLX(COS(ria), SIN(ria), dp)**rmom(1, 2)
+
+      zi = 0._dp
+      zij = 0._dp
+      zijk = 0._dp
+      zijkl = 0._dp
+
+      DO l = 1, nmom
+         SELECT CASE (l)
+         CASE (1)
+            ! Dipole
+!            WRITE(*,*) "Dipole - Nuclear"
+            zi(:) = CMPLX(1._dp, 0._dp, dp)
+            DO ia = 1, SIZE(particle_set)
+               atomic_kind => particle_set(ia)%atomic_kind
+               CALL get_atomic_kind(atomic_kind, kind_number=ikind)
+               CALL get_qs_kind(qs_kind_set(ikind), core_charge=charge, ghost=ghost, floating=floating)
+               IF (.NOT. ghost .AND. .NOT. floating) THEN
+                  ria = particle_set(ia)%r
+                  ria = pbc(ria, cell)
+                  DO i = 1, 3
+                     kvec(:) = twopi*cell%h_inv(i, :)
+                     dd = SUM(kvec(:)*ria(:))
+                     zdeta = CMPLX(COS(dd), SIN(dd), KIND=dp)**charge
+                     zi(i) = zi(i)*zdeta
+                  END DO
+               ENDIF
+            END DO
+            zi = zi*zphase
+            ci = AIMAG(LOG(zi))/twopi
+            qq = AIMAG(LOG(zi))
+            rmom(2:4, 2) = MATMUL(cell%hmat, ci)
+         CASE (2)
+            ! Quadrupole
+!            CPABORT("Berry phase moments bigger than 1 not implemented")
+            zij(:, :) = CMPLX(1._dp, 0._dp, dp)
+            DO ia = 1, SIZE(particle_set)
+               atomic_kind => particle_set(ia)%atomic_kind
+               CALL get_atomic_kind(atomic_kind, kind_number=ikind)
+               CALL get_qs_kind(qs_kind_set(ikind), core_charge=charge)
+               ria = particle_set(ia)%r
+               ria = pbc(ria, cell)
+               DO i = 1, 3
+                  DO j = i, 3
+                     kvec(:) = twopi*(cell%h_inv(i, :)+cell%h_inv(j, :))
+                     dd = SUM(kvec(:)*ria(:))
+                     zdeta = CMPLX(COS(dd), SIN(dd), KIND=dp)**charge
+                     zij(i, j) = zij(i, j)*zdeta
+                     ! upper triangular elements of symmetric rank-2 tensor
+                     zij(j, i) = zij(i, j)
+                  END DO
+               END DO
+            END DO
+
+            DO i = 1, 3
+               DO j = 1, 3
+                  zij(i, j) = zij(i, j)*zphase(i)*zphase(j)
+                  zz = zij(i, j)/zi(i)/zi(j)
+                  cij(i, j) = AIMAG(LOG(zz))/twopi
+               END DO
+            END DO
+
+            cij = 0.5_dp*cij/twopi/twopi
+            cij = MATMUL(MATMUL(cell%hmat, cij), TRANSPOSE(cell%hmat))
+
+            DO k = 4, 9
+!               ! old implementation - does not correctly map
+!               ix = indco(1, k+1)
+!               iy = indco(2, k+1)
+!               iz = indco(3, k+1)
+!               WRITE(*,*) "k/ix/iy/iz", k, ix, iy, iz
+!               IF (ix == 0) THEN
+!                  rmom(k+1, 2) = cij(iy, iz)
+!               ELSE IF (iy == 0) THEN
+!                  rmom(k+1, 2) = cij(ix, iz)
+!               ELSE IF (iz == 0) THEN
+!                  rmom(k+1, 2) = cij(ix, iy)
+!               END IF
+            END DO
+
+         ! Hardcoding of upper triangular matrix elements of cij
+         ! into moment vector
+         ! I am sorry
+         rmom(5,2) = cij(1,1) 
+         rmom(6,2) = cij(1,2) 
+         rmom(7,2) = cij(1,3) 
+         rmom(8,2) = cij(2,2) 
+         rmom(9,2) = cij(2,3) 
+         rmom(10,2) = cij(3,3) 
+
+         CASE (3)
+            ! Octapole
+            CPABORT("Berry phase moments bigger than 2 not implemented")
+         CASE (4)
+            ! Hexadecapole
+            CPABORT("Berry phase moments bigger than 3 not implemented")
+         CASE DEFAULT
+            CPABORT("Berry phase moments bigger than 4 not implemented")
+         END SELECT
+      END DO
+
+      ! electronic contribution
+
+      ria = twopi*REAL(nmotot, dp)*occ*MATMUL(cell%h_inv, rcc)
+      xphase = CMPLX(COS(ria), SIN(ria), dp)
+      
+      ! charge
+      trace = 0.0_dp
+      DO ispin = 1, dft_control%nspins
+         CALL dbcsr_trace(rho_ao(ispin)%matrix, matrix_s(1)%matrix, trace)
+         rmom(1, 1) = rmom(1, 1)+trace
+      END DO
+
+      zi = 0._dp
+      zij = 0._dp
+      zijk = 0._dp
+      zijkl = 0._dp
+
+      zdi = 0._dp
+      zdij = 0._dp
+
+      tracei = 0._dp
+
+      ! MODFIED ONLY TAKES DIAGONAL DERIV
+      DO l = 1, nmom
+         SELECT CASE (l)
+         CASE (1)
+            ! OLD OLD OLD OLD OLD OLD
+            ! Dipole
+            DO i = 1, 3
+               WRITE(*,*) "DIPOLE DIRECTION i IN OLD", i
+               kvec(:) = twopi*cell%h_inv(i, :)
+               CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec)
+               IF (qs_env%run_rtp) THEN
+                  CALL get_qs_env(qs_env, rtp=rtp)
+                  CALL get_rtp(rtp, mos_new=mos_new)
+                  CALL op_orbbas_rtp(cosmat, sinmat, mos, op_fm_set, mos_new)
+               ELSE
+                  CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
+               END IF
+
+               WRITE(*,*) "cosmat" 
+               CALL dbcsr_print(cosmat)
+!               WRITE(*,*) "op_fm_set - COS"
+!               CALL cp_fm_write_formatted(op_fm_set(1, 1)%matrix, 6)
+!               WRITE(*,*) "op_fm_set - SIN"
+!               CALL cp_fm_write_formatted(op_fm_set(2, 1)%matrix, 6)
+               zdet = CMPLX(1._dp, 0._dp, dp)
+               DO ispin = 1, dft_control%nspins
+                  CALL cp_cfm_get_info(eigrmat(ispin)%matrix, ncol_local=tmp_dim)
+                  WRITE(*,*) "tmp_dim", tmp_dim
+                  DO idim = 1, tmp_dim
+                     eigrmat(ispin)%matrix%local_data(:, idim) = &
+                        CMPLX(op_fm_set(1, ispin)%matrix%local_data(:, idim), &
+                              -op_fm_set(2, ispin)%matrix%local_data(:, idim), dp)
+                  END DO
+                  CALL cp_cfm_lu_decompose(eigrmat(ispin)%matrix, zdeta)
+                  zdet = zdet*zdeta
+                  IF (dft_control%nspins == 1) THEN
+                     zdet = zdet*zdeta
+                  ENDIF
+               END DO
+               zi(i) = zdet
+            END DO
+            zi = zi*xphase
+            ! OLD OLD OLD OLD OLD OLD
+
+            ! Dipole
+            DO i = 1, 3
+               WRITE(*,*) "DIPOLE DIRECTION i", i
+               kvec(:) = twopi*cell%h_inv(i, :)
+               WRITE(*,*) "kvec(:)", i, kvec(:)
+               ! (a|e^ikr|b)
+               CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec, &
+                                               nderivative = 1, dkcos = dkcos, dksin = dksin)
+
+!               WRITE(*,*) "dkcos(1:3) - ANALYTICAL" 
+!               CALL dbcsr_print(dkcos(1)%matrix)
+!               CALL dbcsr_print(dkcos(2)%matrix)
+!               CALL dbcsr_print(dkcos(3)%matrix)
+                              
+               !CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec)
+
+!               ! Numerical calculation of derivatives 
+!               WRITE(*,*) "numer_berry_moment_matrix"
+!               CALL numer_berry_moment_matrix(qs_env, kvec, nmoments = 1, dkc = dkcos, dks = dksin)
+!               WRITE(*,*) "dkcos(1:3) - NUMERICAL" 
+!               CALL dbcsr_print(dkcos(1)%matrix)
+!               CALL dbcsr_print(dkcos(2)%matrix)
+!               CALL dbcsr_print(dkcos(3)%matrix)
+
+               ! project cosmat and dkcos
+               CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
+               CALL op_orbbas(dkcos(i)%matrix, dksin(i)%matrix, mos, dop_fm_set, opvec)
+
+!               WRITE(*,*) "dop_fm_set - DCOS"
+!               CALL cp_fm_write_formatted(dop_fm_set(1, 1)%matrix, 6)
+!               WRITE(*,*) "dop_fm_set - DSIN"
+!               CALL cp_fm_write_formatted(dop_fm_set(2, 1)%matrix, 6)
+!               WRITE(*,*) "SIZE(dop_fm_set(1, 1)%matrix%local_data,1)", SIZE(dop_fm_set(1, 1)%matrix%local_data,1)
+!               WRITE(*,*) "SIZE(dop_fm_set(1, 1)%matrix%local_data,2)", SIZE(dop_fm_set(1, 1)%matrix%local_data,2)
+
+!                  WRITE(*,*) "op_fm_set - COS"
+!                  CALL cp_fm_write_formatted(op_fm_set(1, 1)%matrix, 6)
+!                  WRITE(*,*) "op_fm_set - SIN"
+!                  CALL cp_fm_write_formatted(op_fm_set(2, 1)%matrix, 6)
+!
+!                  WRITE(*,*) "dop_fm_set - COS"
+!                  CALL cp_fm_write_formatted(dop_fm_set(1, 1)%matrix, 6)
+!                  WRITE(*,*) "dop_fm_set - SIN"
+!                  CALL cp_fm_write_formatted(dop_fm_set(2, 1)%matrix, 6)
+
+               ! build complex matrix of deriv #0 and #1
+               strace = 0._dp
+               DO ispin = 1, dft_control%nspins
+                  CALL cp_cfm_get_info(eigrmat(ispin)%matrix, ncol_local=tmp_dim)
+!                  WRITE(*,*) "tmp_dim", tmp_dim
+                  DO idim = 1, tmp_dim
+!                     WRITE(*,*) "idim", idim
+                     ! exp(ikr) -> exp(-ikr) = cos(kr) - i*sin(kr)
+                     eigrmat(ispin)%matrix%local_data(:, idim) = &
+                        CMPLX(op_fm_set(1, ispin)%matrix%local_data(:, idim), &
+                              -op_fm_set(2, ispin)%matrix%local_data(:, idim), dp)
+
+                     deigrmat(ispin)%matrix%local_data(:, idim) = &
+                         CMPLX(dop_fm_set(1, ispin)%matrix%local_data(:, idim), &
+                               -dop_fm_set(2, ispin)%matrix%local_data(:, idim), dp)
+                  END DO
+                  !------------------ 
+             
+                ! Fancy routines approach
+                !CALL cp_fm_scale(-1.0_dp, op_fm_set(2)%matrix)
+                !CALL cp_fm_to_cfm(msourcer = op_fm_set(1)%matrix, &
+                !                  msourcei = op_fm_set(2)%matrix, &
+                !                  mtarget = eriveigrmat%matrix)
+                !CALL cp_fm_scale(-1.0_dp, dop_fm_set(2)%matrix)
+                !CALL cp_fm_to_cfm(msourcer = dop_fm_set(1)%matrix, &
+                !                  msourcei = dop_fm_set(2)%matrix, &
+                !                  mtarget = deriveigrmat%matrix)
+
+
+
+!                  CALL cp_cfm_to_fm(msource = eigrmat(ispin)%matrix, &
+!                                    mtargetr = tmp_op_fm_set(1, ispin)%matrix, &
+!                                    mtargeti = tmp_op_fm_set(2, ispin)%matrix)
+!                  WRITE(*,*) "tmp_op_fm_set - COS - BEFORE inv"
+!                  CALL cp_fm_write_formatted(tmp_op_fm_set(1, ispin)%matrix, 6)
+!                  WRITE(*,*) "tmp_op_fm_set - SIN - BEFORE inv"
+!                  CALL cp_fm_write_formatted(tmp_op_fm_set(2, ispin)%matrix, 6)
+
+                  ! element by element inversion
+                  DO icol = 1, tmp_dim
+                     DO irow = 1, tmp_dim
+                        zelem = eigrmat(ispin)%matrix%local_data(irow, icol) 
+                        relem = REAL(zelem, dp)
+                        ielem = AIMAG(zelem)
+                        IF(relem == 0.0_dp .AND. ielem == 0.0_dp) THEN
+                           invelem = CMPLX(0.0_dp, 0.0_dp, dp)
+                        ELSE
+                           invelem = CMPLX(relem/(relem**2+ielem**2), -1.0_dp*ielem/(relem**2+ielem**2), dp)
+                        END IF
+                        ! set cfm matrix element to its inverse
+                        inveigrmat(ispin)%matrix%local_data(irow, icol) = invelem
+                     END DO
+                  END DO
+                  !------------------ 
+
+                  ! TEST: Complex matrix inversion only if det != 0
+                  !CALL cp_cfm_lu_decompose(eigrmat(ispin)%matrix, zdeta)
+                  !WRITE(*,*) "zdeta", zdeta
+
+!                  ! matrix inversion
+!                  WRITE(*,*) "matrix inversion"
+!                  CALL cp_cfm_lu_invert(eigrmat(ispin)%matrix) 
+
+!                  CALL cp_cfm_to_fm(msource = eigrmat(ispin)%matrix, &
+!                                    mtargetr = tmp_op_fm_set(1, ispin)%matrix, &
+!                                    mtargeti = tmp_op_fm_set(2, ispin)%matrix)
+!                  WRITE(*,*) "EIGRMAT - COS"
+!                  CALL cp_fm_write_formatted(tmp_op_fm_set(1, ispin)%matrix, 6)
+!                  WRITE(*,*) "EIGRMAT - SIN"
+!                  CALL cp_fm_write_formatted(tmp_op_fm_set(2, ispin)%matrix, 6)
+!                  CALL cp_cfm_to_fm(msource = inveigrmat(ispin)%matrix, &
+!                                    mtargetr = tmp_op_fm_set(1, ispin)%matrix, &
+!                                    mtargeti = tmp_op_fm_set(2, ispin)%matrix)
+!                  WRITE(*,*) "INV EIGRMAT - COS"
+!                  CALL cp_fm_write_formatted(tmp_op_fm_set(1, ispin)%matrix, 6)
+!                  WRITE(*,*) "INV EIGRMAT - SIN"
+!                  CALL cp_fm_write_formatted(tmp_op_fm_set(2, ispin)%matrix, 6)
+!                  CALL cp_cfm_to_fm(msource = deigrmat(ispin)%matrix, &
+!                                    mtargetr = tmp_op_fm_set(1, ispin)%matrix, &
+!                                    mtargeti = tmp_op_fm_set(2, ispin)%matrix)
+!                  WRITE(*,*) "DEIGRMAT - COS"
+!                  CALL cp_fm_write_formatted(tmp_op_fm_set(1, ispin)%matrix, 6)
+!                  WRITE(*,*) "DEIGRMAT - SIN"
+!                  CALL cp_fm_write_formatted(tmp_op_fm_set(2, ispin)%matrix, 6)
+
+                  !------------------ 
+!                  ! TEST M * M^-1 = Id
+!                  CALL cp_cfm_schur_product(inveigrmat(ispin)%matrix, eigrmat(ispin)%matrix, &
+!                                            cumulant_matrix(ispin)%matrix)
+!                  ! cfm -> fm
+!                  CALL cp_cfm_to_fm(msource = cumulant_matrix(ispin)%matrix, &
+!                                    mtargetr = tmp_op_fm_set(1, ispin)%matrix, &
+!                                    mtargeti = tmp_op_fm_set(2, ispin)%matrix )
+!
+!                  WRITE(*,*) "COS - AFTER z*1/z"
+!                  CALL cp_fm_write_formatted(tmp_op_fm_set(1, ispin)%matrix, 6)
+!                  WRITE(*,*) "SIN - AFTER z*1/z"
+!                  CALL cp_fm_write_formatted(tmp_op_fm_set(2, ispin)%matrix, 6)
+                  !------------------ 
+
+!                  ! Matrix product 
+!                  CALL cp_cfm_gemm("N", "N", tmp_dim, tmp_dim, tmp_dim, z_one, deigrmat(ispin)%matrix, &
+!                                   inveigrmat(ispin)%matrix, z_one, cumulant_matrix(ispin)%matrix)
+
+
+                  !------------------ 
+                  ! Multiplying Hadamard 
+                  CALL cp_cfm_schur_product(inveigrmat(ispin)%matrix, deigrmat(ispin)%matrix, &
+                                            cumulant_matrix(ispin)%matrix)
+                  ! cfm -> fm
+                  CALL cp_cfm_to_fm(msource = cumulant_matrix(ispin)%matrix, &
+                                    mtargetr = tmp_op_fm_set(1, ispin)%matrix, &
+                                    mtargeti = tmp_op_fm_set(2, ispin)%matrix )
+
+!                  WRITE(*,*) "COS - AFTER HADAMARD"
+!                  CALL cp_fm_write_formatted(tmp_op_fm_set(1, ispin)%matrix, 6)
+                  WRITE(*,*) "SIN - AFTER HADAMARD"
+                  CALL cp_fm_write_formatted(tmp_op_fm_set(2, ispin)%matrix, 6)
+                  !------------------ 
+
+                  CALL cp_fm_trace(unit_matrix%matrix, tmp_op_fm_set(2, ispin)%matrix, sintrace) 
+
+                  WRITE(*,*) "sintrace", sintrace
+
+                  strace = strace + sintrace
+ 
+                  WRITE(*,*) "sintrace", sintrace
+                  WRITE(*,*) "strace", strace
+
+               END DO ! ispin
+               zdi(i) = trcumul
+               tracei(i) = strace
+
+               WRITE(*,*) "tracei", tracei(i)
+
+            END DO ! i
+            zdi = zdi*xphase
+            WRITE(*,*) "tracei", tracei(:)
+
+         CASE (2)
+            ! Quadrupole
+!            CPABORT("Berry phase moments bigger than 1 not implemented")
+            DO i = 1, 3
+               DO j = i, 3
+                  kvec(:) = twopi*(cell%h_inv(i, :)+cell%h_inv(j, :))
+                  ! (a|e^ikr|b)
+                  CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec, &
+                                                 nderivative = 1, dkcos = dkcos, dksin = dksin)
+                  IF (qs_env%run_rtp) THEN
+                     CALL get_qs_env(qs_env, rtp=rtp)
+                     CALL get_rtp(rtp, mos_new=mos_new)
+                     CALL op_orbbas_rtp(cosmat, sinmat, mos, op_fm_set, mos_new)
+                  ELSE
+
+                  CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
+                  ! First derivs 
+                  DO k = 1, 3
+                     CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
+                  END DO
+                  ! Second derivs
+                     DO k = 1, 6
+                        cosmat => dkcos(k)%matrix
+                        sinmat => dksin(k)%matrix
+                     !!!!!!!! OVERWRITING OF op_fm_set
+                        CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
+                     END DO
+
+                  END IF
+                  zdet = CMPLX(1._dp, 0._dp, dp)
+                  DO ispin = 1, dft_control%nspins
+                     CALL cp_cfm_get_info(eigrmat(ispin)%matrix, ncol_local=tmp_dim)
+                     DO idim = 1, tmp_dim
+                        eigrmat(ispin)%matrix%local_data(:, idim) = &
+                           ! e^ikr -> exp(-ikr) = cos(kr) - i*sin(kr)
+                           CMPLX(op_fm_set(1, ispin)%matrix%local_data(:, idim), &
+                                 -op_fm_set(2, ispin)%matrix%local_data(:, idim), dp)
+                     END DO
+                     CALL cp_cfm_lu_decompose(eigrmat(ispin)%matrix, zdeta)
+                     zdet = zdet*zdeta
+                     IF (dft_control%nspins == 1) THEN
+                        zdet = zdet*zdeta
+                     ENDIF
+                  END DO
+                  zij(i, j) = zdet*xphase(i)*xphase(j)
+                  zij(j, i) = zdet*xphase(i)*xphase(j)
+               END DO
+            END DO
+         CASE (3)
+            ! Octapole
+            CPABORT("Berry phase moments bigger than 2 not implemented")
+         CASE (4)
+            ! Hexadecapole
+            CPABORT("Berry phase moments bigger than 3 not implemented")
+         CASE DEFAULT
+            CPABORT("Berry phase moments bigger than 4 not implemented")
+         END SELECT
+      END DO
+!------------------------------------------------------------------------------
+      DO l = 1, nmom
+         SELECT CASE (l)
+         CASE (1)
+
+            ! Dipole (apply periodic (2 Pi) boundary conditions)
+            ci = AIMAG(LOG(zi))
+            DO i = 1, 3
+               IF (qq(i)+ci(i) > pi) ci(i) = ci(i)-twopi
+               IF (qq(i)+ci(i) < -pi) ci(i) = ci(i)+twopi
+            END DO
+            rmom(2:4, 1) = MATMUL(cell%hmat, ci)/twopi
+
+            !newci = AIMAG(zdi)
+            newci = tracei
+
+            DO i = 1, 3
+               IF (qq(i)+newci(i) > pi) newci(i) = newci(i)-twopi
+               IF (qq(i)+newci(i) < -pi) newci(i) = newci(i)+twopi
+            END DO
+            !newrmom = MATMUL(cell%hmat, newci)/twopi
+            newrmom = 2.0_dp*newci
+            
+            IF(para_env%mepos==0) THEN 
+               WRITE(*,*) "ci", ci
+               WRITE(*,*) "new ci", newci
+               WRITE(*,*) ""
+               WRITE(*,*) "rmom(2:4, 1)", rmom(2:4, 1)
+               WRITE(*,*) "newrmom", newrmom
+               WRITE(*,*) ""
+               WRITE(*,*) "DIVIDE: old / new"
+               WRITE(*,*) rmom(2:4,1) / newrmom(1:3)
+               WRITE(*,*) ""
+               !WRITE(*,*) "2*cell%h_inv*twopi", 2*twopi*cell%h_inv
+
+            END IF
+
+         CASE (2)
+            ! Quadrupole
+!            CPABORT("Berry phase moments bigger than 1 not implemented")
+            DO i = 1, 3
+               DO j = 1, 3
+                  zz = zij(i, j)/zi(i)/zi(j)
+                  cij(i, j) = AIMAG(LOG(zz))/twopi
+               END DO
+            END DO
+            cij = 0.5_dp*cij/twopi/twopi
+            cij = MATMUL(MATMUL(cell%hmat, cij), TRANSPOSE(cell%hmat))
+ 
+            ! Hardcoding of upper triangular matrix elements of cij
+            ! into moment vector
+            ! I am sorry
+            rmom(5,2) = cij(1,1) 
+            rmom(6,2) = cij(1,2) 
+            rmom(7,2) = cij(1,3) 
+            rmom(8,2) = cij(2,2) 
+            rmom(9,2) = cij(2,3) 
+            rmom(10,2) = cij(3,3) 
+ 
+         CASE (3)
+            ! Octapole
+            CPABORT("Berry phase moments bigger than 2 not implemented")
+         CASE (4)
+            ! Hexadecapole
+            CPABORT("Berry phase moments bigger than 3 not implemented")
+         CASE DEFAULT
+            CPABORT("Berry phase moments bigger than 4 not implemented")
+         END SELECT
+      END DO
+!------------------------------------------------------------------------------
+      rmom(:, 3) = rmom(:, 1)+rmom(:, 2)
+
+      description = "[DIPOLE]"
+      CALL cp_results_erase(results=results, description=description)
+      CALL put_results(results=results, description=description, &
+                       values=rmom(2:4, 3))
+      IF (magnetic) THEN
+         CALL print_moments(unit_number, nmom, rmom, rlab, rcc, cell, periodic=.TRUE., mmom=mmom)
+      ELSE
+         CALL print_moments(unit_number, nmom, rmom, rlab, rcc, cell, periodic=.TRUE.)
+      END IF
+
+      DEALLOCATE (rmom)
+      DEALLOCATE (rlab)
+      IF (magnetic) THEN
+         DEALLOCATE (mmom)
+      END IF
+
+      CALL dbcsr_deallocate_matrix(cosmat)
+      CALL dbcsr_deallocate_matrix(sinmat)
+
+!---------------
+      CALL dbcsr_deallocate_matrix(cosinv)
+      CALL dbcsr_deallocate_matrix(sininv)
+
+      CALL dbcsr_deallocate_matrix(fraccos)
+      CALL dbcsr_deallocate_matrix(fracsin)
+!---------------
+
+      CALL dbcsr_deallocate_matrix_set(dkcos)
+      CALL dbcsr_deallocate_matrix_set(dksin)
+
+      CALL cp_fm_release(unit_matrix%matrix)
+
+      DO ispin = 1, dft_control%nspins
+         CALL cp_fm_release(opvec(ispin)%matrix)
+         CALL cp_cfm_release(eigrmat(ispin)%matrix)
+         CALL cp_cfm_release(deigrmat(ispin)%matrix)
+         CALL cp_cfm_release(inveigrmat(ispin)%matrix)
+         CALL cp_cfm_release(cumulant_matrix(ispin)%matrix)
+
+         DO i = 1, SIZE(op_fm_set, 1)
+            CALL cp_fm_release(op_fm_set(i, ispin)%matrix)
+            CALL cp_fm_release(tmp_op_fm_set(i, ispin)%matrix)
+            CALL cp_fm_release(dop_fm_set(i, ispin)%matrix)
+         END DO
+      END DO
+
+      DEALLOCATE (op_fm_set)
+      DEALLOCATE (dop_fm_set)
+      DEALLOCATE (tmp_op_fm_set)
+      DEALLOCATE (opvec)
+      DEALLOCATE (eigrmat)
+      DEALLOCATE (deigrmat)
+      DEALLOCATE (inveigrmat)
+      DEALLOCATE (cumulant_matrix)
+
+      DEALLOCATE (unit_matrix)
 
       CALL timestop(handle)
 
@@ -2544,7 +3838,6 @@ CONTAINS
       WRITE(*,*) "nmom", nmom
       WRITE(*,*) "nm", nm
       WRITE(*,*) "SIZE(rmom,1)", SIZE(rmom,1)
-    
 
       NULLIFY (dft_control, rho, cell, particle_set, results, para_env, &
                local_particles, matrix_s, mos, rho_ao)
@@ -2948,18 +4241,18 @@ CONTAINS
    END SUBROUTINE qs_moment_berry_phase
 
 ! **************************************************************************************************
-!> \brief ...
-!> \param cosmat ...
-!> \param sinmat ...
+!> \brief ... 
+!> \param cosmat ...    [IN]
+!> \param sinmat ...    [IN]
 !> \param mos ...
-!> \param op_fm_set ...
+!> \param op_fm_set ... [OUT] 
 !> \param opvec ...
 ! **************************************************************************************************
    SUBROUTINE op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
 
-      TYPE(dbcsr_type), POINTER                          :: cosmat, sinmat
+      TYPE(dbcsr_type)                                   :: cosmat, sinmat
       TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
-      TYPE(cp_fm_p_type), DIMENSION(:, :), POINTER       :: op_fm_set
+      TYPE(cp_fm_p_type), DIMENSION(:, :)                :: op_fm_set
       TYPE(cp_fm_p_type), DIMENSION(:), POINTER          :: opvec
 
       INTEGER                                            :: i, nao, nmo
@@ -2967,7 +4260,14 @@ CONTAINS
 
       DO i = 1, SIZE(op_fm_set, 2) ! spin
          CALL get_mo_set(mo_set=mos(i)%mo_set, nao=nao, mo_coeff=mo_coeff, nmo=nmo)
+
+!         WRITE(*,*) "nao", nao
+!         WRITE(*,*) "nmo", nmo
+!         WRITE(*,*) "SIZE(mo_coeff,1)", SIZE(mo_coeff%local_data,1)
+!         WRITE(*,*) "SIZE(mo_coeff,2)", SIZE(mo_coeff%local_data,2)
          CALL cp_dbcsr_sm_fm_multiply(cosmat, mo_coeff, opvec(i)%matrix, ncol=nmo)
+!         WRITE(*,*) "SIZE(opvec(i)%matrix%local_data,1)", SIZE(opvec(i)%matrix%local_data,1)
+!         WRITE(*,*) "SIZE(opvec(i)%matrix%local_data,2)", SIZE(opvec(i)%matrix%local_data,2)
          CALL cp_gemm("T", "N", nmo, nmo, nao, 1.0_dp, mo_coeff, opvec(i)%matrix, 0.0_dp, &
                       op_fm_set(1, i)%matrix)
          CALL cp_dbcsr_sm_fm_multiply(sinmat, mo_coeff, opvec(i)%matrix, ncol=nmo)
@@ -3128,6 +4428,14 @@ CONTAINS
 
       CALL build_local_moment_matrix(qs_env, moments, nmom, ref_point=rcc)
 
+      WRITE(*,*) "MOMENTS X"
+      CALL dbcsr_print(moments(1)%matrix, matlab_format = .TRUE.)
+      WRITE(*,*) "MOMENTS Y"
+      CALL dbcsr_print(moments(2)%matrix, matlab_format = .TRUE.)
+      WRITE(*,*) "MOMENTS Z"
+      CALL dbcsr_print(moments(3)%matrix, matlab_format = .TRUE.)
+
+
       NULLIFY (dft_control, rho, cell, particle_set, qs_kind_set, results, para_env, matrix_s, rho_ao)
       CALL get_qs_env(qs_env, &
                       dft_control=dft_control, &
@@ -3216,11 +4524,6 @@ CONTAINS
       CALL put_results(results=results, description=description, &
                        values=rmom(2:4, 3))
 
-     ! fbelle
-     ! WTF there is no quadrupole for local yet     
-     CPABORT("Berry phase moments bigger than 1 not implemented")
-              
-              
       IF (magnetic) THEN
          CALL print_moments(unit_number, nmom, rmom, rlab, rcc, cell, periodic=.FALSE., mmom=mmom)
       ELSE
@@ -3356,5 +4659,82 @@ CONTAINS
 
    END SUBROUTINE print_moments
 
-END MODULE qs_moments
+! **************************************************************************************************
+!> \brief matrix inversion via cholesky decomposition 
+!> \param qs_env ...
+!> \param matrix_inv
+!> \param matrix_in
+!> \param 
+!> \par History
+!>      08.2018 created [fbelle]
+!> \author Fabian Belleflamme
+! **************************************************************************************************
+   SUBROUTINE matrix_inversion(qs_env, matrix_inv, matrix_in)
 
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(dbcsr_type), POINTER                          :: matrix_inv, matrix_in
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'matrix_inversion', routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: handle, nsize
+      REAL(KIND=dp)                                      :: eps_filter
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+      TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
+      TYPE(cp_fm_type), POINTER                          :: fm_ks, fm_ortho
+      TYPE(cp_para_env_type), POINTER                    :: para_env
+      TYPE(dbcsr_type), POINTER                           :: ortho_dbcsr, ref_matrix
+      TYPE(dft_control_type), POINTER                    :: dft_control
+
+      CALL timeset(routineN, handle)
+
+      NULLIFY (blacs_env, para_env)
+      CALL get_qs_env(qs_env=qs_env, blacs_env=blacs_env, para_env=para_env)
+
+      CALL get_qs_env(qs_env=qs_env, dft_control=dft_control)
+      eps_filter = dft_control%qs_control%eps_filter_matrix
+
+      CALL dbcsr_get_info(matrix_in, nfullrows_total=nsize)
+
+      NULLIFY (fm_ortho, fm_ks, fm_struct, ref_matrix)
+      CALL cp_fm_struct_create(fm_struct, context=blacs_env, nrow_global=nsize, &
+                               ncol_global=nsize, para_env=para_env)
+                            
+      CALL cp_fm_create(fm_ortho, fm_struct)
+      CALL cp_fm_create(fm_ks, fm_struct)
+      CALL cp_fm_struct_release(fm_struct)
+
+
+      WRITE(*,*) "matrix inversion"
+      WRITE(*,*) "matrix in:"
+      CALL dbcsr_print(matrix_in)
+
+
+      ! factorization
+      NULLIFY (ortho_dbcsr)
+      CALL dbcsr_init_p(ortho_dbcsr)
+      CALL dbcsr_create(ortho_dbcsr, template=matrix_in, &
+                        matrix_type=dbcsr_type_no_symmetry)
+
+      CALL copy_dbcsr_to_fm(matrix_in, fm_ortho)
+      CALL cp_fm_cholesky_decompose(fm_ortho)
+      CALL cp_fm_triangular_invert(fm_ortho)
+      CALL cp_fm_set_all(fm_ks, 0.0_dp)
+      CALL cp_fm_to_fm_triangular(fm_ortho, fm_ks, "U")
+      CALL copy_fm_to_dbcsr(fm_ks, ortho_dbcsr)
+      CALL cp_fm_set_all(fm_ks, 0.0_dp)
+
+      ! Calculate inverse
+      ! A-1 = (U^-1)(U^-1)^T
+      CALL dbcsr_multiply("N", "T", 1.0_dp, ortho_dbcsr, ortho_dbcsr, &
+                          0.0_dp, matrix_inv, filter_eps = eps_filter)
+
+      CALL cp_fm_release(fm_ks)
+      CALL cp_fm_release(fm_ortho)
+      CALL dbcsr_release(ortho_dbcsr)
+      DEALLOCATE (ortho_dbcsr)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE matrix_inversion
+
+END MODULE qs_moments
