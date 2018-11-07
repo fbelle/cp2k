@@ -1260,6 +1260,20 @@ CONTAINS
          CALL matrix_ls_to_qs(matrix_w(ispin)%matrix, matrix_tmp2, ls_scf_env%ls_mstruct, covariant=.FALSE.)
       ENDDO
 
+
+      WRITE(*,*) "calculate_w_matrix"
+      WRITE(*,*) "matrix_tmp3"
+      CALL dbcsr_print(matrix_tmp3)
+      WRITE(*,*) "matrix_tmp1"
+      CALL dbcsr_print(matrix_tmp1)
+      WRITE(*,*) "matrix_tmp2"
+      CALL dbcsr_print(matrix_tmp2)
+      CALL dbcsr_print(matrix_w(1)%matrix)
+
+
+
+
+
       CALL dbcsr_release(matrix_tmp1)
       CALL dbcsr_release(matrix_tmp2)
       CALL dbcsr_release(matrix_tmp3)
