@@ -41,8 +41,10 @@ MODULE kg_environment
                                               xc_vdw_fun_nonloc,&
                                               xc_vdw_fun_pairpot
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
+                                              section_vals_get,&
                                               section_vals_type,&
-                                              section_vals_val_get
+                                              section_vals_val_get,&
+                                              section_vals_val_set
    USE integration_grid_types,          ONLY: allocate_intgrid,&
                                               integration_grid_type
    USE kg_environment_types,            ONLY: kg_environment_type
