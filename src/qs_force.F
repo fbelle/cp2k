@@ -81,6 +81,7 @@ MODULE qs_force
    USE kg_environment_types,            ONLY: kg_environment_type
    USE ec_force,                        ONLY: ec_forces
    USE ec_methods,                      ONLY: ec_write_forces
+   USE qs_core_energies,                ONLY: calculate_ptrace
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -163,6 +164,13 @@ CONTAINS
       TYPE(section_vals_type), POINTER                   :: dft_section, input, print_section
       TYPE(virial_type), POINTER                         :: virial
     TYPE(kg_environment_type), POINTER                 :: kg_env
+      !fbelle
+!      TYPE(dbcsr_p_type), DIMENSION(:), POINTER        :: matrix_ks
+!      TYPE(dbcsr_p_type), DIMENSION(:), POINTER        :: kinetic
+!      TYPE(dbcsr_p_type), DIMENSION(:), POINTER        :: matrix_h
+!      !fbelle - trace
+!      INTEGER                                            :: nspins
+!      REAL(KIND=dp)                                      :: trace_ks_p, ecore, ekinetic, trace_ovrl
 
       CALL timeset(routineN, handle)
       NULLIFY (logger)
@@ -505,8 +513,9 @@ CONTAINS
 
     IF(para_env%mepos==0) THEN
        CALL get_qs_env(qs_env, force = force)
-       WRITE(*,*) "qs_forces - qs_env%...%force - after replicate "
+       WRITE(*,*) "qs_forces - qs_env%...%force - after replicate start"
        CALL ec_write_forces(qs_env, force)
+       WRITE(*,*) "qs_forces - qs_env%...%force - after replicate end"
     END IF
 
 
@@ -543,6 +552,85 @@ CONTAINS
         WRITE(*,*) "tot_old     "  , energy%tot_old
         WRITE(*,*) "kinetic     "  , energy%kinetic
       END IF
+
+      !--------------------------------------------------------------------------
+ 
+      CALL get_qs_env(qs_env,para_env=para_env)
+!      IF(para_env%mepos==0) THEN
+!        WRITE(*,*) "qs_energies - after KG" 
+!        
+!        WRITE(*,*) "core        "  , energy%core
+!        WRITE(*,*) "core_overlap " , energy%core_overlap
+!        WRITE(*,*) "core_self   "  , energy%core_self
+!        WRITE(*,*) "exc         "  , energy%exc
+!        WRITE(*,*) "hartree     "  , energy%hartree
+!        WRITE(*,*) "e_hartree,  "  , energy%e_hartree
+!        WRITE(*,*) "total       "  , energy%total
+!        WRITE(*,*) "tot_old     "  , energy%tot_old
+!        WRITE(*,*) "kinetic     "  , energy%kinetic
+!      END IF
+ 
+      ! fbelle 
+!      CALL get_qs_env(qs_env, rho=rho, para_env = para_env)
+!      CALL qs_rho_get(rho, rho_ao = rho_ao)
+!      CALL get_qs_env(qs_env=qs_env, matrix_ks=matrix_ks)     
+!      CALL get_qs_env(qs_env=qs_env, matrix_w=matrix_w)     
+!      CALL get_qs_env(qs_env=qs_env, matrix_h=matrix_h)     
+!      CALL get_qs_env(qs_env, matrix_s=matrix_s)
+!      CALL get_qs_env(qs_env, kinetic=kinetic)
+     
+
+!      IF(para_env%mepos==0) THEN
+!         WRITE(*,*) " qs_energies - matrix_h", ASSOCIATED(matrix_h)
+!         IF(ASSOCIATED(matrix_h)) THEN
+!               CALL dbcsr_print(matrix_h(1,1)%matrix)
+!         END IF
+!         WRITE(*,*) " qs_energies - matrix_ks", ASSOCIATED(matrix_ks)
+!         IF(ASSOCIATED(matrix_ks)) THEN
+!               CALL dbcsr_print(matrix_ks(1,1)%matrix)
+!         END IF
+!         WRITE(*,*) " qs_energies - matrix_w", ASSOCIATED(matrix_w)
+!         IF(ASSOCIATED(matrix_w)) THEN
+!               CALL dbcsr_print(matrix_w(1,1)%matrix)
+!         END IF
+!         WRITE(*,*) " qs_energies - rho_ao", ASSOCIATED(rho_ao)
+!         IF(ASSOCIATED(rho_ao)) THEN
+!               CALL dbcsr_print(rho_ao(1,1)%matrix)
+!         END IF
+!         WRITE(*,*) " qs_energies - matrix_s", ASSOCIATED(matrix_s)
+!         IF(ASSOCIATED(matrix_s)) THEN
+!               CALL dbcsr_print(matrix_s(1,1)%matrix)
+!         END IF
+!         WRITE(*,*) " qs_energies - kinetic", ASSOCIATED(kinetic)
+!         IF(ASSOCIATED(kinetic)) THEN
+!               CALL dbcsr_print(kinetic(1,1)%matrix)
+!         END IF
+!      END IF
+!
+!      nspins = dft_control%nspins    
+!
+!      ! kinetic matrix trace
+!      CALL calculate_ptrace(kinetic, rho_ao, ekinetic, nspins)
+!      CALL calculate_ptrace(matrix_s, rho_ao, trace_ovrl, nspins)
+!      ! core matrix trace
+!      CALL calculate_ptrace(matrix_h, rho_ao, ecore, nspins)
+!      ! band structure energy = Tr[KS*P]
+!      CALL calculate_ptrace(matrix_ks, rho_ao, trace_ks_p, nspins)
+!      
+!      CALL get_qs_env(qs_env,para_env=para_env)
+!      IF(para_env%mepos==0) THEN
+!         WRITE(*,*) "trace[T*p]", ekinetic
+!         WRITE(*,*) "trace[S*p]", trace_ovrl
+!         WRITE(*,*) "trace[h*p]", ecore
+!         WRITE(*,*) "trace[ks*p]", trace_ks_p
+!      END IF
+
+
+
+
+
+     !--------------------------------------------------------------------------
+
 
 
 

@@ -36,7 +36,8 @@ MODULE qs_energy
                                               qs_rho_release,&
                                               qs_rho_set,&
                                               qs_rho_type
-   USE ec_energy_corrections,           ONLY: ec_energy_correction
+   USE ec_energy_corrections,           ONLY: ec_energy_correction,&
+                                              harris_consistency
    USE ec_methods,                      ONLY: ec_calculate_w_matrix
 
 #include "./base/base_uses.f90"

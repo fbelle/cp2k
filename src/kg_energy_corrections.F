@@ -368,15 +368,6 @@ CONTAINS
       CALL get_qs_env(qs_env=qs_env, ks_env=ks_env)
       eps_filter = dft_control%qs_control%eps_filter_matrix
 
-
-      IF (calculate_forces) THEN
-      CALL get_qs_env(qs_env,para_env=para_env, force = force)
-      IF(para_env%mepos==0) THEN
-         WRITE(*,*) "ec_forces - qs_env%...%force - before build_kinetic_matrix"
-         CALL ec_write_forces(qs_env, force)
-      END IF
-      END IF
-
 ! ----------------------------------------------------------------------------- 
 !      CALL build_overlap_matrix(ks_env, &
 !                                nderivative = nder, &
@@ -398,13 +389,6 @@ CONTAINS
 !                                matrixkp_p = ec_env%matrix_p)
 ! ----------------------------------------------------------------------------- 
         
-      CALL get_qs_env(qs_env,para_env=para_env)
-      IF(para_env%mepos==0) THEN
-         WRITE(*,*) " ec_build_core_hamiltonian ec_env%matrix_w", ASSOCIATED(ec_env%matrix_w)
-         IF(ASSOCIATED(ec_env%matrix_w)) THEN
-               CALL dbcsr_print(ec_env%matrix_w(1,1)%matrix)
-         END IF
-      END IF
 
 ! ----------------------------------------------------------------------------- 
 ! NEW
@@ -453,6 +437,7 @@ CONTAINS
 
 
       IF (calculate_forces) THEN
+      CALL get_qs_env(qs_env,para_env=para_env)
       IF(para_env%mepos==0) THEN
          WRITE(*,*) "ec_forces - qs_env%...%force - after build_kinetic_matrix"
          CALL ec_write_forces(qs_env, force)
