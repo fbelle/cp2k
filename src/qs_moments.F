@@ -96,6 +96,7 @@ MODULE qs_moments
    PUBLIC :: build_berry_moment_matrix, build_local_moment_matrix
    PUBLIC :: build_berry_kpoint_matrix
    PUBLIC :: qs_moment_berry_phase, qs_moment_locop
+   PUBLIC :: qs_moment_berry_deriv
 
 CONTAINS
 
@@ -561,13 +562,19 @@ CONTAINS
    END SUBROUTINE build_local_magmom_matrix
 
 ! **************************************************************************************************
-!> \brief ...
-!> \param qs_env ...
-!> \param cosmat ...
-!> \param sinmat ...
-!> \param kvec ...
-!> \param sab_orb_external ...
+!> \brief Setup for calculation of the matrix (a|e^(ikr)|b) 
+!>        and their derivatives (a|(ikr)e^(ikr)|b)
+!> \param qs_env The Quickstep environment
+!> \param cosmat Real part of the integral
+!> \param sinmat Imaginary part of the integral
+!> \param kvec The k-vector for which the integral is evaluated
+!> \param sab_orb_external Specify an external neighborlist
 !> \param basis_type ...
+!> \param nderivative Order of derivative
+!> \param dkcos dksin Real and imaginary part of first derivative
+!> \param d2kcos d2ksin Real and imaginary part of second derivative
+!> 
+!> history 09/2018 fbelle - added derivation up to second order
 ! **************************************************************************************************
    SUBROUTINE build_berry_moment_matrix(qs_env, cosmat, sinmat, kvec, sab_orb_external, basis_type)
 
@@ -577,17 +584,21 @@ CONTAINS
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
          OPTIONAL, POINTER                               :: sab_orb_external
       CHARACTER(len=*), OPTIONAL                         :: basis_type
+      INTEGER, INTENT(IN), OPTIONAL                      :: nderivative
+      TYPE(dbcsr_type), OPTIONAL, POINTER                :: dkcos, dksin, d2kcos, d2ksin 
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'build_berry_moment_matrix', &
          routineP = moduleN//':'//routineN
 
       INTEGER :: handle, iatom, icol, ikind, inode, irow, iset, jatom, jkind, jset, ldab, ldsa, &
-         ldsb, ldwork, natom, ncoa, ncob, nkind, nseta, nsetb, sgfa, sgfb
+         ldsb, ldwork, , maxder, natom, ncoa, ncob, nder, nkind, nseta, nsetb, sgfa, sgfb
       INTEGER, DIMENSION(:), POINTER                     :: la_max, la_min, lb_max, lb_min, npgfa, &
                                                             npgfb, nsgfa, nsgfb
       INTEGER, DIMENSION(:, :), POINTER                  :: first_sgfa, first_sgfb
       LOGICAL                                            :: found
-      REAL(dp), DIMENSION(:, :), POINTER                 :: cblock, cosab, sblock, sinab, work
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: cosab, sinab
+      REAL(dp), DIMENSION(:, :), POINTER                 :: cblock, sblock, ckblk, skblk,&
+                                                            c2kblk, s2kblk, work
       REAL(KIND=dp)                                      :: dab
       REAL(KIND=dp), DIMENSION(3)                        :: ra, rab, rb
       REAL(KIND=dp), DIMENSION(:), POINTER               :: set_radius_a, set_radius_b
@@ -616,10 +627,18 @@ CONTAINS
       CALL dbcsr_set(sinmat, 0.0_dp)
       CALL dbcsr_set(cosmat, 0.0_dp)
 
+      ! derivative size
+      IF (PRESENT(nderivative)) THEN
+         nder = nderivative
+      ELSE
+         nder = 0
+      END IF
+      maxder = nder + 1 
+
       CALL get_qs_kind_set(qs_kind_set=qs_kind_set, maxco=ldwork, basis_type=basis_type)
       ldab = ldwork
-      ALLOCATE (cosab(ldab, ldab))
-      ALLOCATE (sinab(ldab, ldab))
+      ALLOCATE (cosab(ldab, ldab, maxder))
+      ALLOCATE (sinab(ldab, ldab, maxder))
       ALLOCATE (work(ldwork, ldwork))
 
       nkind = SIZE(qs_kind_set)
@@ -677,6 +696,7 @@ CONTAINS
             icol = iatom
          END IF
 
+         ! get blocks
          NULLIFY (cblock)
          CALL dbcsr_get_block_p(matrix=cosmat, &
                                 row=irow, col=icol, BLOCK=cblock, found=found)
@@ -687,6 +707,24 @@ CONTAINS
              .NOT. ASSOCIATED(cblock) .AND. ASSOCIATED(sblock)) THEN
             CPABORT("")
          ENDIF
+
+         IF(PRESENT(dkcos) .AND. PRESENT(dksin)) THEN
+            NULLIFY (ckblk)
+            CALL dbcsr_get_block_p(matrix=dkcos, &
+                                   row=irow, col=icol, BLOCK=ckblk, found=found)
+            NULLIFY (skblk)
+            CALL dbcsr_get_block_p(matrix=dksin, &
+                                   row=irow, col=icol, BLOCK=skblk, found=found)
+         END IF         
+
+         IF(PRESENT(d2kcos) .AND. PRESENT(d2ksin)) THEN
+            NULLIFY (c2kblk)
+            CALL dbcsr_get_block_p(matrix=d2kcos, &
+                                   row=irow, col=icol, BLOCK=c2kblk, found=found)
+            NULLIFY (s2kblk)
+            CALL dbcsr_get_block_p(matrix=d2ksin, &
+                                   row=irow, col=icol, BLOCK=s2kblk, found=found)
+         END IF         
 
          IF (ASSOCIATED(cblock) .AND. ASSOCIATED(sblock)) THEN
 
@@ -706,14 +744,50 @@ CONTAINS
                   ncob = npgfb(jset)*ncoset(lb_max(jset))
                   sgfb = first_sgfb(1, jset)
 
-                  ! Calculate the primitive integrals
-                  CALL cossin(la_max(iset), npgfa(iset), zeta(:, iset), rpgfa(:, iset), la_min(iset), &
-                              lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset), &
-                              ra, rb, kvec, cosab, sinab)
+                  ! Calculate the (a|exp(ikr)|b) integrals and derivatives (a|(ikr)^nder*exp(ikr)|b)
+                  ! Careful, this derivative is wrt to a factor t in front of each k (t -> 1)
+                  ! to pull down the whole argument of exp(ikr)
+                  SELECT CASE (nder)
+                  CASE(0)
+                    ! Calculate the primitive integrals
+                    CALL cossin(la_max(iset), npgfa(iset), zeta(:, iset), rpgfa(:, iset), la_min(iset),&
+                                lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset),&
+                                ra, rb, kvec, cosab = cosab(:, :, 1), sinab = sinab(:, :, 1))
+                  CASE(1)
+                    CALL cossin(la_max(iset), npgfa(iset), zeta(:, iset), rpgfa(:, iset), la_min(iset),&
+                                lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset),&
+                                ra, rb, kvec, cosab = cosab(:, :, 1), sinab = sinab(:, :, 1),&
+                                dksc = cosab(:, :, 2), dkss = sinab(:, :, 2))
+                  CASE(2)
+                    CALL cossin(la_max(iset), npgfa(iset), zeta(:, iset), rpgfa(:, iset), la_min(iset),&
+                                lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset),&
+                                ra, rb, kvec, cosab=cosab(:, :, 1), sinab=sinab(:, :, 1),&
+                                dksc=cosab(:, :, 2), dkss=sinab(:, :, 2),&
+                                ddksc=cosab(:, :, 3), ddkss=sinab(:, :, 3))
+                  CASE DEFAULT
+                     CPABORT("Derivatives of (a|(ikr)^nder*exp(ikr)|b) only up to second order")
+                  END SELECT
+                 
+                  ! Contraction from cartesian to spherical basis functions 
                   CALL contract_cossin(cblock, sblock, &
                                        iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
                                        jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
-                                       cosab, sinab, ldab, work, ldwork)
+                                       cosab(:, :, 1), sinab(:, :, 1), ldab, work, ldwork)
+                  IF (nder >= 1) THEN
+                     ! Contraction of matrices storing first derivatives
+                     CALL contract_cossin(ckblk, skblk, &
+                                          iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                          jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                          cosab(:, :, 2), sinab(:, :, 2), ldab, work, ldwork)
+                  END IF
+
+                  IF (nder >= 2) THEN
+                     ! Contraction of matrices storing second derivatives
+                     CALL contract_cossin(c2kblk, s2kblk, &
+                                          iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
+                                          jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
+                                          cosab(:, :, 3), sinab(:, :, 3), ldab, work, ldwork)
+                  END IF
 
                END DO
             END DO
@@ -949,6 +1023,7 @@ CONTAINS
 !> \param reference ...
 !> \param ref_point ...
 !> \param unit_number ...
+!> history fbelle 10/2018 - Added new method for electronic dipole, quadrupole calculation 
 ! **************************************************************************************************
    SUBROUTINE qs_moment_berry_phase(qs_env, magnetic, nmoments, reference, ref_point, unit_number)
 
@@ -1008,7 +1083,7 @@ CONTAINS
       nm = (6+11*nmom+6*nmom**2+nmom**3)/6-1
       ! rmom(:,1)=electronic
       ! rmom(:,2)=nuclear
-      ! rmom(:,1)=total
+      ! rmom(:,3)=total
       ALLOCATE (rmom(nm+1, 3))
       ALLOCATE (rlab(nm+1))
       rmom = 0.0_dp
@@ -1198,6 +1273,10 @@ CONTAINS
             ! Dipole
             DO i = 1, 3
                kvec(:) = twopi*cell%h_inv(i, :)
+
+               CASE SELECT(method)
+               !---------------------------------
+               CASE (method1)
                CALL build_berry_moment_matrix(qs_env, cosmat, sinmat, kvec)
                IF (qs_env%run_rtp) THEN
                   CALL get_qs_env(qs_env, rtp=rtp)
@@ -1221,6 +1300,65 @@ CONTAINS
                   ENDIF
                END DO
                zi(i) = zdet
+               !---------------------------------
+
+               CASE (method2)
+               
+               ! d/dt (a|e^(ikr)|b)
+               CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec, nderivative = 1, &
+                                               dkcos = dkcos(i)%matrix, dksin = dksin(i)%matrix)
+
+               ! rotation from AOs onto MOs               
+               IF (qs_env%run_rtp) THEN
+                  CALL get_qs_env(qs_env, rtp=rtp)
+                  CALL get_rtp(rtp, mos_new=mos_new)
+                  CALL op_orbbas_rtp(cosmat, sinmat, mos, op_fm_set, mos_new)
+                  CALL op_orbbas_rtp(dkcos, dksin, mos, dop_fm_set, mos_new)
+               ELSE
+                  CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
+                  CALL op_orbbas(dkcos, dksin, mos, dop_fm_set, opvec)
+               END IF
+
+               ! Electronic dipole moment
+               ! Tr(d11) / Tr(d01)
+
+               ! get traces
+               strace = 0.0_dp
+               DO ispin = 1, dft_control%nspins
+
+                  ! Trace deriv img
+                  CALL cp_fm_scale(-1.0_dp, dop_fm_set(2, ispin)%matrix)
+                  CALL dbcsr_set(dksin(i)%matrix, 0.0_dp)
+                  CALL copy_fm_to_dbcsr(dop_fm_set(2, ispin)%matrix, dksin(i)%matrix)
+                  CALL dbcsr_trace(dksin(i)%matrix, relem)
+
+                  ! Trace deriv real
+                  CALL dbcsr_set(dkcos(i)%matrix, 0.0_dp)
+                  CALL copy_fm_to_dbcsr(dop_fm_set(1, ispin)%matrix, dkcos(i)%matrix)
+                  CALL dbcsr_trace(dkcos(i)%matrix, ielem)
+                  det1 = CMPLX(relem, ielem, dp)
+
+                  ! img
+                  CALL cp_fm_scale(-1.0_dp, op_fm_set(2, ispin)%matrix)
+                  CALL dbcsr_set(sinmat, 0.0_dp)
+                  CALL copy_fm_to_dbcsr(op_fm_set(2, ispin)%matrix, sinmat)
+                  CALL dbcsr_trace(sinmat, relem)
+
+                  ! real
+                  CALL dbcsr_set(cosmat, 0.0_dp)
+                  CALL copy_fm_to_dbcsr(op_fm_set(1, ispin)%matrix, cosmat)
+                  CALL dbcsr_trace(cosmat, ielem)
+                  et1 = CMPLX(relem, ielem, dp)
+
+               END DO
+
+               ! Divide by (-ik)
+               zi(i) = det1 / et1 / CMPLX(0.0_dp, -1.0_dp*kvec(i), dp)
+
+            CASE DEFAULT
+               CPABORT("Unknown method for electronic dipole calculation")
+            END SELECT
+
             END DO
             zi = zi*xphase
          CASE (2)
