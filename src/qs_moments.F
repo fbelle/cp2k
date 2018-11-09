@@ -28,9 +28,12 @@ MODULE qs_moments
                                               cp_cfm_release
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
-   USE cp_dbcsr_operations,             ONLY: cp_dbcsr_sm_fm_multiply,&
+   USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
+                                              copy_fm_to_dbcsr,&
+                                              cp_dbcsr_sm_fm_multiply,&
                                               dbcsr_allocate_matrix_set,&
                                               dbcsr_deallocate_matrix_set
+   USE cp_fm_basic_linalg,              ONLY: cp_fm_scale                                        
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
                                               cp_fm_struct_double,&
                                               cp_fm_struct_release,&
@@ -48,7 +51,8 @@ MODULE qs_moments
    USE cp_result_types,                 ONLY: cp_result_type
    USE dbcsr_api,                       ONLY: &
         dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_distribution_type, &
-        dbcsr_get_block_p, dbcsr_p_type, dbcsr_set, dbcsr_trace, dbcsr_type, dbcsr_type_symmetric
+        dbcsr_get_block_p, dbcsr_p_type, dbcsr_set, dbcsr_trace, dbcsr_type, dbcsr_type_symmetric, &
+        dbcsr_print !fbelle
    USE distribution_1d_types,           ONLY: distribution_1d_type
    USE kinds,                           ONLY: default_string_length,&
                                               dp
@@ -96,7 +100,6 @@ MODULE qs_moments
    PUBLIC :: build_berry_moment_matrix, build_local_moment_matrix
    PUBLIC :: build_berry_kpoint_matrix
    PUBLIC :: qs_moment_berry_phase, qs_moment_locop
-   PUBLIC :: qs_moment_berry_deriv
 
 CONTAINS
 
@@ -576,7 +579,8 @@ CONTAINS
 !> 
 !> history 09/2018 fbelle - added derivation up to second order
 ! **************************************************************************************************
-   SUBROUTINE build_berry_moment_matrix(qs_env, cosmat, sinmat, kvec, sab_orb_external, basis_type)
+   SUBROUTINE build_berry_moment_matrix(qs_env, cosmat, sinmat, kvec, sab_orb_external, basis_type, &
+                                        nderivative, dkcos, dksin, d2kcos, d2ksin)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(dbcsr_type), POINTER                          :: cosmat, sinmat
@@ -591,7 +595,7 @@ CONTAINS
          routineP = moduleN//':'//routineN
 
       INTEGER :: handle, iatom, icol, ikind, inode, irow, iset, jatom, jkind, jset, ldab, ldsa, &
-         ldsb, ldwork, , maxder, natom, ncoa, ncob, nder, nkind, nseta, nsetb, sgfa, sgfb
+         ldsb, ldwork, maxder, natom, ncoa, ncob, nder, nkind, nseta, nsetb, sgfa, sgfb
       INTEGER, DIMENSION(:), POINTER                     :: la_max, la_min, lb_max, lb_min, npgfa, &
                                                             npgfb, nsgfa, nsgfb
       INTEGER, DIMENSION(:, :), POINTER                  :: first_sgfa, first_sgfb
@@ -626,6 +630,17 @@ CONTAINS
 
       CALL dbcsr_set(sinmat, 0.0_dp)
       CALL dbcsr_set(cosmat, 0.0_dp)
+
+      IF (PRESENT(dkcos) .AND. PRESENT(dksin)) THEN
+          CALL dbcsr_set(dkcos, 0.0_dp)
+          CALL dbcsr_set(dksin, 0.0_dp)
+      END IF
+      
+      IF (PRESENT(d2kcos) .AND. PRESENT(d2ksin)) THEN
+         CALL dbcsr_set(d2kcos, 0.0_dp)
+         CALL dbcsr_set(d2ksin, 0.0_dp)
+      END IF
+
 
       ! derivative size
       IF (PRESENT(nderivative)) THEN
@@ -1023,15 +1038,17 @@ CONTAINS
 !> \param reference ...
 !> \param ref_point ...
 !> \param unit_number ...
+!> \param method - Method to calculate electronic dipole contribution
 !> history fbelle 10/2018 - Added new method for electronic dipole, quadrupole calculation 
 ! **************************************************************************************************
-   SUBROUTINE qs_moment_berry_phase(qs_env, magnetic, nmoments, reference, ref_point, unit_number)
+   SUBROUTINE qs_moment_berry_phase(qs_env, magnetic, nmoments, reference, ref_point, unit_number,&
+                                    method)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       LOGICAL, INTENT(IN)                                :: magnetic
       INTEGER, INTENT(IN)                                :: nmoments, reference
       REAL(dp), DIMENSION(:), POINTER                    :: ref_point
-      INTEGER, INTENT(IN)                                :: unit_number
+      INTEGER, INTENT(IN)                                :: unit_number, method
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'qs_moment_berry_phase', &
          routineP = moduleN//':'//routineN
@@ -1053,7 +1070,7 @@ CONTAINS
       TYPE(cell_type), POINTER                           :: cell
       TYPE(cp_cfm_p_type), DIMENSION(:), POINTER         :: eigrmat
       TYPE(cp_fm_p_type), DIMENSION(:), POINTER          :: mos_new, opvec
-      TYPE(cp_fm_p_type), DIMENSION(:, :), POINTER       :: op_fm_set
+      TYPE(cp_fm_p_type), DIMENSION(:, :), POINTER       :: op_fm_set, dop_fm_set
       TYPE(cp_fm_struct_type), POINTER                   :: tmp_fm_struct
       TYPE(cp_fm_type), POINTER                          :: mo_coeff
       TYPE(cp_para_env_type), POINTER                    :: para_env
@@ -1067,6 +1084,12 @@ CONTAINS
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_rho_type), POINTER                         :: rho
       TYPE(rt_prop_type), POINTER                        :: rtp
+      !fbelle
+      REAL(dp)                                           :: relem, ielem
+      COMPLEX(dp)                                        :: det1, et1
+      TYPE(dbcsr_type), POINTER                          :: dkcos, dksin
+      INTEGER                                            :: nelectron
+      !fbelle
 
       CPASSERT(ASSOCIATED(qs_env))
 
@@ -1076,6 +1099,11 @@ CONTAINS
       ENDIF
 
       CALL timeset(routineN, handle)
+
+
+      !fbelle
+
+      !fbelle
 
       ! restrict maximum moment available
       nmom = MIN(nmoments, 2)
@@ -1107,7 +1135,10 @@ CONTAINS
                       para_env=para_env, &
                       local_particles=local_particles, &
                       matrix_s=matrix_s, &
-                      mos=mos)
+                      mos=mos, &
+                      nelectron_total = nelectron)
+
+                   WRITE(*,*) "ELECTRONS", nelectron
 
       CALL qs_rho_get(rho, rho_ao=rho_ao)
 
@@ -1117,6 +1148,19 @@ CONTAINS
       CALL dbcsr_copy(sinmat, matrix_s(1)%matrix, 'SIN MOM')
       CALL dbcsr_set(cosmat, 0.0_dp)
       CALL dbcsr_set(sinmat, 0.0_dp)
+
+      ! Initialize and allocate matrices to store derivatives
+      IF(nmom >= 1) THEN
+         NULLIFY (dkcos, dksin)
+         ALLOCATE (dkcos, dksin)
+         CALL dbcsr_copy(dkcos, matrix_s(1)%matrix, 'DKCOS MOM')
+         CALL dbcsr_copy(dksin, matrix_s(1)%matrix, 'DKSIN MOM')
+         CALL dbcsr_set(dkcos, 0.0_dp)
+         CALL dbcsr_set(dksin, 0.0_dp)
+
+         ALLOCATE (dop_fm_set(2, dft_control%nspins))
+      END IF
+
 
       ALLOCATE (op_fm_set(2, dft_control%nspins))
       ALLOCATE (opvec(dft_control%nspins))
@@ -1132,6 +1176,12 @@ CONTAINS
          DO i = 1, SIZE(op_fm_set, 1)
             NULLIFY (op_fm_set(i, ispin)%matrix)
             CALL cp_fm_create(op_fm_set(i, ispin)%matrix, tmp_fm_struct)
+            
+            IF(nmom >= 1) THEN
+               NULLIFY (dop_fm_set(i, ispin)%matrix)
+               CALL cp_fm_create(dop_fm_set(i, ispin)%matrix, tmp_fm_struct)
+            END IF
+
          END DO
          CALL cp_cfm_create(eigrmat(ispin)%matrix, op_fm_set(1, ispin)%matrix%matrix_struct)
          CALL cp_fm_struct_release(tmp_fm_struct)
@@ -1272,41 +1322,49 @@ CONTAINS
          CASE (1)
             ! Dipole
             DO i = 1, 3
+               WRITE(*,*) "DIPOLE DIRECTION", i
                kvec(:) = twopi*cell%h_inv(i, :)
 
-               CASE SELECT(method)
-               !---------------------------------
-               CASE (method1)
-               CALL build_berry_moment_matrix(qs_env, cosmat, sinmat, kvec)
-               IF (qs_env%run_rtp) THEN
-                  CALL get_qs_env(qs_env, rtp=rtp)
-                  CALL get_rtp(rtp, mos_new=mos_new)
-                  CALL op_orbbas_rtp(cosmat, sinmat, mos, op_fm_set, mos_new)
-               ELSE
-                  CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
-               END IF
-               zdet = CMPLX(1._dp, 0._dp, dp)
-               DO ispin = 1, dft_control%nspins
-                  CALL cp_cfm_get_info(eigrmat(ispin)%matrix, ncol_local=tmp_dim)
-                  DO idim = 1, tmp_dim
-                     eigrmat(ispin)%matrix%local_data(:, idim) = &
-                        CMPLX(op_fm_set(1, ispin)%matrix%local_data(:, idim), &
-                              -op_fm_set(2, ispin)%matrix%local_data(:, idim), dp)
-                  END DO
-                  CALL cp_cfm_lu_decompose(eigrmat(ispin)%matrix, zdeta)
-                  zdet = zdet*zdeta
-                  IF (dft_control%nspins == 1) THEN
+               SELECT CASE (method)
+               CASE (1)
+                  WRITE(*,*) "CASE1"
+                  !---------------------------------
+                  CALL build_berry_moment_matrix(qs_env, cosmat, sinmat, kvec)
+                  IF (qs_env%run_rtp) THEN
+                     CALL get_qs_env(qs_env, rtp=rtp)
+                     CALL get_rtp(rtp, mos_new=mos_new)
+                     CALL op_orbbas_rtp(cosmat, sinmat, mos, op_fm_set, mos_new)
+                  ELSE
+                     CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
+                  END IF
+                  zdet = CMPLX(1._dp, 0._dp, dp)
+                  DO ispin = 1, dft_control%nspins
+                     CALL cp_cfm_get_info(eigrmat(ispin)%matrix, ncol_local=tmp_dim)
+                     DO idim = 1, tmp_dim
+                        eigrmat(ispin)%matrix%local_data(:, idim) = &
+                           CMPLX(op_fm_set(1, ispin)%matrix%local_data(:, idim), &
+                                 -op_fm_set(2, ispin)%matrix%local_data(:, idim), dp)
+                     END DO
+                     CALL cp_cfm_lu_decompose(eigrmat(ispin)%matrix, zdeta)
                      zdet = zdet*zdeta
-                  ENDIF
-               END DO
-               zi(i) = zdet
-               !---------------------------------
+                     IF (dft_control%nspins == 1) THEN
+                        zdet = zdet*zdeta
+                     ENDIF
+                  END DO
+                  zi(i) = zdet
+                  !---------------------------------
 
-               CASE (method2)
+               CASE (2) ! Greg Schenter method
+                  WRITE(*,*) "CASE2"
                
                ! d/dt (a|e^(ikr)|b)
-               CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec, nderivative = 1, &
-                                               dkcos = dkcos(i)%matrix, dksin = dksin(i)%matrix)
+               CALL build_berry_moment_matrix(qs_env, cosmat, sinmat, kvec, nderivative = 1, &
+                                               dkcos = dkcos, dksin = dksin)
+
+!               CALL dbcsr_print(cosmat, matlab_format = .TRUE.)
+!               CALL dbcsr_print(sinmat, matlab_format = .TRUE.)
+!               CALL dbcsr_print(dkcos, matlab_format = .TRUE.)
+!               CALL dbcsr_print(dksin, matlab_format = .TRUE.)
 
                ! rotation from AOs onto MOs               
                IF (qs_env%run_rtp) THEN
@@ -1320,40 +1378,45 @@ CONTAINS
                END IF
 
                ! Electronic dipole moment
-               ! Tr(d11) / Tr(d01)
+               ! Elements :
+               ! d11 = (a|(-ikr)*e^(-ikr))|b)
+               ! d01 = (a|(e^(-ikr))|b)
 
                ! get traces
-               strace = 0.0_dp
                DO ispin = 1, dft_control%nspins
+
+                  ! Trace deriv real
+                  CALL dbcsr_set(dkcos, 0.0_dp)
+                  CALL copy_fm_to_dbcsr(dop_fm_set(1, ispin)%matrix, dkcos)
+                  CALL dbcsr_trace(dkcos, relem)
 
                   ! Trace deriv img
                   CALL cp_fm_scale(-1.0_dp, dop_fm_set(2, ispin)%matrix)
-                  CALL dbcsr_set(dksin(i)%matrix, 0.0_dp)
-                  CALL copy_fm_to_dbcsr(dop_fm_set(2, ispin)%matrix, dksin(i)%matrix)
-                  CALL dbcsr_trace(dksin(i)%matrix, relem)
-
-                  ! Trace deriv real
-                  CALL dbcsr_set(dkcos(i)%matrix, 0.0_dp)
-                  CALL copy_fm_to_dbcsr(dop_fm_set(1, ispin)%matrix, dkcos(i)%matrix)
-                  CALL dbcsr_trace(dkcos(i)%matrix, ielem)
+                  CALL dbcsr_set(dksin, 0.0_dp)
+                  CALL copy_fm_to_dbcsr(dop_fm_set(2, ispin)%matrix, dksin)
+                  CALL dbcsr_trace(dksin, ielem)
                   det1 = CMPLX(relem, ielem, dp)
+                  WRITE(*,*) "det1", det1
+
+                  ! real
+                  CALL dbcsr_set(cosmat, 0.0_dp)
+                  CALL copy_fm_to_dbcsr(op_fm_set(1, ispin)%matrix, cosmat)
+                  CALL dbcsr_trace(cosmat, relem)
 
                   ! img
                   CALL cp_fm_scale(-1.0_dp, op_fm_set(2, ispin)%matrix)
                   CALL dbcsr_set(sinmat, 0.0_dp)
                   CALL copy_fm_to_dbcsr(op_fm_set(2, ispin)%matrix, sinmat)
-                  CALL dbcsr_trace(sinmat, relem)
+                  CALL dbcsr_trace(sinmat, ielem)
 
-                  ! real
-                  CALL dbcsr_set(cosmat, 0.0_dp)
-                  CALL copy_fm_to_dbcsr(op_fm_set(1, ispin)%matrix, cosmat)
-                  CALL dbcsr_trace(cosmat, ielem)
+                  ! Tr(d11) / Tr(d01)
                   et1 = CMPLX(relem, ielem, dp)
-
+                  WRITE(*,*) "et1", et1
                END DO
 
                ! Divide by (-ik)
-               zi(i) = det1 / et1 / CMPLX(0.0_dp, -1.0_dp*kvec(i), dp)
+               zi(i) = det1 / et1 / CMPLX(0.0_dp, 1.0_dp*kvec(i), dp)
+               WRITE(*,*) "zi", zi(i)
 
             CASE DEFAULT
                CPABORT("Unknown method for electronic dipole calculation")
@@ -1361,6 +1424,7 @@ CONTAINS
 
             END DO
             zi = zi*xphase
+            WRITE(*,*) "TOTAL zi", zi
          CASE (2)
             ! Quadrupole
             CPABORT("Berry phase moments bigger than 1 not implemented")
@@ -1406,13 +1470,30 @@ CONTAINS
       DO l = 1, nmom
          SELECT CASE (l)
          CASE (1)
+
             ! Dipole (apply periodic (2 Pi) boundary conditions)
-            ci = AIMAG(LOG(zi))
-            DO i = 1, 3
-               IF (qq(i)+ci(i) > pi) ci(i) = ci(i)-twopi
-               IF (qq(i)+ci(i) < -pi) ci(i) = ci(i)+twopi
-            END DO
-            rmom(2:4, 1) = MATMUL(cell%hmat, ci)/twopi
+            SELECT CASE(method)
+            CASE (1)
+               ci = AIMAG(LOG(zi))
+               DO i = 1, 3
+                  IF (qq(i)+ci(i) > pi) ci(i) = ci(i)-twopi
+                  IF (qq(i)+ci(i) < -pi) ci(i) = ci(i)+twopi
+               END DO
+               rmom(2:4, 1) = MATMUL(cell%hmat, ci)/twopi
+            CASE (2)
+               ci = REAL(zi)
+               DO i = 1, 3
+                  IF (qq(i)+ci(i) > pi) ci(i) = ci(i)-twopi
+                  IF (qq(i)+ci(i) < -pi) ci(i) = ci(i)+twopi
+               END DO
+               rmom(2:4, 1) = ci*nelectron
+            END SELECT
+
+            WRITE(*,*) ""
+            WRITE(*,*) "nuclear", rmom(2:4, 2)
+            WRITE(*,*) "rmom", rmom(2:4, 1)
+            WRITE(*,*) ""
+
          CASE (2)
             ! Quadrupole
             CPABORT("Berry phase moments bigger than 1 not implemented")
@@ -1467,14 +1548,25 @@ CONTAINS
       CALL dbcsr_deallocate_matrix(cosmat)
       CALL dbcsr_deallocate_matrix(sinmat)
 
+     
+      IF(nmom >= 1) THEN
+         CALL dbcsr_deallocate_matrix(dkcos)
+         CALL dbcsr_deallocate_matrix(dksin)
+      END IF
+
+
       DO ispin = 1, dft_control%nspins
          CALL cp_fm_release(opvec(ispin)%matrix)
          CALL cp_cfm_release(eigrmat(ispin)%matrix)
          DO i = 1, SIZE(op_fm_set, 1)
             CALL cp_fm_release(op_fm_set(i, ispin)%matrix)
+            IF(nmom >= 1) THEN
+               CALL cp_fm_release(dop_fm_set(i, ispin)%matrix)
+            END IF
          END DO
       END DO
       DEALLOCATE (op_fm_set)
+      DEALLOCATE (dop_fm_set)
       DEALLOCATE (opvec)
       DEALLOCATE (eigrmat)
 
