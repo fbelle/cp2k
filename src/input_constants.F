@@ -1106,4 +1106,8 @@ MODULE input_constants
    INTEGER, PARAMETER, PUBLIC               :: embed_grid_bohr = 0, &
                                                embed_grid_angstrom = 1
 
+   ! Method for electronic calculation of moments
+   INTEGER, PARAMETER, PUBLIC               :: darden = 1, &
+                                               schenter = 2
+
 END MODULE input_constants
