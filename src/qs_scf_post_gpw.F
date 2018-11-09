@@ -74,14 +74,16 @@ MODULE qs_scf_post_gpw
                                               hirshfeld_type,&
                                               release_hirshfeld_type,&
                                               set_hirshfeld_info
-   USE input_constants,                 ONLY: do_loc_both,&
+   USE input_constants,                 ONLY: darden,&
+                                              do_loc_both,&
                                               do_loc_homo,&
                                               do_loc_lumo,&
                                               ot_precond_full_all,&
                                               radius_covalent,&
                                               radius_user,&
                                               ref_charge_atomic,&
-                                              ref_charge_mulliken
+                                              ref_charge_mulliken,&
+                                              schenter
    USE input_section_types,             ONLY: section_get_ival,&
                                               section_get_ivals,&
                                               section_get_lval,&
@@ -1399,7 +1401,7 @@ CONTAINS
          routineP = moduleN//':'//routineN
 
       CHARACTER(LEN=default_path_length)                 :: filename
-      INTEGER                                            :: handle, maxmom, reference, unit_nr
+      INTEGER                                            :: handle, maxmom, method, reference, unit_nr
       LOGICAL                                            :: do_kpoints, magnetic, periodic
       REAL(KIND=dp), DIMENSION(:), POINTER               :: ref_point
       TYPE(section_vals_type), POINTER                   :: print_key
@@ -1419,6 +1421,10 @@ CONTAINS
                                       keyword_name="DFT%PRINT%MOMENTS%REFERENCE")
          magnetic = section_get_lval(section_vals=input, &
                                      keyword_name="DFT%PRINT%MOMENTS%MAGNETIC")
+         CALL section_vals_val_get(section_vals=input,&
+                                   keyword_name="DFT%PRINT%MOMENTS%METHOD", &
+                                   i_val=method)
+                         
          NULLIFY (ref_point)
          CALL section_vals_val_get(input, "DFT%PRINT%MOMENTS%REF_POINT", r_vals=ref_point)
          unit_nr = cp_print_key_unit_nr(logger=logger, basis_section=input, &
@@ -1442,7 +1448,9 @@ CONTAINS
             CPWARN("Moments not implemented for k-point calculations!")
          ELSE
             IF (periodic) THEN
-               CALL qs_moment_berry_phase(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
+               ! Choice of method to calculate electronic dipole contribution
+               CALL qs_moment_berry_phase(qs_env, magnetic, maxmom, reference, ref_point, unit_nr,&
+                                          method)
             ELSE
                CALL qs_moment_locop(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
             END IF
