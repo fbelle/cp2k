@@ -1413,7 +1413,6 @@ CONTAINS
 
             END DO
             zi = zi*xphase
-            WRITE(*,*) "TOTAL zi", zi
          CASE (2)
             ! Quadrupole
             CPABORT("Berry phase moments bigger than 1 not implemented")
