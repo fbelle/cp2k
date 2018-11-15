@@ -1133,8 +1133,6 @@ CONTAINS
                       mos=mos, &
                       nelectron_total = nelectron)
 
-                   WRITE(*,*) "ELECTRONS", nelectron
-
       CALL qs_rho_get(rho, rho_ao=rho_ao)
 
       NULLIFY (cosmat, sinmat)
