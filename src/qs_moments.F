@@ -1100,11 +1100,6 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-
-      !fbelle
-
-      !fbelle
-
       ! restrict maximum moment available
       nmom = MIN(nmoments, 2)
 
@@ -1322,12 +1317,10 @@ CONTAINS
          CASE (1)
             ! Dipole
             DO i = 1, 3
-               WRITE(*,*) "DIPOLE DIRECTION", i
                kvec(:) = twopi*cell%h_inv(i, :)
 
                SELECT CASE (method)
                CASE (1)
-                  WRITE(*,*) "CASE1"
                   !---------------------------------
                   CALL build_berry_moment_matrix(qs_env, cosmat, sinmat, kvec)
                   IF (qs_env%run_rtp) THEN
@@ -1355,7 +1348,6 @@ CONTAINS
                   !---------------------------------
 
                CASE (2) ! Greg Schenter method
-                  WRITE(*,*) "CASE2"
                
                ! d/dt (a|e^(ikr)|b)
                CALL build_berry_moment_matrix(qs_env, cosmat, sinmat, kvec, nderivative = 1, &
@@ -1396,7 +1388,6 @@ CONTAINS
                   CALL copy_fm_to_dbcsr(dop_fm_set(2, ispin)%matrix, dksin)
                   CALL dbcsr_trace(dksin, ielem)
                   det1 = CMPLX(relem, ielem, dp)
-                  WRITE(*,*) "det1", det1
 
                   ! real
                   CALL dbcsr_set(cosmat, 0.0_dp)
@@ -1411,12 +1402,10 @@ CONTAINS
 
                   ! Tr(d11) / Tr(d01)
                   et1 = CMPLX(relem, ielem, dp)
-                  WRITE(*,*) "et1", et1
                END DO
 
                ! Divide by (-ik)
                zi(i) = det1 / et1 / CMPLX(0.0_dp, 1.0_dp*kvec(i), dp)
-               WRITE(*,*) "zi", zi(i)
 
             CASE DEFAULT
                CPABORT("Unknown method for electronic dipole calculation")
@@ -1489,11 +1478,6 @@ CONTAINS
                rmom(2:4, 1) = ci*nelectron
             END SELECT
 
-            WRITE(*,*) ""
-            WRITE(*,*) "nuclear", rmom(2:4, 2)
-            WRITE(*,*) "rmom", rmom(2:4, 1)
-            WRITE(*,*) ""
-
          CASE (2)
             ! Quadrupole
             CPABORT("Berry phase moments bigger than 1 not implemented")
@@ -1547,13 +1531,11 @@ CONTAINS
 
       CALL dbcsr_deallocate_matrix(cosmat)
       CALL dbcsr_deallocate_matrix(sinmat)
-
      
       IF(nmom >= 1) THEN
          CALL dbcsr_deallocate_matrix(dkcos)
          CALL dbcsr_deallocate_matrix(dksin)
       END IF
-
 
       DO ispin = 1, dft_control%nspins
          CALL cp_fm_release(opvec(ispin)%matrix)
