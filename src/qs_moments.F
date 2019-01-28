@@ -21,11 +21,15 @@ MODULE qs_moments
    USE block_p_types,                   ONLY: block_p_type
    USE cell_types,                      ONLY: cell_type,&
                                               pbc
-   USE cp_cfm_basic_linalg,             ONLY: cp_cfm_lu_decompose
+   USE cp_cfm_basic_linalg,             ONLY: cp_cfm_lu_decompose,&
+                                              cp_cfm_lu_invert,&
+                                              cp_cfm_gemm,&
+                                              cp_cfm_trace
    USE cp_cfm_types,                    ONLY: cp_cfm_create,&
                                               cp_cfm_get_info,&
                                               cp_cfm_p_type,&
-                                              cp_cfm_release
+                                              cp_cfm_release,&
+                                              cp_cfm_to_fm
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
@@ -43,7 +47,8 @@ MODULE qs_moments
                                               cp_fm_p_type,&
                                               cp_fm_release,&
                                               cp_fm_set_all,&
-                                              cp_fm_type
+                                              cp_fm_type,&
+                                              cp_fm_write_formatted
    USE cp_gemm_interface,               ONLY: cp_gemm
    USE cp_para_types,                   ONLY: cp_para_env_type
    USE cp_result_methods,               ONLY: cp_results_erase,&
@@ -59,7 +64,9 @@ MODULE qs_moments
    USE kpoint_types,                    ONLY: get_kpoint_info,&
                                               kpoint_type
    USE mathconstants,                   ONLY: pi,&
-                                              twopi
+                                              twopi,&
+                                              z_one,&
+                                              z_zero
    USE message_passing,                 ONLY: mp_sum
    USE moments_utils,                   ONLY: get_reference_point
    USE orbital_pointers,                ONLY: current_maxl,&
@@ -1085,11 +1092,13 @@ CONTAINS
       TYPE(qs_rho_type), POINTER                         :: rho
       TYPE(rt_prop_type), POINTER                        :: rtp
       !fbelle
-      REAL(dp)                                           :: relem, ielem
-      COMPLEX(dp)                                        :: det1, et1
+      COMPLEX(dp)                                        :: et1, etr
       TYPE(dbcsr_type), POINTER                          :: dkcos, dksin
       INTEGER                                            :: nelectron
       !fbelle
+      TYPE(cp_cfm_p_type), DIMENSION(:), POINTER         :: deigrmat, cumulant_matrix
+      REAL(dp)                                           :: qn, norm
+      COMPLEX(dp), DIMENSION(3)                          :: d01, d11
 
       CPASSERT(ASSOCIATED(qs_env))
 
@@ -1099,11 +1108,6 @@ CONTAINS
       ENDIF
 
       CALL timeset(routineN, handle)
-
-
-      !fbelle
-
-      !fbelle
 
       ! restrict maximum moment available
       nmom = MIN(nmoments, 2)
@@ -1138,8 +1142,6 @@ CONTAINS
                       mos=mos, &
                       nelectron_total = nelectron)
 
-                   WRITE(*,*) "ELECTRONS", nelectron
-
       CALL qs_rho_get(rho, rho_ao=rho_ao)
 
       NULLIFY (cosmat, sinmat)
@@ -1161,10 +1163,11 @@ CONTAINS
          ALLOCATE (dop_fm_set(2, dft_control%nspins))
       END IF
 
-
       ALLOCATE (op_fm_set(2, dft_control%nspins))
       ALLOCATE (opvec(dft_control%nspins))
       ALLOCATE (eigrmat(dft_control%nspins))
+      IF(nmom >= 1) ALLOCATE (deigrmat(dft_control%nspins))
+      IF(nmom >= 1) ALLOCATE (cumulant_matrix(dft_control%nspins))
       nmotot = 0
       DO ispin = 1, dft_control%nspins
          NULLIFY (tmp_fm_struct, mo_coeff)
@@ -1184,6 +1187,8 @@ CONTAINS
 
          END DO
          CALL cp_cfm_create(eigrmat(ispin)%matrix, op_fm_set(1, ispin)%matrix%matrix_struct)
+         IF(nmom >= 1) CALL cp_cfm_create(deigrmat(ispin)%matrix, op_fm_set(1, ispin)%matrix%matrix_struct)
+         IF(nmom >= 1) CALL cp_cfm_create(cumulant_matrix(ispin)%matrix, op_fm_set(1, ispin)%matrix%matrix_struct)
          CALL cp_fm_struct_release(tmp_fm_struct)
       END DO
 
@@ -1228,26 +1233,60 @@ CONTAINS
          SELECT CASE (l)
          CASE (1)
             ! Dipole
-            zi(:) = CMPLX(1._dp, 0._dp, dp)
-            DO ia = 1, SIZE(particle_set)
-               atomic_kind => particle_set(ia)%atomic_kind
-               CALL get_atomic_kind(atomic_kind, kind_number=ikind)
-               CALL get_qs_kind(qs_kind_set(ikind), core_charge=charge, ghost=ghost, floating=floating)
-               IF (.NOT. ghost .AND. .NOT. floating) THEN
-                  ria = particle_set(ia)%r
-                  ria = pbc(ria, cell)
-                  DO i = 1, 3
-                     kvec(:) = twopi*cell%h_inv(i, :)
-                     dd = SUM(kvec(:)*ria(:))
-                     zdeta = CMPLX(COS(dd), SIN(dd), KIND=dp)**charge
-                     zi(i) = zi(i)*zdeta
-                  END DO
-               ENDIF
-            END DO
-            zi = zi*zphase
-            ci = AIMAG(LOG(zi))/twopi
-            qq = AIMAG(LOG(zi))
-            rmom(2:4, 2) = MATMUL(cell%hmat, ci)
+            SELECT CASE (method)
+            CASE (1,2) !Berry
+
+               zi(:) = CMPLX(1._dp, 0._dp, dp)
+               DO ia = 1, SIZE(particle_set)
+                  atomic_kind => particle_set(ia)%atomic_kind
+                  CALL get_atomic_kind(atomic_kind, kind_number=ikind)
+                  CALL get_qs_kind(qs_kind_set(ikind), core_charge=charge, ghost=ghost, floating=floating)
+                  IF (.NOT. ghost .AND. .NOT. floating) THEN
+                     ria = particle_set(ia)%r
+                     ria = pbc(ria, cell)
+                     DO i = 1, 3
+                        kvec(:) = twopi*cell%h_inv(i, :)
+                        dd = SUM(kvec(:)*ria(:))
+                        zdeta = CMPLX(COS(dd), SIN(dd), KIND=dp)**charge
+                        zi(i) = zi(i)*zdeta
+                     END DO
+                  ENDIF
+               END DO
+               zi = zi*zphase
+               ci = AIMAG(LOG(zi))/twopi
+               qq = AIMAG(LOG(zi))
+               rmom(2:4, 2) = MATMUL(cell%hmat, ci)
+
+           CASE (3) ! Greg Schenter method
+
+               d01(:) = CMPLX(0._dp, 0._dp, dp)
+               d11(:) = CMPLX(0._dp, 0._dp, dp)
+               zi = 0._dp
+               DO ia = 1, SIZE(particle_set)
+                  atomic_kind => particle_set(ia)%atomic_kind
+                  CALL get_atomic_kind(atomic_kind, kind_number=ikind)
+                  CALL get_qs_kind(qs_kind_set(ikind), core_charge=charge, ghost=ghost, floating=floating)
+
+                  qn = charge/norm
+                  IF (.NOT. ghost .AND. .NOT. floating) THEN
+                     ria = particle_set(ia)%r
+                     ria = pbc(ria, cell)
+                     DO i = 1, 3
+                        kvec(:) = twopi*cell%h_inv(i, :)
+                        dd = SUM(kvec(:)*ria(:))
+                        d01(i) = d01(i) + qn*CMPLX(COS(dd), -1.0_dp*SIN(dd), KIND=dp)
+                        d11(i) = d11(i) + qn*ria(i)*CMPLX(COS(dd), -1.0_dp*SIN(dd), KIND=dp)
+                     END DO
+                  ENDIF
+               END DO
+               zi(:) = d11(:)/d01(:)
+               qq = REAL(zi, dp)*nelectron
+               rmom(2:4, 2) = REAL(zi, KIND=dp)*nelectron
+
+           CASE DEFAULT
+              CPABORT("Unknown method for nuclear part of electronic dipole calculation")
+           END SELECT
+
          CASE (2)
             ! Quadrupole
             CPABORT("Berry phase moments bigger than 1 not implemented")
@@ -1322,12 +1361,10 @@ CONTAINS
          CASE (1)
             ! Dipole
             DO i = 1, 3
-               WRITE(*,*) "DIPOLE DIRECTION", i
                kvec(:) = twopi*cell%h_inv(i, :)
 
                SELECT CASE (method)
                CASE (1)
-                  WRITE(*,*) "CASE1"
                   !---------------------------------
                   CALL build_berry_moment_matrix(qs_env, cosmat, sinmat, kvec)
                   IF (qs_env%run_rtp) THEN
@@ -1354,17 +1391,11 @@ CONTAINS
                   zi(i) = zdet
                   !---------------------------------
 
-               CASE (2) ! Greg Schenter method
-                  WRITE(*,*) "CASE2"
+               CASE (2,3) ! Greg Schenter method
                
                ! d/dt (a|e^(ikr)|b)
                CALL build_berry_moment_matrix(qs_env, cosmat, sinmat, kvec, nderivative = 1, &
                                                dkcos = dkcos, dksin = dksin)
-
-!               CALL dbcsr_print(cosmat, matlab_format = .TRUE.)
-!               CALL dbcsr_print(sinmat, matlab_format = .TRUE.)
-!               CALL dbcsr_print(dkcos, matlab_format = .TRUE.)
-!               CALL dbcsr_print(dksin, matlab_format = .TRUE.)
 
                ! rotation from AOs onto MOs               
                IF (qs_env%run_rtp) THEN
@@ -1379,52 +1410,50 @@ CONTAINS
 
                ! Electronic dipole moment
                ! Elements :
-               ! d11 = (a|(-ikr)*e^(-ikr))|b)
+               ! d11 = (a|(-ikr)*e^(-ikr))|b) / ik
                ! d01 = (a|(e^(-ikr))|b)
 
                ! get traces
+               et1 = CMPLX(0.0_dp, 0.0_dp, dp)
                DO ispin = 1, dft_control%nspins
 
-                  ! Trace deriv real
-                  CALL dbcsr_set(dkcos, 0.0_dp)
-                  CALL copy_fm_to_dbcsr(dop_fm_set(1, ispin)%matrix, dkcos)
-                  CALL dbcsr_trace(dkcos, relem)
+                   CALL cp_cfm_get_info(eigrmat(ispin)%matrix, ncol_local=tmp_dim)
+                   DO idim = 1, tmp_dim
+   
+                      ! Make complex matrix of d01
+                      eigrmat(ispin)%matrix%local_data(:, idim) = &
+                         CMPLX(op_fm_set(1, ispin)%matrix%local_data(:, idim), &
+                               -op_fm_set(2, ispin)%matrix%local_data(:, idim), dp)
+                      ! Make complex matrix of d11
+                      deigrmat(ispin)%matrix%local_data(:, idim) = &
+                         CMPLX(dop_fm_set(1, ispin)%matrix%local_data(:, idim), &
+                               -dop_fm_set(2, ispin)%matrix%local_data(:, idim), dp)
+                   END DO
+                   
+                   ! Invert d01
+                   CALL cp_cfm_lu_invert(eigrmat(ispin)%matrix)
 
-                  ! Trace deriv img
-                  CALL cp_fm_scale(-1.0_dp, dop_fm_set(2, ispin)%matrix)
-                  CALL dbcsr_set(dksin, 0.0_dp)
-                  CALL copy_fm_to_dbcsr(dop_fm_set(2, ispin)%matrix, dksin)
-                  CALL dbcsr_trace(dksin, ielem)
-                  det1 = CMPLX(relem, ielem, dp)
-                  WRITE(*,*) "det1", det1
+                   ! Tr(d01^(-1)*d11)
+                   CALL cp_cfm_trace(matrix_a = eigrmat(ispin)%matrix, &
+                                     matrix_b = deigrmat(ispin)%matrix, &
+                                     trace = et1)
 
-                  ! real
-                  CALL dbcsr_set(cosmat, 0.0_dp)
-                  CALL copy_fm_to_dbcsr(op_fm_set(1, ispin)%matrix, cosmat)
-                  CALL dbcsr_trace(cosmat, relem)
+                   etr = z_one*et1
 
-                  ! img
-                  CALL cp_fm_scale(-1.0_dp, op_fm_set(2, ispin)%matrix)
-                  CALL dbcsr_set(sinmat, 0.0_dp)
-                  CALL copy_fm_to_dbcsr(op_fm_set(2, ispin)%matrix, sinmat)
-                  CALL dbcsr_trace(sinmat, ielem)
+                   ! Closed shell
+                   IF (dft_control%nspins == 1) THEN
+                     etr = etr + et1
+                   ENDIF
 
-                  ! Tr(d11) / Tr(d01)
-                  et1 = CMPLX(relem, ielem, dp)
-                  WRITE(*,*) "et1", et1
                END DO
+               zi(i) = etr 
 
-               ! Divide by (-ik)
-               zi(i) = det1 / et1 / CMPLX(0.0_dp, 1.0_dp*kvec(i), dp)
-               WRITE(*,*) "zi", zi(i)
-
-            CASE DEFAULT
-               CPABORT("Unknown method for electronic dipole calculation")
-            END SELECT
+               CASE DEFAULT
+                  CPABORT("Unknown method for electronic dipole calculation")
+               END SELECT
 
             END DO
             zi = zi*xphase
-            WRITE(*,*) "TOTAL zi", zi
          CASE (2)
             ! Quadrupole
             CPABORT("Berry phase moments bigger than 1 not implemented")
@@ -1468,31 +1497,36 @@ CONTAINS
          END SELECT
       END DO
       DO l = 1, nmom
-         SELECT CASE (l)
+         SELECT CASE (l) 
          CASE (1)
 
             ! Dipole (apply periodic (2 Pi) boundary conditions)
             SELECT CASE(method)
-            CASE (1)
+            CASE (1) ! Darden
                ci = AIMAG(LOG(zi))
                DO i = 1, 3
                   IF (qq(i)+ci(i) > pi) ci(i) = ci(i)-twopi
                   IF (qq(i)+ci(i) < -pi) ci(i) = ci(i)+twopi
                END DO
                rmom(2:4, 1) = MATMUL(cell%hmat, ci)/twopi
-            CASE (2)
-               ci = REAL(zi)
+            CASE (2) ! Nuclear: Berry, Elec: Schenter
+               ci = AIMAG(zi)
                DO i = 1, 3
-                  IF (qq(i)+ci(i) > pi) ci(i) = ci(i)-twopi
-                  IF (qq(i)+ci(i) < -pi) ci(i) = ci(i)+twopi
+                  DO WHILE  (qq(i)+ci(i) > pi)
+                     ci(i) = ci(i)-twopi
+                  END DO
+                  DO WHILE (qq(i)+ci(i) < -pi)
+                     ci(i) = ci(i)+twopi
+                  END DO
                END DO
-               rmom(2:4, 1) = ci*nelectron
+               rmom(2:4, 1) = MATMUL(cell%hmat, ci)/twopi 
+            CASE (3) ! Nuclear and Elec: Schenter
+               rmom(2:4,1) = REAL(zi,dp)
             END SELECT
 
-            WRITE(*,*) ""
-            WRITE(*,*) "nuclear", rmom(2:4, 2)
-            WRITE(*,*) "rmom", rmom(2:4, 1)
-            WRITE(*,*) ""
+            IF(para_env%mepos==0) WRITE(*,*) "nuclear", rmom(2:4, 2)
+            IF(para_env%mepos==0) WRITE(*,*) "rmom", rmom(2:4, 1)
+            IF(para_env%mepos==0) WRITE(*,*) "TOTAL", rmom(2:4, 2)+rmom(2:4, 1)
 
          CASE (2)
             ! Quadrupole
@@ -1547,13 +1581,11 @@ CONTAINS
 
       CALL dbcsr_deallocate_matrix(cosmat)
       CALL dbcsr_deallocate_matrix(sinmat)
-
      
       IF(nmom >= 1) THEN
          CALL dbcsr_deallocate_matrix(dkcos)
          CALL dbcsr_deallocate_matrix(dksin)
       END IF
-
 
       DO ispin = 1, dft_control%nspins
          CALL cp_fm_release(opvec(ispin)%matrix)
@@ -1569,6 +1601,14 @@ CONTAINS
       DEALLOCATE (dop_fm_set)
       DEALLOCATE (opvec)
       DEALLOCATE (eigrmat)
+
+      DO ispin = 1, dft_control%nspins
+         CALL cp_cfm_release(deigrmat(ispin)%matrix)
+         CALL cp_cfm_release(cumulant_matrix(ispin)%matrix)
+      END DO
+
+      DEALLOCATE (deigrmat)
+      DEALLOCATE (cumulant_matrix)
 
       CALL timestop(handle)
 
