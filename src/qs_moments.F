@@ -1513,9 +1513,11 @@ CONTAINS
                rmom(2:4,1) = REAL(zi,dp)
             END SELECT
 
+            IF(para_env%mepos==0) WRITE(*,*) ""
             IF(para_env%mepos==0) WRITE(*,*) "nuclear", rmom(2:4, 2)
             IF(para_env%mepos==0) WRITE(*,*) "rmom", rmom(2:4, 1)
             IF(para_env%mepos==0) WRITE(*,*) "TOTAL", rmom(2:4, 2)+rmom(2:4, 1)
+            IF(para_env%mepos==0) WRITE(*,*) ""
 
          CASE (2)
             ! Quadrupole
