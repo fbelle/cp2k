@@ -293,7 +293,7 @@ CONTAINS
 
            ! d^2/dt^2 (sc) = -f2*sc(1,1) - f2*k2*dsc(1,1) - kdp*dss(1,1)
             IF (PRESENT(ddksc) .AND. PRESENT(ddkss)) THEN
-               ddsc(1,1) = -f2*k2*sc(1,1) - f2*k2*dsc(1,1) - kdp*dsc(1,1)
+               ddsc(1,1) = -f2*k2*sc(1,1) - f2*k2*dsc(1,1) - kdp*dss(1,1)
                ddss(1,1) = -f2*k2*ss(1,1) - f2*k2*dss(1,1) + kdp*dsc(1,1)
             END IF
 
