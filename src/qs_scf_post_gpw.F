@@ -182,6 +182,8 @@ MODULE qs_scf_post_gpw
    USE qs_moments,                      ONLY: qs_moment_berry_phase,&
                                               qs_moment_berry_phase2,&
                                               qs_moment_berry_phase3,&
+                                              qs_moment_berry_phase4,&
+                                              qs_moment_berry_phase_numerical,&
                                               qs_moment_locop
    USE qs_neighbor_list_types,          ONLY: get_iterator_info,&
                                               get_neighbor_list_set_p,&
@@ -1446,8 +1448,12 @@ CONTAINS
             IF (periodic) THEN
                !WRITE(*,*) "qs_scf_post_moments - periodic"
                !CALL qs_moment_berry_phase(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
-               !CALL qs_moment_berry_phase2(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
-               CALL qs_moment_berry_phase3(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
+               CALL qs_moment_locop(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
+               CALL qs_moment_berry_phase2(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
+               !CALL qs_moment_berry_phase_numerical(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
+               !CALL qs_moment_berry_phase_debug(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
+!               CALL qs_moment_berry_phase3(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
+               !CALL qs_moment_berry_phase4(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
             ELSE
                !WRITE(*,*) "qs_scf_post_moments - non periodic"
                CALL qs_moment_locop(qs_env, magnetic, maxmom, reference, ref_point, unit_nr)
