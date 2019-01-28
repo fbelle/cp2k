@@ -1081,7 +1081,7 @@ CONTAINS
       INTEGER                                            :: nelectron
       !fbelle
       TYPE(cp_cfm_p_type), DIMENSION(:), POINTER         :: deigrmat, cumulant_matrix
-      REAL(dp)                                           :: qn, norm
+      REAL(dp)                                           :: qn
       COMPLEX(dp), DIMENSION(3)                          :: d01, d11
 
       CPASSERT(ASSOCIATED(qs_env))
@@ -1251,7 +1251,8 @@ CONTAINS
                   CALL get_atomic_kind(atomic_kind, kind_number=ikind)
                   CALL get_qs_kind(qs_kind_set(ikind), core_charge=charge, ghost=ghost, floating=floating)
 
-                  qn = charge/norm
+                  ! Normalize charge
+                  qn = charge/rmom(1,2)
                   IF (.NOT. ghost .AND. .NOT. floating) THEN
                      ria = particle_set(ia)%r
                      ria = pbc(ria, cell)
@@ -1265,7 +1266,7 @@ CONTAINS
                END DO
                zi(:) = d11(:)/d01(:)
                qq = REAL(zi, dp)*nelectron
-               rmom(2:4, 2) = REAL(zi, KIND=dp)*nelectron
+               rmom(2:4, 2) = qq 
 
            CASE DEFAULT
               CPABORT("Unknown method for nuclear part of electronic dipole calculation")
