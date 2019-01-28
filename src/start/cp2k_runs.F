@@ -1,11 +1,11 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright (C) 2000 - 2018  CP2K developers group                                               !
+!   Copyright (C) 2000 - 2019  CP2K developers group                                               !
 !--------------------------------------------------------------------------------------------------!
 
 ! **************************************************************************************************
 MODULE cp2k_runs
-   USE acc_device,                      ONLY: acc_get_ndevices,&
+   USE dbcsr_acc_device,                ONLY: acc_get_ndevices,&
                                               acc_set_active_device
    USE atom,                            ONLY: atom_code
    USE bibliography,                    ONLY: Hutter2014,&

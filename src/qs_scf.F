@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright (C) 2000 - 2018  CP2K developers group                                               !
+!   Copyright (C) 2000 - 2019  CP2K developers group                                               !
 !--------------------------------------------------------------------------------------------------!
 
 ! **************************************************************************************************
@@ -540,6 +540,11 @@ CONTAINS
          dft_control%qs_control%cdft_control%total_steps+total_steps
 
       IF (.NOT. converged) CPWARN("SCF run NOT converged")
+
+      IF (.NOT. converged .AND. scf_control%stop_higher_iter_level) THEN
+         logger%iter_info%last_iter(logger%iter_info%n_rlevel-1) = .TRUE.
+         CPWARN("MD iteration also stops")
+      END IF
 
       ! if needed copy mo_coeff dbcsr->fm for later use in post_scf!fm->dbcsr
       DO ispin = 1, SIZE(mos) !fm -> dbcsr

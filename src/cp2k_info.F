@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright (C) 2000 - 2018  CP2K developers group                                               !
+!   Copyright (C) 2000 - 2019  CP2K developers group                                               !
 !--------------------------------------------------------------------------------------------------!
 
 ! **************************************************************************************************
@@ -249,6 +249,9 @@ CONTAINS
 #endif
 #if defined __NO_STATM_ACCESS
       flags = TRIM(flags)//" no_statm_access"
+#endif
+#if defined __MINGW
+      flags = TRIM(flags)//" mingw"
 #endif
 #if defined __PW_CUDA_NO_HOSTALLOC
       flags = TRIM(flags)//" pw_cuda_no_hostalloc"

@@ -2,7 +2,9 @@
 [ "${BASH_SOURCE[0]}" ] && SCRIPT_NAME="${BASH_SOURCE[0]}" || SCRIPT_NAME=$0
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")" && pwd -P)"
 
-libxsmm_ver=${libxsmm_ver:-1.9.0}
+#TODO: Remove valgrind suppressions below after upgrading to next release.
+# For details see: https://github.com/hfp/libxsmm/issues/298 .
+libxsmm_ver=${libxsmm_ver:-1.10.0}
 source "${SCRIPT_DIR}"/common_vars.sh
 source "${SCRIPT_DIR}"/tool_kit.sh
 source "${SCRIPT_DIR}"/signal_trap.sh
@@ -20,7 +22,7 @@ case "$with_libxsmm" in
     __INSTALL__)
         echo "==================== Installing Libxsmm ===================="
         if [ "$OPENBLAS_ARCH" != "x86_64" ] ; then
-            report_warning $LINENO "libxsmm not suported on arch ${OPENBLAS_ARCH}"
+            report_warning $LINENO "libxsmm is not supported on arch ${OPENBLAS_ARCH}"
             cat <<EOF > "${BUILDDIR}/setup_libxsmm"
 with_libxsmm="__DONTUSE__"
 EOF
@@ -115,3 +117,21 @@ export CP_LIBS="\${LIBXSMM_LIBS} \${CP_LIBS}"
 EOF
 fi
 cd "${ROOTDIR}"
+
+# ----------------------------------------------------------------------
+# Suppress reporting of known problems
+# ----------------------------------------------------------------------
+cat <<EOF >> ${INSTALLDIR}/valgrind.supp
+{
+   <FalsePositiveLibxsmm1>
+   Memcheck:Cond
+   ...
+   fun:libxsmm_otrans
+}
+{
+   <FalsePositiveLibxsmm2>
+   Memcheck:Value8
+   ...
+   fun:libxsmm_otrans
+}
+EOF

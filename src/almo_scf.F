@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright (C) 2000 - 2018  CP2K developers group                                               !
+!   Copyright (C) 2000 - 2019  CP2K developers group                                               !
 !--------------------------------------------------------------------------------------------------!
 
 ! **************************************************************************************************
@@ -38,6 +38,7 @@ MODULE almo_scf
    USE bibliography,                    ONLY: Khaliullin2013,&
                                               Kolafa2004,&
                                               Scheiber2018,&
+                                              Staub2019,&
                                               cite_reference
    USE cp_blacs_env,                    ONLY: cp_blacs_env_release,&
                                               cp_blacs_env_retain
@@ -222,6 +223,7 @@ CONTAINS
       !! retrieve smearing parameters, and check compatibility of methods requested
       almo_scf_env%smear = dft_control%smear
       IF (almo_scf_env%smear) THEN
+         CALL cite_reference(Staub2019)
          IF ((almo_scf_env%almo_update_algorithm .NE. almo_scf_diag) .OR. &
              ((almo_scf_env%deloc_method .NE. almo_deloc_none) .AND. &
               (almo_scf_env%xalmo_update_algorithm .NE. almo_scf_diag))) THEN

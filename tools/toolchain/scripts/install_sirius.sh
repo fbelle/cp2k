@@ -9,14 +9,10 @@ source "${SCRIPT_DIR}"/signal_trap.sh
 
 with_sirius=${1:-__INSTALL__}
 
-if [ $MPI_MODE = no ] ; then
-    if [ "$ENABLE_OMP" = "__FALSE__"] ; then
-        report_warning $LINENO "MPI is disabled, skipping sirius installation"
-        cat <<EOF > "${BUILDDIR}/setup_sirius"
-with_sirius="__FALSE__"
-EOF
-        exit 0
-    fi
+if [ "$MPI_MODE" = "no" ] && [ "$ENABLE_OMP" = "__FALSE__" ] ; then
+    report_warning $LINENO "MPI and OpenMP are disabled, skipping sirius installation"
+    echo 'with_sirius="__FALSE__"' >> ${BUILDDIR}/setup_sirius
+    exit 0
 fi
 
 [ -f "${BUILDDIR}/setup_sirius" ] && rm "${BUILDDIR}/setup_sirius"
@@ -136,7 +132,7 @@ CXX = \$(MPICXX)
 BASIC_CXX_OPT = -O3 -DNDEBUG -mtune=native -ftree-loop-vectorize ${MATH_CFLAGS}
 CXX_OPT = \$(BASIC_CXX_OPT) -fopenmp -std=c++11 -D__SCALAPACK -D__ELPA
 CXX_OPT := \$(CXX_OPT) -D__GPU -I${CUDA_DIRECTORY}include
-NVCC=nvcc -O3 -arch=sm_60
+NVCC=nvcc -O3 -arch=sm_${ARCH_NUM}
 LIBS := ${CUDA_LIBS}
 CXX_OPT := \$(CXX_OPT) ${CUDA_CFLAGS}
 CXX_OPT := \$(CXX_OPT) -I${PWD}/src

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright (C) 2000 - 2018  CP2K developers group                                               !
+!   Copyright (C) 2000 - 2019  CP2K developers group                                               !
 !--------------------------------------------------------------------------------------------------!
 
 ! **************************************************************************************************
@@ -83,7 +83,7 @@ MODULE bibliography
                             Becke1988b, Migliore2009, Mavros2015, Holmberg2017, Marek2014, &
                             Stoychev2016, Futera2017, Bailey2006, Papior2017, Lehtola2018, &
                             Brieuc2016, Barca2018, Scheiber2018, Huang2011, Heaton_Burgess2007, &
-                            Schuett2018, Holmberg2018
+                            Schuett2018, Holmberg2018, Togo2018, Staub2019
 
 CONTAINS
 
@@ -3911,6 +3911,37 @@ CONTAINS
                          "DI 10.1063/1.5038959", &
                          "ER"), &
                          DOI="10.1063/1.5038959")
+
+      CALL add_reference(key=Togo2018, ISI_record=s2a( &
+                         "AU Togo, Atsushi", &
+                         "   Tanaka, Isao", &
+                         "AF Togo, Atsushi", &
+                         "   Tanaka, Isao", &
+                         "TI Spglib : a software library for crystal symmetry search", &
+                         "SO arXiv", &
+                         "PY 2018", &
+                         "AR 1808.01590 ", &
+                         "ER"), &
+                         DOI="xxx")
+
+      CALL add_reference(key=Staub2019, ISI_record=s2a( &
+                         "AU Staub, R", &
+                         "   Iannuzzi, M", &
+                         "   Khaliullin, RZ", &
+                         "   Steinmann, SN", &
+                         "AF Staub, Ruben", &
+                         "   Iannuzzi, Marcella", &
+                         "   Khaliullin, Rustam Z.", &
+                         "   Steinmann, Stephan N.", &
+                         "TI Energy Decomposition Analysis for Metal Surface-Adsorbate Interactions", &
+                         "   by Block Localized Wave Functions", &
+                         "SO Journal of Chemical Theory and Computation", &
+                         "SN 1549-9618", &
+                         "PY 2019", &
+                         "VL 15", &
+                         "DI 10.1021/acs.jctc.8b00957", &
+                         "ER"), &
+                         DOI="10.1021/acs.jctc.8b00957")
 
    END SUBROUTINE add_all_references
 

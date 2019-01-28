@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright (C) 2000 - 2018  CP2K developers group                                               !
+!   Copyright (C) 2000 - 2019  CP2K developers group                                               !
 !--------------------------------------------------------------------------------------------------!
 
 ! **************************************************************************************************
@@ -567,6 +567,12 @@ CONTAINS
 
       CALL keyword_create(keyword, name="eval_energy_forces", &
                           description="Evaluate energy and forces for each retrieved snapshot during a REFTRAJ run", &
+                          repeats=.FALSE., default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, name="eval_forces", &
+                          description="Evaluate the forces for each retrieved snapshot during a REFTRAJ run", &
                           repeats=.FALSE., default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)

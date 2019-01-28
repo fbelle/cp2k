@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright (C) 2000 - 2018  CP2K developers group                                               !
+!   Copyright (C) 2000 - 2019  CP2K developers group                                               !
 !--------------------------------------------------------------------------------------------------!
 
 ! **************************************************************************************************
@@ -253,7 +253,7 @@ CONTAINS
       IF (PRESENT(do_ri_sos_laplace_mp2)) my_do_ri_sos_laplace_mp2 = do_ri_sos_laplace_mp2
 
       ! check if we want to do imaginary time
-      do_im_time = mp2_env%ri_rpa%do_im_time
+      do_im_time = mp2_env%do_im_time
       do_mao = mp2_env%ri_rpa_im_time%do_mao
       do_bse = qs_env%mp2_env%ri_g0w0%do_bse
       do_kpoints_cubic_RPA = qs_env%mp2_env%ri_rpa_im_time%do_im_time_kpoints

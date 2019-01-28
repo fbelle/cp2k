@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright (C) 2000 - 2018  CP2K developers group                                               !
+!   Copyright (C) 2000 - 2019  CP2K developers group                                               !
 !--------------------------------------------------------------------------------------------------!
 
 ! **************************************************************************************************
@@ -5101,6 +5101,12 @@ CONTAINS
                           n_var=6, &
                           type_of_var=real_t, &
                           default_r_vals=(/-0.5_dp, 1.5_dp, 0.5_dp, 0.5_dp, 1.5_dp, -0.5_dp/))
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, name="NOTCONV_STOPALL", &
+                          description="If true, it stops higher level of iteration when SCF does not converge", &
+                          usage="NOTCONV_STOPALL logical_value", default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 

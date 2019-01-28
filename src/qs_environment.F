@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright (C) 2000 - 2018  CP2K developers group                                               !
+!   Copyright (C) 2000 - 2019  CP2K developers group                                               !
 !--------------------------------------------------------------------------------------------------!
 
 ! **************************************************************************************************
@@ -471,7 +471,7 @@ CONTAINS
       INTEGER, DIMENSION(2)                              :: n_mo, nelectron_spin
       LOGICAL                                            :: all_potential_present, be_silent, &
                                                             do_kpoints, e1terms, has_unit_metric, &
-                                                            lribas, was_present
+                                                            lribas, orb_gradient, was_present
       REAL(dp)                                           :: ewald_rcut, maxocc, verlet_skin
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cp_logger_type), POINTER                      :: logger
@@ -613,6 +613,7 @@ CONTAINS
             CALL ewald_env_set(ewald_env, poisson_section=poisson_section)
             ewald_section => section_vals_get_subs_vals(poisson_section, "EWALD")
             print_section => section_vals_get_subs_vals(qs_env%input, "PRINT%GRID_INFORMATION")
+            CALL get_qs_kind_set(qs_kind_set, basis_rcut=ewald_rcut)
             CALL read_ewald_section(ewald_env, ewald_section)
             CALL ewald_pw_create(ewald_pw, ewald_env, cell, cell_ref, print_section=print_section)
             CALL set_qs_env(qs_env, ewald_env=ewald_env, ewald_pw=ewald_pw)
@@ -839,6 +840,19 @@ CONTAINS
 
       ! XXXXXXX this is backwards XXXXXXXX
       dft_control%smear = scf_control%smear%do_smear
+
+      ! Periodic efield needs equal occupation and orbital gradients
+      IF (dft_control%apply_period_efield) THEN
+         CALL get_qs_env(qs_env=qs_env, requires_mo_derivs=orb_gradient)
+         IF (.NOT. orb_gradient) THEN
+            CALL cp_abort(__LOCATION__, "Periodic Efield needs orbital gradient and direct optimization."// &
+                          " Use the OT optimization method.")
+         END IF
+         IF (dft_control%smear) THEN
+            CALL cp_abort(__LOCATION__, "Periodic Efield needs equal occupation numbers."// &
+                          " Smearing option is not possible.")
+         END IF
+      END IF
 
       !   Initialize the GAPW local densities and potentials
       IF (dft_control%qs_control%method_id == do_method_gapw .OR. &

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright (C) 2000 - 2018  CP2K developers group                                               !
+!   Copyright (C) 2000 - 2019  CP2K developers group                                               !
 !--------------------------------------------------------------------------------------------------!
 
 ! **************************************************************************************************
@@ -1808,7 +1808,9 @@ CONTAINS
 
       CALL section_create(subsection, name="PILE", &
                           description="Controls the PI Langevin Equation thermostat."// &
-                          " Needs the exact harmonic integrator", &
+                          " Needs the exact harmonic integrator."// &
+                          " May lead to unphysical motions if constraint e.g. FIXED_ATOMS, is applied."// &
+                          " RESTART_HELIUM section has to be .FALSE. when restarting the PIGLET job.", &
                           citations=(/Ceriotti2010/), &
                           n_keywords=2, n_subsections=1, &
                           repeats=.FALSE.)

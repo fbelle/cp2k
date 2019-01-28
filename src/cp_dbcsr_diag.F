@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright (C) 2000 - 2018  CP2K developers group                                               !
+!   Copyright (C) 2000 - 2019  CP2K developers group                                               !
 !--------------------------------------------------------------------------------------------------!
 
 ! **************************************************************************************************
@@ -148,6 +148,8 @@ CONTAINS
       CALL cp_fm_struct_create(fm_struct, context=blacs_env, nrow_global=n, &
                                ncol_global=n, para_env=para_env)
       CALL cp_fm_create(fm_matrix, fm_struct, name="fm_matrix")
+
+      CALL copy_dbcsr_to_fm(matrix, fm_matrix)
 
       IF (PRESENT(eigenvectors)) THEN
          CALL cp_fm_create(fm_eigenvectors, fm_struct, name="fm_eigenvectors")
