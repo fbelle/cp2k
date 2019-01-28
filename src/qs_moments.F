@@ -1345,12 +1345,11 @@ CONTAINS
          SELECT CASE (l)
          CASE (1)
             ! Dipole
-            DO i = 1, 3
-               kvec(:) = twopi*cell%h_inv(i, :)
-
-               SELECT CASE (method)
-               CASE (1)
-                  !---------------------------------
+            SELECT CASE (method)
+            CASE (1)
+               !---------------------------------
+               DO i = 1, 3
+                  kvec(:) = twopi*cell%h_inv(i, :)
                   CALL build_berry_moment_matrix(qs_env, cosmat, sinmat, kvec)
                   IF (qs_env%run_rtp) THEN
                      CALL get_qs_env(qs_env, rtp=rtp)
@@ -1374,71 +1373,76 @@ CONTAINS
                      ENDIF
                   END DO
                   zi(i) = zdet
+                  zi = zi*xphase
                   !---------------------------------
-
-               CASE (2,3) ! Greg Schenter method
-               
-               ! d/dt (a|e^(ikr)|b)
-               CALL build_berry_moment_matrix(qs_env, cosmat, sinmat, kvec, nderivative = 1, &
-                                               dkcos = dkcos, dksin = dksin)
-
-               ! rotation from AOs onto MOs               
-               IF (qs_env%run_rtp) THEN
-                  CALL get_qs_env(qs_env, rtp=rtp)
-                  CALL get_rtp(rtp, mos_new=mos_new)
-                  CALL op_orbbas_rtp(cosmat, sinmat, mos, op_fm_set, mos_new)
-                  CALL op_orbbas_rtp(dkcos, dksin, mos, dop_fm_set, mos_new)
-               ELSE
-                  CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
-                  CALL op_orbbas(dkcos, dksin, mos, dop_fm_set, opvec)
-               END IF
-
-               ! Electronic dipole moment
-               ! Elements :
-               ! d11 = (a|(-ikr)*e^(-ikr))|b) / ik
-               ! d01 = (a|(e^(-ikr))|b)
-
-               ! get traces
-               et1 = CMPLX(0.0_dp, 0.0_dp, dp)
-               DO ispin = 1, dft_control%nspins
-
-                   CALL cp_cfm_get_info(eigrmat(ispin)%matrix, ncol_local=tmp_dim)
-                   DO idim = 1, tmp_dim
-   
-                      ! Make complex matrix of d01
-                      eigrmat(ispin)%matrix%local_data(:, idim) = &
-                         CMPLX(op_fm_set(1, ispin)%matrix%local_data(:, idim), &
-                               -op_fm_set(2, ispin)%matrix%local_data(:, idim), dp)
-                      ! Make complex matrix of d11
-                      deigrmat(ispin)%matrix%local_data(:, idim) = &
-                         CMPLX(dop_fm_set(1, ispin)%matrix%local_data(:, idim), &
-                               -dop_fm_set(2, ispin)%matrix%local_data(:, idim), dp)
-                   END DO
-                   
-                   ! Invert d01
-                   CALL cp_cfm_lu_invert(eigrmat(ispin)%matrix)
-
-                   ! Tr(d01^(-1)*d11)
-                   CALL cp_cfm_trace(matrix_a = eigrmat(ispin)%matrix, &
-                                     matrix_b = deigrmat(ispin)%matrix, &
-                                     trace = et1)
-
-                   etr = z_one*et1
-
-                   ! Closed shell
-                   IF (dft_control%nspins == 1) THEN
-                     etr = etr + et1
-                   ENDIF
-
                END DO
-               zi(i) = etr 
 
-               CASE DEFAULT
-                  CPABORT("Unknown method for electronic dipole calculation")
-               END SELECT
+            CASE (2,3) ! Greg Schenter method
+               DO i = 1, 3
+                  kvec(:) = twopi*cell%h_inv(i, :)
+            
+                  ! d/dt (a|e^(ikr)|b)
+                  CALL build_berry_moment_matrix(qs_env, cosmat, sinmat, kvec, nderivative = 1, &
+                                                  dkcos = dkcos, dksin = dksin)
 
-            END DO
-            zi = zi*xphase
+                  ! rotation from AOs onto MOs               
+                  IF (qs_env%run_rtp) THEN
+                     CALL get_qs_env(qs_env, rtp=rtp)
+                     CALL get_rtp(rtp, mos_new=mos_new)
+                     CALL op_orbbas_rtp(cosmat, sinmat, mos, op_fm_set, mos_new)
+                     CALL op_orbbas_rtp(dkcos, dksin, mos, dop_fm_set, mos_new)
+                  ELSE
+                     CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
+                     CALL op_orbbas(dkcos, dksin, mos, dop_fm_set, opvec)
+                  END IF
+
+                  ! Electronic dipole moment
+                  ! Elements :
+                  ! d11 = (a|(-ikr)*e^(-ikr))|b) / ik
+                  ! d01 = (a|(e^(-ikr))|b)
+
+                  ! get traces
+                  et1 = CMPLX(0.0_dp, 0.0_dp, dp)
+                  etr = CMPLX(1.0_dp, 0.0_dp, dp)
+                  DO ispin = 1, dft_control%nspins
+
+                      CALL cp_cfm_get_info(eigrmat(ispin)%matrix, ncol_local=tmp_dim)
+                      DO idim = 1, tmp_dim
+   
+                         ! Make complex matrix of d01
+                         eigrmat(ispin)%matrix%local_data(:, idim) = &
+                            CMPLX(op_fm_set(1, ispin)%matrix%local_data(:, idim), &
+                                  -op_fm_set(2, ispin)%matrix%local_data(:, idim), dp)
+                         ! Make complex matrix of d11
+                         deigrmat(ispin)%matrix%local_data(:, idim) = &
+                            CMPLX(dop_fm_set(1, ispin)%matrix%local_data(:, idim), &
+                                  -dop_fm_set(2, ispin)%matrix%local_data(:, idim), dp)
+                      END DO
+                      
+                      ! Invert d01
+                      CALL cp_cfm_lu_invert(eigrmat(ispin)%matrix)
+
+                      ! Tr(d01^(-1)*d11)
+                      CALL cp_cfm_trace(matrix_a = eigrmat(ispin)%matrix, &
+                                        matrix_b = deigrmat(ispin)%matrix, &
+                                        trace = et1)
+
+                      etr = etr*et1
+
+                      ! Closed shell
+                      IF (dft_control%nspins == 1) THEN
+                        etr = etr + et1
+                      ENDIF
+
+                  END DO
+                  ! t-deriv, divide by 1/(ik)
+                  zi(i) = etr / CMPLX(0.0_dp, kvec(i), dp)
+               END DO
+
+            CASE DEFAULT
+               CPABORT("Unknown method for electronic dipole calculation")
+            END SELECT
+
          CASE (2)
             ! Quadrupole
             CPABORT("Berry phase moments bigger than 1 not implemented")
