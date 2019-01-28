@@ -81,8 +81,8 @@ MODULE input_cp2k_dft
         rel_pot_erfc, rel_pot_full, rel_sczora_mp, rel_trans_atom, rel_trans_full, &
         rel_trans_molecule, rel_zora, rel_zora_full, rel_zora_mp, restart_guess, rsdft_model, &
         sccs_andreussi, sccs_derivative_cd3, sccs_derivative_cd5, sccs_derivative_cd7, &
-        sccs_derivative_fft, sccs_fattebert_gygi, schenter, shape_function_density, &
-        shape_function_gaussian, &
+        sccs_derivative_fft, sccs_fattebert_gygi, schenter, schenter_nuc, &
+        shape_function_density, shape_function_gaussian, &
         sic_ad, sic_eo, sic_list_all, sic_list_unpaired, sic_mauri_spz, sic_mauri_us, sic_none, &
         slater, smear_energy_window, smear_fermi_dirac, smear_list, sparse_guess, &
         spline3_nopbc_interp, spline3_pbc_interp, tddfpt_davidson, tddfpt_excitations, &
@@ -1556,10 +1556,10 @@ CONTAINS
       CALL keyword_create(keyword, name="METHOD",&
                           description="Method of calculation for electronic moment contribution",&
                           usage="METHOD DARDEN", default_i_val=darden,&
-                          enum_c_vals=s2a("DARDEN","SCHENTER"),&
+                          enum_c_vals=s2a("DARDEN", "SCHENTER", "SCHENTER_NUC"),&
                           enum_desc=s2a("Moments as described in Darden2004",&
-                          "Moments as described in (unpublished - GKS, CJM, FB)"),&
-                          enum_i_vals=(/darden, schenter/))
+                          "Moments as described in (unpublished - GKS, CJM, FB)","Nuc and Elec by Greg"),&
+                          enum_i_vals=(/darden, schenter, schenter_nuc/))
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
       !fbelle

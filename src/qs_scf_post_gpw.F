@@ -83,7 +83,8 @@ MODULE qs_scf_post_gpw
                                               radius_user,&
                                               ref_charge_atomic,&
                                               ref_charge_mulliken,&
-                                              schenter
+                                              schenter,&
+                                              schenter_nuc
    USE input_section_types,             ONLY: section_get_ival,&
                                               section_get_ivals,&
                                               section_get_lval,&
@@ -1449,6 +1450,8 @@ CONTAINS
          ELSE
             IF (periodic) THEN
                ! Choice of method to calculate electronic dipole contribution
+               CALL qs_moment_berry_phase(qs_env, magnetic, maxmom, reference, ref_point, unit_nr,&
+                                          method = DARDEN)
                CALL qs_moment_berry_phase(qs_env, magnetic, maxmom, reference, ref_point, unit_nr,&
                                           method)
             ELSE
