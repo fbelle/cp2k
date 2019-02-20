@@ -136,8 +136,7 @@ MODULE qs_moments
    PUBLIC :: qs_moment_berry_phase2
    PUBLIC :: qs_moment_berry_phase3
    PUBLIC :: qs_moment_berry_phase4
-   PUBLIC :: qs_moment_berry_phase_numerical
-!   PUBLIC :: qs_moment_berry_phase_debug
+   PUBLIC :: numer_berry_moment_matrix
 
 CONTAINS
 
@@ -601,6 +600,140 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE build_local_magmom_matrix
+
+
+! **************************************************************************************************
+!> \brief NUMERICAL CALCULATION OF FIRST DERIVATIVE 
+!>        
+!> \param qs_env ...
+!> \param cosmat ...
+!> \param sinmat ...
+!> \param kvec ...
+!> \param sab_orb_external ...
+!> \param basis_type ...
+!> \param nderivative ... Order of derivative wrt k
+! **************************************************************************************************
+   SUBROUTINE numer_berry_moment_matrix(qs_env, kvec, nmoments, dkc, dks)
+   
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      INTEGER, INTENT(IN)                                :: nmoments
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER, OPTIONAL :: dkc, dks
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'numer_berry_moment_matrix', &
+         routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: handle, j, k, nm, nmom
+      REAL(dp), DIMENSION(3)                             :: kvec
+      REAL(dp)                                           :: std_value
+      TYPE(cell_type), POINTER                           :: cell
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
+      TYPE(dbcsr_type), POINTER                          :: cosmat, sinmat
+
+      ! fbelle
+      REAL(KIND=dp)                                      :: dx   
+
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER        :: numer_cosmat, numer_sinmat
+      TYPE(cp_para_env_type), POINTER                    :: para_env
+
+
+      CALL timeset(routineN, handle)
+
+      ! restrict maximum moment available
+      nmom = MIN(nmoments, 1)
+
+      nm = (6+11*nmom+6*nmom**2+nmom**3)/6-1
+
+      NULLIFY (cell, matrix_s)
+
+      CALL get_qs_env(qs_env, &
+                      cell = cell, &
+                       matrix_s = matrix_s)
+      CALL get_qs_env(qs_env, para_env=para_env)
+
+
+      NULLIFY (cosmat, sinmat)
+      ALLOCATE (cosmat, sinmat)
+      CALL dbcsr_copy(cosmat, matrix_s(1)%matrix, 'COS MOM')
+      CALL dbcsr_copy(sinmat, matrix_s(1)%matrix, 'SIN MOM')
+      CALL dbcsr_set(cosmat, 0.0_dp)
+      CALL dbcsr_set(sinmat, 0.0_dp)
+
+      ! Init matrices to store numerically calculated matrices
+      NULLIFY (numer_cosmat, numer_sinmat)
+      CALL dbcsr_allocate_matrix_set(numer_cosmat, 3)
+      CALL dbcsr_allocate_matrix_set(numer_sinmat, 3)
+
+      DO j = 1, 3
+         ALLOCATE (numer_cosmat(j)%matrix, numer_sinmat(j)%matrix)
+         CALL dbcsr_copy(numer_cosmat(j)%matrix, matrix_s(1)%matrix, 'COS NUMER')
+         CALL dbcsr_copy(numer_sinmat(j)%matrix, matrix_s(1)%matrix, 'SIN NUMER')
+         CALL dbcsr_set(numer_cosmat(j)%matrix, 0.0_dp)
+         CALL dbcsr_set(numer_sinmat(j)%matrix, 0.0_dp)
+      END DO
+
+      ! Deviation
+      dx = 1.0E-7
+
+      !------------------------------------------------------------------------
+      ! Numerical calculation 
+      !------------------------------------------------------------------------
+
+      IF(para_env%mepos==0) THEN
+!         WRITE(*,*) "----------------------------------------------"
+!         WRITE(*,*) "NUMERIC DERIVATIVE"
+!         WRITE(*,*) "----------------------------------------------"
+      END IF
+
+      ! loop over the 3 derivation directions (k is 3D vector)
+      DO k = 1, 3
+         ! save inital value of kvec in direction k
+         std_value = kvec(k)
+         CALL dbcsr_set(cosmat, 0.0_dp)
+         CALL dbcsr_set(sinmat, 0.0_dp)
+         DO j = 1, 2
+            ! Apply deviation on kvecs direction k
+            kvec(k) = std_value-(-1.0_dp)**j*dx
+            ! Compute cosmat and sinmat
+            CALL build_berry_moment_matrix(qs_env = qs_env, &
+                                           cosmat = cosmat, &
+                                           sinmat = sinmat, &
+                                           kvec = kvec)
+
+            IF (j == 1) THEN
+               CALL dbcsr_copy(numer_cosmat(k)%matrix, cosmat)
+               CALL dbcsr_copy(numer_sinmat(k)%matrix, sinmat)
+            ELSE
+               CALL dbcsr_add(numer_cosmat(k)%matrix, cosmat, 1.0_dp, -1.0_dp)
+               CALL dbcsr_add(numer_sinmat(k)%matrix, sinmat, 1.0_dp, -1.0_dp)
+            END IF
+
+         END DO
+         kvec(k) = std_value
+
+         ! dividing by 0.5*dx
+         CALL dbcsr_scale(numer_cosmat(k)%matrix, 0.5_dp/dx)
+         CALL dbcsr_scale(numer_sinmat(k)%matrix, 0.5_dp/dx)
+
+         CALL dbcsr_copy(dkc(k)%matrix, numer_cosmat(k)%matrix)
+         CALL dbcsr_copy(dks(k)%matrix, numer_sinmat(k)%matrix)
+
+      END DO ! k
+
+      CALL dbcsr_deallocate_matrix(cosmat)
+      CALL dbcsr_deallocate_matrix(sinmat)
+
+      CALL dbcsr_deallocate_matrix_set(numer_cosmat)
+      CALL dbcsr_deallocate_matrix_set(numer_sinmat)
+
+      CALL timestop(handle)
+
+      IF(para_env%mepos==0) THEN
+         WRITE(*,*) "numer_berry_moment_matrix - END"      
+      END IF
+
+   END SUBROUTINE
+
+
 
 ! **************************************************************************************************
 !> \brief Debugging of moments integral cossin, and its derivatives wrt k
@@ -1237,19 +1370,23 @@ CONTAINS
 !> \param cosmat Real part of (a|exp(ikr)|b) 
 !> \param sinmat Imaginary part of (a|exp(ikr)|b) 
 !> \param kvec The k-vector for which the integral is evaluated
+!> \param reference ...
+!> \param ref_point ...
 !> \param sab_orb_external Specify an external neighborlist
 !> \param basis_type ...
 !> \param nderivative Order of derivative wrt t
 !> \param dkcos dksin Real and imaginary part of first derivative wrt t
 !> \param d2kcos d2ksin Real and imaginary part of second derivative wrt t
 ! **************************************************************************************************
-   SUBROUTINE build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec, &
+   SUBROUTINE build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec, reference, ref_point,&
                                          sab_orb_external, basis_type, nderivative, &
                                          dkcos, dksin, d2kcos, d2ksin)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(dbcsr_type), POINTER                          :: cosmat, sinmat
       REAL(KIND=dp), DIMENSION(3), INTENT(IN)            :: kvec
+      INTEGER, INTENT(IN), OPTIONAL                      :: reference
+      REAL(dp), DIMENSION(:), POINTER, OPTIONAL          :: ref_point
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
          OPTIONAL, POINTER                               :: sab_orb_external
       CHARACTER(len=*), OPTIONAL                         :: basis_type
@@ -1285,6 +1422,8 @@ CONTAINS
       INTEGER                                            :: maxder, nder, k
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: cosmint, sinmint
       REAL(dp), DIMENSION(:, :), POINTER                 :: ckblk, skblk, c2kblk, s2kblk
+      REAL(dp), DIMENSION(3)                             :: rcc
+      INTEGER                                            :: i, j 
 
       CALL timeset(routineN, handle)
 
@@ -1320,10 +1459,22 @@ CONTAINS
       END IF
       maxder = nder + 1 
 
+      ! Reference point
+      IF (PRESENT(reference)) THEN
+         CALL get_reference_point(rcc, qs_env=qs_env, reference=reference, ref_point=ref_point)
+         rcc = pbc(rcc, cell)
+      ELSE
+         rcc = 0.0_dp 
+      END IF
+      
       ! Allocate array for (a|eikr|b) intrgral and its derivatives
       ALLOCATE(cosmint(ldab, ldab, maxder))
       ALLOCATE(sinmint(ldab, ldab, maxder))
       ALLOCATE (work(ldwork, ldwork))
+
+      WRITE(*,*) "ldab", ldab
+      WRITE(*,*) "SIZE(work, 1)", SIZE(work, 1)
+      WRITE(*,*) "SIZE(work, 2)", SIZE(work, 2)
 
       nkind = SIZE(qs_kind_set)
       natom = SIZE(particle_set)
@@ -1342,7 +1493,7 @@ CONTAINS
       CALL neighbor_list_iterator_create(nl_iterator, sab_orb)
       DO WHILE (neighbor_list_iterate(nl_iterator) == 0)
          k = k + 1
-!         WRITE(*,*) "NEIGHBORLIST ITERATION", k
+         WRITE(*,*) "----------------- NEIGHBORLIST ITERATION ------------------", k
          CALL get_iterator_info(nl_iterator, ikind=ikind, jkind=jkind, inode=inode, &
                                 iatom=iatom, jatom=jatom, r=rab)
          basis_set_a => basis_set_list(ikind)%gto_basis_set
@@ -1374,6 +1525,29 @@ CONTAINS
          
          ldsa = SIZE(sphi_a, 1)
          ldsb = SIZE(sphi_b, 1)
+
+         WRITE(*,*) "BASIS_SET A"
+         WRITE(*,*) "first_sgfa",  basis_set_a%first_sgf
+         WRITE(*,*) "la_max",  basis_set_a%lmax
+         WRITE(*,*) "la_min",  basis_set_a%lmin
+         WRITE(*,*) "npgfa",  basis_set_a%npgf
+         WRITE(*,*) "nseta",  basis_set_a%nset
+         WRITE(*,*) "nsgfa", basis_set_a%nsgf_set
+         WRITE(*,*) "rpgfa", basis_set_a%pgf_radius
+         WRITE(*,*) "set_radius_a",  basis_set_a%set_radius
+         WRITE(*,*) "zeta", basis_set_a%zet
+         WRITE(*,*) ""
+         WRITE(*,*) "BASIS_SET B"
+         WRITE(*,*) "first_sgfb",  basis_set_b%first_sgf
+         WRITE(*,*) "lb_max",  basis_set_b%lmax
+         WRITE(*,*) "lb_min",  basis_set_b%lmin
+         WRITE(*,*) "npgfb",  basis_set_b%npgf
+         WRITE(*,*) "nsetb",  basis_set_b%nset
+         WRITE(*,*) "nsgfb", basis_set_b%nsgf_set
+         WRITE(*,*) "rpgfb", basis_set_b%pgf_radius
+         WRITE(*,*) "set_radius_b",  basis_set_b%set_radius
+         WRITE(*,*) "zetb", basis_set_b%zet
+         WRITE(*,*) ""
 
          IF (iatom <= jatom) THEN
             irow = iatom
@@ -1417,13 +1591,28 @@ CONTAINS
 
             ra(:) = pbc(particle_set(iatom)%r(:), cell)
             rb(:) = ra+rab
+            ! apply reference point
+            ! here calculated -r_acc
+            ! because r_acc = r_cc - r_a
+            ! but routines are to evaluate r_a
+            ! Additional multipliction with (-1.0_dp) later.
+            IF(PRESENT(reference)) THEN
+               ra(:) = ra-rcc
+               rb(:) = rb-rcc
+            END IF
             dab = SQRT(rab(1)*rab(1)+rab(2)*rab(2)+rab(3)*rab(3))
 
+            WRITE(*,*) "START SET ITERATION"
             DO iset = 1, nseta
 
                ncoa = npgfa(iset)*ncoset(la_max(iset))
                sgfa = first_sgfa(1, iset)
-               
+
+               WRITE(*,*) "iset", iset
+               WRITE(*,*) "ncoa", ncoa
+               WRITE(*,*) "sgfa", sgfa
+               WRITE(*,*) ""
+
                DO jset = 1, nsetb
 
                   IF (set_radius_a(iset)+set_radius_b(jset) < dab) CYCLE
@@ -1431,20 +1620,59 @@ CONTAINS
                   ncob = npgfb(jset)*ncoset(lb_max(jset))
                   sgfb = first_sgfb(1, jset)
 
+                  WRITE(*,*) "jset", jset
+                  WRITE(*,*) "ncob", ncob
+                  WRITE(*,*) "sgfb", sgfb
+                  WRITE(*,*) ""
+
                   ! Calculate the (a|exp(ikr)|b) integrals and derivatives (a|(ikr)^nder*exp(ikr)|b)
                   ! Careful, this derivative is wrt to a factor t in front of each k (t -> 1)
                   ! to pull down the whole argument of exp(ikr)
                   SELECT CASE (nder)
-                  CASE(0)
+                  CASE(0) ! up to 0-th derivative
                     CALL cossin3(la_max(iset), npgfa(iset), zeta(:, iset), rpgfa(:, iset), la_min(iset), &
                                 lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset), &
                                 ra, rb, kvec, cosab = cosmint(:, :, 1), sinab = sinmint(:, :, 1))
-                  CASE(1)
+                  CASE(1) ! up to first derivative 
                     CALL cossin3(la_max(iset), npgfa(iset), zeta(:, iset), rpgfa(:, iset), la_min(iset), &
                                 lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset), &
                                 ra, rb, kvec, cosab = cosmint(:, :, 1), sinab = sinmint(:, :, 1), &
                                 dksc = cosmint(:, :, 2), dkss = sinmint(:, :, 2))
-                  CASE(2)
+
+                    WRITE(*,*) "AFTER COSSIN - CASE 1"
+                    WRITE(*,*) "SIZE(cosmint(:, :, 1),1)", SIZE(cosmint(:, :, 1),1)
+                    WRITE(*,*) "SIZE(cosmint(:, :, 1),2)", SIZE(cosmint(:, :, 1),2)
+                    WRITE(*,*) "SIZE(cosmint(:, :, 2),1)", SIZE(cosmint(:, :, 2),1)
+                    WRITE(*,*) "SIZE(cosmint(:, :, 2),2)", SIZE(cosmint(:, :, 2),2)
+                    
+                    WRITE(*,*) "COS"
+                    DO i = 1, SIZE(cosmint(:,:,1),1)
+!                       DO j = 1, SIZE(cosmint(:,:,1),2)
+!                          WRITE(*,*) "cosmint(i,j,1)", i, j, cosmint(i,j,1)
+!                          WRITE(*,*) "cosmint(i,i,1)", i, i, cosmint(i,i,1)
+!                       END DO 
+                    END DO
+                    WRITE(*,*) "DKCOS"
+                    DO i = 1, SIZE(cosmint(:,:,2),1)
+!                       DO j = 1, SIZE(cosmint(:,:,2),2)
+!                          WRITE(*,*) "cosmint(i,j,2)", i, j, cosmint(i,j,2)
+!                          WRITE(*,*) "cosmint(i,i,2)", i, i, cosmint(i,i,2)
+!                       END DO 
+                    END DO
+!                    IF(ldab >= 2) THEN
+!                       WRITE(*,*) "cosmint(2, 1, 1)", cosmint(2, 1, 1) 
+!                       WRITE(*,*) "cosmint(1, 2, 1)", cosmint(1, 2, 1) 
+!                       WRITE(*,*) "cosmint(2, 2, 1)", cosmint(2, 2, 1) 
+!                    END IF
+!                    WRITE(*,*) "cosmint(1, 1, 2:4)", cosmint(1, 1, 2) 
+!                    WRITE(*,*) "sinmint(1, 1, 2:4)", sinmint(1, 1, 2) 
+!                    IF(ldab >= 2) THEN
+!                      WRITE(*,*) "cosmint(2, 1, 2:4)", cosmint(2, 1, 2:4) 
+!                       WRITE(*,*) "cosmint(1, 2, 2:4)", cosmint(1, 2, 2:4) 
+!                       WRITE(*,*) "cosmint(2, 2, 2:4)", cosmint(2, 2, 2:4) 
+!                    END IF
+
+                  CASE(2) ! up to 2nd derivative
                     CALL cossin3(la_max(iset), npgfa(iset), zeta(:, iset), rpgfa(:, iset), la_min(iset), &
                                 lb_max(jset), npgfb(jset), zetb(:, jset), rpgfb(:, jset), lb_min(jset), &
                                 ra, rb, kvec, cosab=cosmint(:, :, 1), sinab=sinmint(:, :, 1), &
@@ -1454,19 +1682,56 @@ CONTAINS
                   CASE DEFAULT
                      CPABORT("Derivatives of (a|(ikr)^nder*exp(ikr)|b) only up to second order")
                   END SELECT
-                 
+
                   ! Contraction from cartesian to spherical basis functions 
                   CALL contract_cossin(cblock, sblock, &
                                        iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
                                        jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
-                                       cosmint(:, :, 1), sinmint(:, :, 1), ldab, work, ldwork)
+                                       cosmint(1:ldab, 1:ldab, 1), sinmint(1:ldab, 1:ldab, 1), &
+                                       ldab, work(1:ldwork,1:ldwork), ldwork)
+
+                  WRITE(*,*) "AFTER CONTRACTION - CASE 0"
+                  WRITE(*,*) "SIZE(cblock,1)", SIZE(cblock,1)
+                  WRITE(*,*) "SIZE(cblock,2)", SIZE(cblock,2)
+                  WRITE(*,*) "COS"
+                  DO i = 1, SIZE(cblock,1)
+                     DO j = 1, SIZE(cblock,2)
+!                        WRITE(*,*) "cblock(i,j)", i, j, cblock(i,j)
+                     END DO 
+                  END DO
 
                   IF (nder >= 1) THEN
                      ! Contraction of matrices storing first derivatives
+
+                     WRITE(*,*) "CONTRACTION OF DKCOS and DKSIN"
+!                     WRITE(*,*) "SIZE(sphi_a,1)", SIZE(sphi_a,1)
+!                     WRITE(*,*) "SIZE(sphi_a,2)", SIZE(sphi_a,2)
+!                     WRITE(*,*) "SIZE(sphi_b,1)", SIZE(sphi_b,1)
+!                     WRITE(*,*) "SIZE(sphi_b,2)", SIZE(sphi_b,2)
+
                      CALL contract_cossin(ckblk, skblk, &
                                           iatom, ncoa, nsgfa(iset), sgfa, sphi_a, ldsa, &
                                           jatom, ncob, nsgfb(jset), sgfb, sphi_b, ldsb, &
-                                          cosmint(:, :, 2), sinmint(:, :, 2), ldab, work, ldwork)
+                                          cosmint(1:ldab, 1:ldab, 2), sinmint(1:ldab, 1:ldab, 2),&
+                                          ldab, work(1:ldwork,1:ldwork), ldwork)
+
+                     WRITE(*,*) "AFTER CONTRACTION - CASE 1"
+!                     WRITE(*,*) "cosmint(1, 1, 2)", cosmint(1, 1, 2) 
+!                     WRITE(*,*) "sinmint(1, 1, 2)", sinmint(1, 1, 2) 
+!                     WRITE(*,*) "ckblk(1, 1)", ckblk(1, 1) 
+!                     WRITE(*,*) "skblk(1, 1)", skblk(1, 1) 
+
+                     WRITE(*,*) "SIZE(cosmint,1)", SIZE(cosmint,1)
+                     WRITE(*,*) "SIZE(cosmint,2)", SIZE(cosmint,2)
+                     WRITE(*,*) "SIZE(ckblk,1)", SIZE(ckblk,1)
+                     WRITE(*,*) "SIZE(ckblk,2)", SIZE(ckblk,2)
+                     WRITE(*,*) "DKCOS"
+                     DO i = 1, SIZE(ckblk,1)
+                        DO j = 1, SIZE(ckblk,2)
+                           WRITE(*,*) "ckblk(i,j)", i, j, ckblk(i,j)
+                        END DO 
+                     END DO
+
                   END IF
 
                   IF (nder >= 2) THEN
@@ -3069,8 +3334,9 @@ CONTAINS
 
       ! fbelle - inversion craze
       REAL(dp)                                           :: tracei(3)
+!      REAL(dp)                                           :: strace
 !      REAL(dp)                                           :: tracei(3), sintrace, strace
-!      REAL(dp)                                           :: relem, ielem
+      REAL(dp)                                           :: relem, ielem
 
       ! nao x nao
       TYPE(cp_fm_p_type), DIMENSION(:), POINTER          :: nao_dop_fm_set, nao_op_fm_set
@@ -3082,10 +3348,17 @@ CONTAINS
       TYPE(cp_cfm_p_type), POINTER                       :: cumulant_matrix
 
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: op_cos_dbcsr, op_sin_dbcsr
-!      INTEGER                                            :: icol, irow, ncol_local, nrow_local
+      INTEGER                                            :: icol, irow
+      INTEGER                                            :: ncol_local, nrow_local
       REAL(KIND=dp), DIMENSION(:), POINTER               :: diag
 !      REAL (dp)                                          :: ctrace, sstrace, cdtrace, sdtrace
-      COMPLEX(dp)                                        :: ctrace(3), etr, et1
+      COMPLEX(dp)                                        :: ctrace(3)
+      COMPLEX(dp)                                        :: etr, et1
+      ! new nuclear
+      INTEGER                                            :: nelectron
+      REAL(dp)                                           :: qn
+      COMPLEX(dp), DIMENSION(3)                          :: d01, d11
+      REAL(dp), DIMENSION(3)                             :: newqq
 
       CPASSERT(ASSOCIATED(qs_env))
 
@@ -3132,7 +3405,8 @@ CONTAINS
                       para_env=para_env, &
                       local_particles=local_particles, &
                       matrix_s=matrix_s, &
-                      mos=mos)
+                      mos=mos, &
+                      nelectron_total = nelectron)
 
       IF(para_env%mepos==0) THEN
          WRITE(*,*) "qs_moment_berry_phase3 - BEGINNING"
@@ -3327,6 +3601,46 @@ CONTAINS
             ci = AIMAG(LOG(zi))/twopi
             qq = AIMAG(LOG(zi))
             rmom(2:4, 2) = MATMUL(cell%hmat, ci)
+
+
+            !----------------------------
+
+               d01(:) = CMPLX(0._dp, 0._dp, dp)
+               d11(:) = CMPLX(0._dp, 0._dp, dp)
+               zi = 0._dp
+               DO ia = 1, SIZE(particle_set)
+                  atomic_kind => particle_set(ia)%atomic_kind
+                  CALL get_atomic_kind(atomic_kind, kind_number=ikind)
+                  CALL get_qs_kind(qs_kind_set(ikind), core_charge=charge, ghost=ghost, floating=floating)
+
+                  ! Normalize charge
+                  qn = charge/rmom(1,2)
+                  IF (.NOT. ghost .AND. .NOT. floating) THEN
+                     ria = particle_set(ia)%r
+                     ria = pbc(ria, cell)
+                     DO i = 1, 3
+                        kvec(:) = twopi*cell%h_inv(i, :)
+                        dd = SUM(kvec(:)*ria(:))
+                        d01(i) = d01(i) + qn*CMPLX(COS(dd), -1.0_dp*SIN(dd), KIND=dp)
+                        d11(i) = d11(i) + qn*ria(i)*CMPLX(COS(dd), -1.0_dp*SIN(dd), KIND=dp)
+                     END DO
+                  ENDIF
+               END DO
+               zi(:) = d11(:)/d01(:)
+               newqq = REAL(zi, dp)*nelectron
+               newrmom(2:4, 2) = newqq 
+
+
+
+            !----------------------------
+
+
+
+
+
+
+
+
          CASE (2)
             ! Quadrupole
 !            CPABORT("Berry phase moments bigger than 1 not implemented")
@@ -3500,15 +3814,15 @@ CONTAINS
 !                WRITE(*,*) "nao_dop_fm_set - SIN"
 !                CALL cp_fm_write_formatted(nao_dop_fm_set(2)%matrix, 6)
 
-
                 !------------------------------------------------------------------------------
                 !------------------------------------------------------------------------------
                 
                 et1 = CMPLX(0.0_dp, 0.0_dp, dp)
                 DO ispin = 1, dft_control%nspins
                 
-                   CALL cp_cfm_get_info(eigrmat(ispin)%matrix, ncol_local=tmp_dim)
-                   DO idim = 1, tmp_dim
+                   CALL cp_cfm_get_info(deriveigrmat%matrix, ncol_local = ncol_local, &
+                                        nrow_local = nrow_local)
+                   DO idim = 1, ncol_local
                 
                       ! Make complex matrix of d01
                       eeigrmat%matrix%local_data(:, idim) = &
@@ -3522,7 +3836,39 @@ CONTAINS
                    
                    ! Invert d01
                    CALL cp_cfm_lu_invert(eeigrmat%matrix)
-                
+                   ! element by element inversion
+                   ! nao x nao
+                   DO icol = 1, ncol_local
+                      DO irow = 1, nrow_local
+                           relem = nao_op_fm_set(1)%matrix%local_data(irow, icol)
+                           ielem = -1.0_dp*nao_op_fm_set(2)%matrix%local_data(irow, icol)
+!                           ! set cfm matrix element to its reciprocal
+!                           IF(relem == 0.0_dp .AND. ielem == 0.0_dp) THEN
+!                              inveigrmat%matrix%local_data(irow, icol) = CMPLX(0.0_dp, 0.0_dp, dp)
+!                           ELSE
+!                              inveigrmat%matrix%local_data(irow, icol) = &
+!                                 CMPLX(relem/(relem**2+ielem**2), -1.0_dp*ielem/(relem**2+ielem**2), dp)
+!                           END IF
+                      END DO
+                   END DO
+
+                   CALL cp_cfm_to_fm(msource = deigrmat%matrix, &
+                                     mtargetr = nao_op_fm_set(1)%matrix, &
+                                     mtargeti = nao_op_fm_set(2)%matrix)
+!                   WRITE(*,*) "deriveigrmat - COS deriv"
+!                   CALL cp_fm_write_formatted(nao_op_fm_set(1)%matrix, 6)
+!                   WRITE(*,*) "deriveigrmat - SIN deriv"
+!                   CALL cp_fm_write_formatted(nao_op_fm_set(2)%matrix, 6)
+!
+!                   CALL cp_cfm_to_fm(msource = eeigrmat%matrix, &
+!                                     mtargetr = nao_op_fm_set(1)%matrix, &
+!                                     mtargeti = nao_op_fm_set(2)%matrix)
+!                   WRITE(*,*) "nao_op_fm_set - COS inv"
+!                   CALL cp_fm_write_formatted(nao_op_fm_set(1)%matrix, 6)
+!                   WRITE(*,*) "nao_op_fm_set - SIN inv"
+!                   CALL cp_fm_write_formatted(nao_op_fm_set(2)%matrix, 6)
+
+                   !---------------------------------------------
                    ! tr(d01^-1 * d11)
                    CALL cp_cfm_trace(matrix_a = eeigrmat%matrix, &
                                      matrix_b = deigrmat%matrix, &
@@ -3534,8 +3880,52 @@ CONTAINS
                    IF (dft_control%nspins == 1) THEN
                       etr = etr + et1
                    ENDIF
+                   !---------------------------------------------
+
+                   !---------------------------------------------
+!                   CALL cp_cfm_get_info(cumulant_matrix%matrix, ncol_local = ncol_local)
+!
+!                   ! matrix_c = alpha * op1( matrix_a ) * op2( matrix_b ) + beta*matrix_c.
+!                   CALL cp_cfm_gemm("N","N", ncol_local, ncol_local, ncol_local, &
+!                                    z_one, eeigrmat%matrix, deigrmat%matrix, &
+!                                    z_zero, cumulant_matrix%matrix)
+!
+!!                   CALL  cp_cfm_schur_product(matrix_a = eeigrmat%matrix,&
+!!                                              matrix_b = deigrmat%matrix,&
+!!                                              matrix_c = cumulant_matrix%matrix)
+!
+!                   ! cfm -> fm
+!                   ! nmo x nmo 
+!                   CALL cp_cfm_to_fm(msource = cumulant_matrix%matrix, &
+!                                     mtargetr = nao_op_fm_set(1)%matrix, &
+!                                     mtargeti = nao_op_fm_set(2)%matrix)
+!   
+!                   ! fm -> dbcsr
+!                   CALL copy_fm_to_dbcsr(nao_op_fm_set(1)%matrix, cosmat)
+!                   CALL copy_fm_to_dbcsr(nao_op_fm_set(2)%matrix, sinmat)
+!
+!                   ! Rotation onto MOs
+!                   CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
+!
+!                   ! fm -> dbcsr
+!                   CALL copy_fm_to_dbcsr(op_fm_set(1, 1)%matrix, cosmat)
+!                   CALL copy_fm_to_dbcsr(op_fm_set(2, 1)%matrix, sinmat)
+!   
+!                   ! calculate trace
+!                   CALL dbcsr_trace(cosmat, relem)
+!                   CALL dbcsr_trace(sinmat, ielem)
+!                   et1 =  CMPLX(relem, ielem, dp)
+!   
+!                   etr = z_one*et1
+!               
+!                   ! Closed shell
+!                   IF (dft_control%nspins == 1) THEN
+!                      etr = etr + et1
+!                   ENDIF
+                  !---------------------------------------------
+
                 END DO
-                ctrace(i) = etr !/ CMPLX(0.0_dp, kvec(i), dp)
+                ctrace(i) = etr / CMPLX(0.0_dp, kvec(i), dp)
             
                 !------------------------------------------------------------------------------
                 !------------------------------------------------------------------------------
@@ -3565,20 +3955,20 @@ CONTAINS
 !                                  msourcei = nao_dop_fm_set(2)%matrix, &
 !                                  mtarget = deriveigrmat%matrix)
 !
-!!                CALL cp_cfm_to_fm(msource = deriveigrmat%matrix, &
-!!                                  mtargetr = nao_op_fm_set(1)%matrix, &
-!!                                  mtargeti = nao_op_fm_set(2)%matrix)
-!!                WRITE(*,*) "deriveigrmat - COS deriv"
-!!                CALL cp_fm_write_formatted(nao_op_fm_set(1)%matrix, 6)
-!!                WRITE(*,*) "deriveigrmat - SIN deriv"
-!!                CALL cp_fm_write_formatted(nao_op_fm_set(2)%matrix, 6)
-!!                CALL cp_cfm_to_fm(msource = inveigrmat%matrix, &
-!!                                  mtargetr = nao_op_fm_set(1)%matrix, &
-!!                                  mtargeti = nao_op_fm_set(2)%matrix)
-!!                WRITE(*,*) "nao_op_fm_set - COS inv"
-!!                CALL cp_fm_write_formatted(nao_op_fm_set(1)%matrix, 6)
-!!                WRITE(*,*) "nao_op_fm_set - SIN inv"
-!!                CALL cp_fm_write_formatted(nao_op_fm_set(2)%matrix, 6)
+!                CALL cp_cfm_to_fm(msource = deriveigrmat%matrix, &
+!                                  mtargetr = nao_op_fm_set(1)%matrix, &
+!                                  mtargeti = nao_op_fm_set(2)%matrix)
+!                WRITE(*,*) "deriveigrmat - COS deriv"
+!                CALL cp_fm_write_formatted(nao_op_fm_set(1)%matrix, 6)
+!                WRITE(*,*) "deriveigrmat - SIN deriv"
+!                CALL cp_fm_write_formatted(nao_op_fm_set(2)%matrix, 6)
+!                CALL cp_cfm_to_fm(msource = inveigrmat%matrix, &
+!                                  mtargetr = nao_op_fm_set(1)%matrix, &
+!                                  mtargeti = nao_op_fm_set(2)%matrix)
+!                WRITE(*,*) "nao_op_fm_set - COS inv"
+!                CALL cp_fm_write_formatted(nao_op_fm_set(1)%matrix, 6)
+!                WRITE(*,*) "nao_op_fm_set - SIN inv"
+!                CALL cp_fm_write_formatted(nao_op_fm_set(2)%matrix, 6)
 !
 !                ! Multiplying Hadamard 
 !                CALL cp_cfm_schur_product(inveigrmat%matrix, deriveigrmat%matrix, &
@@ -3606,17 +3996,23 @@ CONTAINS
 !                
 !!                strace = 0.0_dp
 !!                sintrace = 0.0_dp
-!                DO ispin = 1, dft_control%nspins
-!                   CALL dbcsr_trace(rho_ao(ispin)%matrix, sinmat, sintrace)
-!
-!                   IF(para_env%mepos==0) WRITE(*,*) "TRACE tr(rho_ao*d11/d01)_nao", sintrace
-!
-!                   CALL dbcsr_trace(sinmat, sintrace)
-!!                   CALL dbcsr_trace(cosmat, sintrace)
-!
-!                   WRITE(*,*) "TRACE tr(d11/d01)_nao", sintrace
-!                   strace = strace + sintrace
-!                END DO
+!!                DO ispin = 1, dft_control%nspins
+!!                   CALL dbcsr_trace(rho_ao(ispin)%matrix, sinmat, sintrace)
+!!
+!!                   IF(para_env%mepos==0) WRITE(*,*) "TRACE tr(rho_ao*d11/d01)_nao", sintrace
+!!
+!!                   CALL dbcsr_trace(sinmat, sintrace)
+!!!                   CALL dbcsr_trace(cosmat, sintrace)
+!!
+!!                   WRITE(*,*) "TRACE tr(d11/d01)_nao", sintrace
+!!                   strace = strace + sintrace
+!!
+!!                   ! Closed shell
+!!                   IF (dft_control%nspins == 1) THEN
+!!                     strace = strace + sintrace
+!!                   ENDIF
+!!
+!!                END DO
 !
 !!                WRITE(*,*) "AFTER HADAMARD - COS"
 !!                CALL dbcsr_print(cosmat)
@@ -3626,28 +4022,33 @@ CONTAINS
 !                ! project cosmat and dkcos
 !                ! nao x nao -> nmo x nmo
 !                ! spin
-!                !CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
+!                CALL op_orbbas(cosmat, sinmat, mos, op_fm_set, opvec)
 !
-!!                DO ispin = 1, dft_control%nspins 
-!!                   ! fm -> dbcsr
-!!                   ! nmo x nmo
-!!                   CALL copy_fm_to_dbcsr(op_fm_set(1, ispin)%matrix, op_cos_dbcsr(ispin)%matrix)
-!!                   CALL copy_fm_to_dbcsr(op_fm_set(2, ispin)%matrix, op_sin_dbcsr(ispin)%matrix)
-!!
-!!!                   WRITE(*,*) "op_sin_dbcsr"
-!!!                   CALL dbcsr_print(op_sin_dbcsr(ispin)%matrix)
-!!
-!!                   ! trace
-!!                   CALL dbcsr_trace(op_sin_dbcsr(ispin)%matrix, sintrace)
-!!                   WRITE(*,*) "TRACE tr(d11/d01)_nmo", sintrace
-!!                    
-!!                   strace = strace + sintrace
-!!
-!!                END DO
-!                tracei(i) = strace
+!                DO ispin = 1, dft_control%nspins 
+!                   ! fm -> dbcsr
+!                   ! nmo x nmo
+!                   CALL copy_fm_to_dbcsr(op_fm_set(1, ispin)%matrix, op_cos_dbcsr(ispin)%matrix)
+!                   CALL copy_fm_to_dbcsr(op_fm_set(2, ispin)%matrix, op_sin_dbcsr(ispin)%matrix)
+!
+!!                   WRITE(*,*) "op_sin_dbcsr"
+!!                   CALL dbcsr_print(op_sin_dbcsr(ispin)%matrix)
+!
+!                   ! trace
+!                   CALL dbcsr_trace(op_sin_dbcsr(ispin)%matrix, sintrace)
+!                   WRITE(*,*) "TRACE tr(d11/d01)_nmo", sintrace
+!                    
+!                   strace = strace + sintrace
+!
+!                   ! Closed shell
+!                   IF (dft_control%nspins == 1) THEN
+!                     strace = strace + sintrace
+!                   ENDIF
+!
+!                END DO
+!                ctrace(i) = strace / CMPLX(0.0_dp, kvec(i), dp)
             END DO ! i
 
-            ctrace = ctrace*xphase
+!            ctrace = ctrace*xphase
 
            IF(para_env%mepos==0)  WRITE(*,*) "ctrace(:)", ctrace(:)
 
@@ -3723,8 +4124,12 @@ CONTAINS
             rmom(2:4, 1) = MATMUL(cell%hmat, ci)/twopi
 
             tracei = REAL(ctrace,dp)
+!            tracei = AIMAG(ctrace)
 
-             ! shift new elec based on old nuclear
+           ! shift new elec based on old nuclear
+           IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 27)
+           IF(para_env%mepos==0) WRITE(*,*) "Berry nuclear + Greg elec"
+           IF(para_env%mepos==0) WRITE(*,*) "tracei", tracei
             DO i = 1, 3
                IF(para_env%mepos==0) WRITE(*,*) "START"
                IF(para_env%mepos==0) WRITE(*,*) "iteration", i
@@ -3736,8 +4141,6 @@ CONTAINS
                   tracei(i) = tracei(i)-twopi
                   IF(para_env%mepos==0) WRITE(*,*) "qq(i)+tracei(i)", qq(i)+tracei(i)
                END DO
-               IF(para_env%mepos==0) WRITE(*,*) "tracei(i) after first DO WHILE", tracei(i)
-               IF(para_env%mepos==0) WRITE(*,*) "criteria after first DO WHILE", qq(i)+tracei(i)
                DO WHILE (qq(i)+tracei(i) < -pi)
                   IF(para_env%mepos==0) WRITE(*,*) "Second Do While", qq(i)+tracei(i)
                   IF(para_env%mepos==0) WRITE(*,*) "tracei(i)", tracei(i)
@@ -3747,19 +4150,44 @@ CONTAINS
                IF(para_env%mepos==0) WRITE(*,*) "criteria  after second DO WHILE", qq(i)+tracei(i)
             END DO
             IF(para_env%mepos==0) WRITE(*,*) "tracei AFTER", tracei
+!            ! Shift electronic based on new nuclear
+!            IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 27)
+!            IF(para_env%mepos==0) WRITE(*,*) "Greg nuclear + elec"
+!            DO i = 1, 3
+!               IF(para_env%mepos==0) WRITE(*,*) "iteration", i
+!               IF(para_env%mepos==0) WRITE(*,*) "newqq(i) =", newqq(i)
+!               IF(para_env%mepos==0) WRITE(*,*) "newqq(i)+tracei2(i) =", newqq(i)+tracei(i)
+!               IF(para_env%mepos==0) WRITE(*,*) "START"
+!               DO WHILE  (newqq(i)+tracei(i) > pi)
+!                  tracei(i) = tracei(i)-twopi
+!                  IF(para_env%mepos==0) WRITE(*,*) "newqq(i)+tracei(i)", newqq(i)+tracei(i)
+!               END DO
+!               IF(para_env%mepos==0) WRITE(*,*) "tracei(i) after -2pi", newqq(i)+tracei(i)
+!               DO WHILE (newqq(i)+tracei(i) < -pi)
+!                  tracei(i) = tracei(i)+twopi
+!                  IF(para_env%mepos==0) WRITE(*,*) "newqq(i)+tracei(i)", newqq(i)+tracei(i)
+!               END DO
+!               IF(para_env%mepos==0) WRITE(*,*) "criteria  after +2pi", newqq(i)+tracei(i)
+!            END DO
+!            IF(para_env%mepos==0) WRITE(*,*) "tracei AFTER", tracei
+            IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 27)
 
             ! Derivation wrt t pulls down additional k (2pi/L)
-            newrmom(2:4, 1) = MATMUL(cell%hmat, tracei)/twopi
+!            newrmom(2:4, 1) = MATMUL(cell%hmat, tracei)/twopi
             ! Derivation wrt k
             !newrmom(2:4, 1) = 2.0_dp*tracei
-            !newrmom(2:4, 1) = tracei
+            newrmom(2:4, 1) = tracei
             
             IF(para_env%mepos==0) THEN 
                WRITE(*,*) ""
                WRITE(*,*) "nuclear", rmom(2:4, 2)
                WRITE(*,*) "rmom", rmom(2:4, 1)
+               WRITE(*,*) "new nuclear", newrmom(2:4, 2)
                WRITE(*,*) "newrmom", newrmom(2:4, 1)
                WRITE(*,*) ""
+               WRITE(*,*) "total", rmom(2:4, 1)+rmom(2:4, 2)
+               WRITE(*,*) "newtotal", -1.0_dp*(newrmom(2:4, 1)+newrmom(2:4, 2))
+
                WRITE(*,*) "DIVIDE: old / new"
 
                IF (newrmom(2,1) .NE. 0) THEN
@@ -3872,6 +4300,7 @@ CONTAINS
       DEALLOCATE (tmp_op_fm_set)
       DEALLOCATE (opvec)
       DEALLOCATE (eigrmat)
+      DEALLOCATE (eeigrmat)
       DEALLOCATE (deigrmat)
       DEALLOCATE (inveigrmat)
       DEALLOCATE (deriveigrmat)
@@ -3887,7 +4316,6 @@ CONTAINS
 
    END SUBROUTINE qs_moment_berry_phase3
 
-
 ! **************************************************************************************************
 !> \brief ...
 !> \param qs_env ...
@@ -3895,9 +4323,9 @@ CONTAINS
 !> \param nmoments ...
 !> \param reference ...
 !> \param ref_point ...
-!> \param unit_number ...
+!> \param unit_number ... 
 ! **************************************************************************************************
-!   SUBROUTINE qs_moment_berry_phase_debug(qs_env, magnetic, nmoments, reference, ref_point, unit_number)
+!   SUBROUTINE qs_moment_berry_num(qs_env, magnetic, nmoments, reference, ref_point, unit_number)
 !
 !      TYPE(qs_environment_type), POINTER                 :: qs_env
 !      LOGICAL, INTENT(IN)                                :: magnetic
@@ -3905,354 +4333,15 @@ CONTAINS
 !      REAL(dp), DIMENSION(:), POINTER                    :: ref_point
 !      INTEGER, INTENT(IN)                                :: unit_number
 !
-!      CHARACTER(LEN=*), PARAMETER :: routineN = 'qs_moment_berry_phase_debug', &
+!      CHARACTER(LEN=*), PARAMETER :: routineN = 'qs_moment_berry_num', &
 !         routineP = moduleN//':'//routineN
 !
-!      CHARACTER(LEN=8), ALLOCATABLE, DIMENSION(:)        :: rlab
-!      CHARACTER(LEN=default_string_length)               :: description
-!      COMPLEX(dp)                                        :: xphase(3), zdet, zdeta, zi(3), &
-!                                                            zij(3, 3), zijk(3, 3, 3), &
-!                                                            zijkl(3, 3, 3, 3), zphase(3), zz
-!      INTEGER                                            :: handle, i, ia, idim, ikind, ispin, ix, &
-!                                                            iy, iz, j, k, l, nao, nm, nmo, nmom, &
-!                                                            nmotot, tmp_dim
-!      LOGICAL                                            :: floating, ghost, uniform
-!      REAL(dp)                                           :: charge, ci(3), cij(3, 3), dd, occ, trace
-!      REAL(dp), ALLOCATABLE, DIMENSION(:)                :: mmom
-!      REAL(dp), ALLOCATABLE, DIMENSION(:, :)             :: rmom, newrmom
-!      REAL(dp), DIMENSION(3)                             :: kvec, qq, rcc, ria
-!      TYPE(atomic_kind_type), POINTER                    :: atomic_kind
-!      TYPE(cell_type), POINTER                           :: cell
-!      TYPE(cp_cfm_p_type), DIMENSION(:), POINTER         :: eigrmat
-!      TYPE(cp_fm_p_type), DIMENSION(:), POINTER          :: mos_new, opvec
-!      TYPE(cp_fm_p_type), DIMENSION(:, :), POINTER       :: op_fm_set
-!      TYPE(cp_fm_struct_type), POINTER                   :: tmp_fm_struct
-!      TYPE(cp_fm_type), POINTER                          :: mo_coeff
-!      TYPE(cp_para_env_type), POINTER                    :: para_env
-!      TYPE(cp_result_type), POINTER                      :: results
-!      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s, rho_ao
-!      TYPE(dbcsr_type), POINTER                          :: cosmat, sinmat
-!      TYPE(dft_control_type), POINTER                    :: dft_control
-!      TYPE(distribution_1d_type), POINTER                :: local_particles
-!      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
-!      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
-!      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
-!      TYPE(qs_rho_type), POINTER                         :: rho
-!      TYPE(rt_prop_type), POINTER                        :: rtp
-!
-!      ! fbelle
-!      TYPE(cp_fm_p_type), DIMENSION(:, :), POINTER       :: dop_fm_set, tmp_op_fm_set
-!      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: dkcos, dksin
-!      TYPE(cp_cfm_p_type), DIMENSION(:), POINTER         :: deigrmat, cumulant_matrix
-!!      REAL(dp)                                           :: strace, tracei(3)
-!      REAL(dp)                                           :: tracei(3)
-!!      REAL(dp)                                           :: sintrace, strace, tracei(3)
-!!      INTEGER                                            :: irow, icol, ncol_local, nrow_local
-!      COMPLEX(dp)                                        :: ctrace(3), et1 !, det1
-!      INTEGER                                            :: nelectron
-!      COMPLEX(dp)                                        :: etr
-!      REAL(dp), DIMENSION(3)                             :: newqq
-!      COMPLEX(dp), DIMENSION(3)                          :: d01, d11
-!      COMPLEX(dp)                                        :: ii
-!      REAL(dp)                                           :: norm
-!
-!      CPASSERT(ASSOCIATED(qs_env))
-!
-!      ! Caculate Berry phase periodic dipole via
-!      ! a) oldfashioned
-!      ! b) Gregs numerical f.f
 !
 !
-!   END SUBROUTINE qs_moment_berry_phase_debug
-  
+!
+!
+!   END SUBROUTINE qs_moment_berry_num
 
-
-! **************************************************************************************************
-!> \brief ...
-!> \param qs_env ...
-!> \param magnetic ...
-!> \param nmoments ...
-!> \param reference ...
-!> \param ref_point ...
-!> \param unit_number ...
-! **************************************************************************************************
-   SUBROUTINE qs_moment_berry_phase_numerical(qs_env, magnetic, nmoments, reference, ref_point, unit_number)
-
-      TYPE(qs_environment_type), POINTER                 :: qs_env
-      LOGICAL, INTENT(IN)                                :: magnetic
-      INTEGER, INTENT(IN)                                :: nmoments, reference
-      REAL(dp), DIMENSION(:), POINTER                    :: ref_point
-      INTEGER, INTENT(IN)                                :: unit_number
-
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'qs_moment_berry_phase_numerical', &
-         routineP = moduleN//':'//routineN
-
-      CHARACTER(LEN=8), ALLOCATABLE, DIMENSION(:)        :: rlab
-      CHARACTER(LEN=default_string_length)               :: description
-      COMPLEX(dp)                                        :: zi(3), &
-                                                            zij(3, 3), zijk(3, 3, 3), &
-                                                            zijkl(3, 3, 3, 3), zphase(3)
-      INTEGER                                            :: handle, i, ia, ikind, ispin, ix, &
-                                                            iy, iz, l, nm, nmom, &
-                                                            nmotot
-      LOGICAL                                            :: floating, ghost, uniform
-      REAL(dp)                                           :: charge, ci(3), dd, occ
-      REAL(dp), ALLOCATABLE, DIMENSION(:)                :: mmom
-      REAL(dp), ALLOCATABLE, DIMENSION(:, :)             :: rmom
-      REAL(dp), DIMENSION(3)                             :: kvec, rcc, ria
-      TYPE(atomic_kind_type), POINTER                    :: atomic_kind
-      TYPE(cell_type), POINTER                           :: cell
-      TYPE(cp_para_env_type), POINTER                    :: para_env
-      TYPE(cp_result_type), POINTER                      :: results
-      TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(distribution_1d_type), POINTER                :: local_particles
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s, rho_ao
-      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
-      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
-      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
-      TYPE(qs_rho_type), POINTER                         :: rho
-
-      ! fbelle
-      INTEGER                                            :: nelectron
-      COMPLEX(dp), DIMENSION(3)                          :: d01, d11
-      COMPLEX(dp)                                        :: ii
-      REAL(dp)                                           :: norm, qn
-      REAL(dp), DIMENSION(3)                             :: cell_length
-
-      CPASSERT(ASSOCIATED(qs_env))
-
-      IF (ASSOCIATED(qs_env%ls_scf_env)) THEN
-         IF (unit_number > 0) WRITE (unit_number, *) "Periodic moment calculation not implemented in linear scaling code"
-         RETURN
-      ENDIF
-
-      CALL timeset(routineN, handle)
-
-      ! restrict maximum moment available
-      nmom = MIN(nmoments, 2)
-
-      nm = (6+11*nmom+6*nmom**2+nmom**3)/6-1
-      ! rmom(:,1)=electronic
-      ! rmom(:,2)=nuclear
-      ! rmom(:,3)=total
-      ALLOCATE (rmom(nm+1, 3))
-      ALLOCATE (rlab(nm+1))
-      rmom = 0.0_dp
-      rlab = ""
-      IF (magnetic) THEN
-         nm = 3
-         ALLOCATE (mmom(nm))
-         mmom = 0._dp
-      END IF
-
-      NULLIFY (dft_control, rho, cell, particle_set, results, para_env, &
-               local_particles, matrix_s, mos, rho_ao)
-
-      CALL get_qs_env(qs_env, &
-                      dft_control=dft_control, &
-                      rho=rho, &
-                      cell=cell, &
-                      results=results, &
-                      particle_set=particle_set, &
-                      qs_kind_set=qs_kind_set, &
-                      para_env=para_env, &
-                      local_particles=local_particles, &
-                      matrix_s=matrix_s, &
-                      mos=mos,&
-                      nelectron_total=nelectron)
-
-      CALL qs_rho_get(rho, rho_ao=rho_ao)
-
-      IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 27)
-      IF(para_env%mepos==0) WRITE(*,*) "BERRY PHASE NUMERICAL" 
-      IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 27)
-
-      nmotot = 0
-
-      ! occupation
-      DO ispin = 1, dft_control%nspins
-         CALL get_mo_set(mo_set=mos(ispin)%mo_set, maxocc=occ, uniform_occupation=uniform)
-         IF (.NOT. uniform) THEN
-            CPABORT("Berry phase moments for non uniform MOs' occupation numbers not implemented")
-         END IF
-      END DO
-
-      ! reference point
-      CALL get_reference_point(rcc, qs_env=qs_env, reference=reference, ref_point=ref_point)
-      rcc = pbc(rcc, cell)
-
-      ! label
-      DO l = 1, nm
-         ix = indco(1, l+1)
-         iy = indco(2, l+1)
-         iz = indco(3, l+1)
-         CALL set_label(rlab(l+1), ix, iy, iz)
-      END DO
-
-      ! Get cell length
-      CALL get_cell_param(cell, cell_length = cell_length)
-      IF(para_env%mepos==0) WRITE(*,*) "cell_length", cell_length 
-
-      ! nuclear contribution
-
-      ! charge
-      DO ia = 1, SIZE(particle_set)
-         atomic_kind => particle_set(ia)%atomic_kind
-         CALL get_atomic_kind(atomic_kind, kind_number=ikind)
-         CALL get_qs_kind(qs_kind_set(ikind), core_charge=charge, ghost=ghost, floating=floating)
-         IF (.NOT. ghost .AND. .NOT. floating) THEN
-            rmom(1, 2) = rmom(1, 2)-charge
-         ENDIF
-      END DO
-
-      ria = twopi*MATMUL(cell%h_inv, rcc)
-      zphase = CMPLX(COS(ria), SIN(ria), dp)**rmom(1, 2)
-
-      zi = 0._dp
-      zij = 0._dp
-      zijk = 0._dp
-      zijkl = 0._dp
-
-      ! z_mone
-      ii = CMPLX(0.0_dp, 1.0_dp, KIND=dp)
-      norm = SQRT(rmom(1, 2)**2)
-      IF(para_env%mepos==0) WRITE(*,*) "NORM", norm 
-
-      DO l = 1, nmom
-         SELECT CASE (l)
-         CASE (1)
-            ! Dipole
-            IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 27)
-            IF(para_env%mepos==0) WRITE(*,*) "Nuclear New" 
-            IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 27)
-            d01(:) = CMPLX(0._dp, 0._dp, dp)
-            d11(:) = CMPLX(0._dp, 0._dp, dp)
-            zi = 0._dp
-            ! Loop over particles
-            DO ia = 1, SIZE(particle_set)
-               atomic_kind => particle_set(ia)%atomic_kind
-               CALL get_atomic_kind(atomic_kind, kind_number=ikind)
-               CALL get_qs_kind(qs_kind_set(ikind), core_charge=charge, ghost=ghost, floating=floating)
-
-               ! Scale charge
-               qn = charge / norm
-
-               IF(para_env%mepos==0) WRITE(*,*) "ATOM", atomic_kind%name
-               IF (.NOT. ghost .AND. .NOT. floating) THEN
-                  
-                  ! ria in BOHR
-                  ria = particle_set(ia)%r
-                  ! ria back in Angstrom
-                  !ria = particle_set(ia)%r/1.88972613288564283333
-                  ria = pbc(ria, cell)
-                  IF(para_env%mepos==0) WRITE(*,*) "ria", ria
-
-                  ! Loop over k-vector components
-                  DO i = 1, 3
-                     IF(para_env%mepos==0) WRITE(*,*) "DIRECTION", i
-                     kvec(:) = twopi*cell%h_inv(i, :)
-                     IF(para_env%mepos==0) WRITE(*,*) "kvec", kvec(:)
-                     dd = SUM(kvec(:)*ria(:))
-                     IF(para_env%mepos==0) WRITE(*,*) "d01 (each)", d01(i)
-                     IF(para_env%mepos==0) WRITE(*,*) "d11 (each)", d11(i)
-
-                     ! Fill dnl-functions
-                     d01(i) = d01(i) + qn*CMPLX(COS(dd), -1.0_dp*SIN(dd), KIND=dp)
-                     d11(i) = d11(i) + qn*ria(i)*CMPLX(COS(dd), -1.0_dp*SIN(dd), KIND=dp)
-                     IF(para_env%mepos==0) WRITE(*,*) "d01", d01(i)
-                     IF(para_env%mepos==0) WRITE(*,*) "d11", d11(i)
-                  END DO
-               ENDIF
-            END DO
-
-            IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 10)
-            DO i = 1, 3
-              
-               ! OUTPUT f.f:  AA/charge
-               ! OUTPUT here: bohr/charge
-               ! => multiply by: nelectron*bohr 
-               ! 
-              
-               kvec(:) = twopi*cell%h_inv(i, :) 
-               zi(i) = d11(i)/d01(i)
-               IF(para_env%mepos==0) WRITE(*,*) "zi", zi(i)
-               zi = zi*zphase
-               
-               ci(i) = REAL(zi(i), KIND=dp)
-               !zi(:) = d11(:)/d01(:)*ii/0.27707653849224967
-               !zi(:) = zi(:)*(ii/0.22166123079379965)*nelectron
-               !ci = AIMAG(zi)/twopi
-               IF(para_env%mepos==0) WRITE(*,*) "ci", ci(i)
-               !newqq = AIMAG(zi)
-            END DO
-            !rmom(2:4, 2) = MATMUL(cell%hmat, ci)
-            rmom(2:4, 2) = ci
-
-            IF(para_env%mepos==0) WRITE(*,*) "Nuclear", rmom(2:4, 2)
-            IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 27)
-            ! NEW NEW NEW NEW 
-
-         CASE (2)
-            ! Quadrupole
-            CPABORT("Berry phase moments bigger than 1 not implemented")
-         CASE (3)
-            ! Octapole
-            CPABORT("Berry phase moments bigger than 2 not implemented")
-         CASE (4)
-            ! Hexadecapole
-            CPABORT("Berry phase moments bigger than 3 not implemented")
-         CASE DEFAULT
-            CPABORT("Berry phase moments bigger than 4 not implemented")
-         END SELECT
-      END DO
-
-      DO l = 1, nmom
-         SELECT CASE (l)
-         CASE (1)
-
-            IF(para_env%mepos==0) THEN 
-               WRITE(*,*) ""
-               WRITE(*,*) "nuclear", rmom(2:4, 2)
-               WRITE(*,*) ""
-               WRITE(*,*) "Dipole contribution NUM [Debye]"
-               WRITE(*,*) rmom(2:4, 2)*debye
-            END IF
-
-         CASE (2)
-            ! Quadrupole
-            CPABORT("Berry phase moments bigger than 1 not implemented")
-         CASE (3)
-            ! Octapole
-            CPABORT("Berry phase moments bigger than 2 not implemented")
-         CASE (4)
-            ! Hexadecapole
-            CPABORT("Berry phase moments bigger than 3 not implemented")
-         CASE DEFAULT
-            CPABORT("Berry phase moments bigger than 4 not implemented")
-         END SELECT
-      END DO
-!------------------------------------------------------------------------------
-      rmom(:, 3) = rmom(:, 1)+rmom(:, 2)
-
-      description = "[DIPOLE]"
-      CALL cp_results_erase(results=results, description=description)
-      CALL put_results(results=results, description=description, &
-                       values=rmom(2:4, 3))
-      IF (magnetic) THEN
-         CALL print_moments(unit_number, nmom, rmom, rlab, rcc, cell, periodic=.TRUE., mmom=mmom)
-      ELSE
-         CALL print_moments(unit_number, nmom, rmom, rlab, rcc, cell, periodic=.TRUE.)
-      END IF
-
-      DEALLOCATE (rmom)
-      DEALLOCATE (rlab)
-      IF (magnetic) THEN
-         DEALLOCATE (mmom)
-      END IF
-
-      CALL timestop(handle)
-
-   END SUBROUTINE qs_moment_berry_phase_numerical
 
 ! **************************************************************************************************
 !> \brief ...
@@ -4285,7 +4374,7 @@ CONTAINS
       LOGICAL                                            :: floating, ghost, uniform
       REAL(dp)                                           :: charge, ci(3), cij(3, 3), dd, occ, trace
       REAL(dp), ALLOCATABLE, DIMENSION(:)                :: mmom
-      REAL(dp), ALLOCATABLE, DIMENSION(:, :)             :: rmom, newrmom
+      REAL(dp), ALLOCATABLE, DIMENSION(:, :)             :: rmom, newrmom, newrmom2
       REAL(dp), DIMENSION(3)                             :: kvec, qq, rcc, ria
       TYPE(atomic_kind_type), POINTER                    :: atomic_kind
       TYPE(cell_type), POINTER                           :: cell
@@ -4310,21 +4399,21 @@ CONTAINS
       TYPE(cp_fm_p_type), DIMENSION(:, :), POINTER       :: dop_fm_set, tmp_op_fm_set
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: dkcos, dksin
       TYPE(cp_cfm_p_type), DIMENSION(:), POINTER         :: deigrmat, cumulant_matrix
-      REAL(dp)                                           :: tracei(3)
+      REAL(dp)                                           :: tracei(3), tracei2(3)
 !      REAL(dp)                                           :: strace
 !      REAL(dp)                                           :: relem, ielem
 !      REAL(dp)                                           :: tracei(3)
 !      REAL(dp)                                           :: sintrace 
 !      INTEGER                                            :: irow, icol, ncol_local, nrow_local
+!      INTEGER                                            :: ncol_local!, nrow_local
 !      COMPLEX(dp)                                        :: det1
-      COMPLEX(dp)                                        :: ctrace(3), et1
+      COMPLEX(dp)                                        :: ctrace(3), ctrace2(3), et1
       INTEGER                                            :: nelectron
       COMPLEX(dp)                                        :: etr
       REAL(dp), DIMENSION(3)                             :: newqq
       COMPLEX(dp), DIMENSION(3)                          :: d01, d11
       COMPLEX(dp)                                        :: ii
       REAL(dp)                                           :: norm, qn
-      REAL(dp)                                           :: crit(3)
 
       CPASSERT(ASSOCIATED(qs_env))
 
@@ -4347,6 +4436,8 @@ CONTAINS
       rmom = 0.0_dp
       ALLOCATE (newrmom(nm+1, 3))
       newrmom = 0.0_dp
+      ALLOCATE (newrmom2(nm+1, 3))
+      newrmom2 = 0.0_dp
       rlab = ""
       IF (magnetic) THEN
          nm = 3
@@ -4466,6 +4557,7 @@ CONTAINS
          IF (.NOT. ghost .AND. .NOT. floating) THEN
             rmom(1, 2) = rmom(1, 2)-charge
             newrmom(1, 2) = newrmom(1, 2)-charge
+            newrmom2(1, 2) = newrmom2(1, 2)-charge
          ENDIF
       END DO
 
@@ -4524,6 +4616,72 @@ CONTAINS
             IF(para_env%mepos==0) WRITE(*,*) "Nuclear old", rmom(2:4, 2)
             ! OLD OLD OLD OLD OLD OLD OLD OLD OLD
 
+!            ! NEW NEW NEW NEW 
+!            IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 27)
+!            IF(para_env%mepos==0) WRITE(*,*) "Nuclear New" 
+!            IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 27)
+!            d01(:) = CMPLX(0._dp, 0._dp, dp)
+!            d11(:) = CMPLX(0._dp, 0._dp, dp)
+!            zi = 0._dp
+!            DO ia = 1, SIZE(particle_set)
+!               atomic_kind => particle_set(ia)%atomic_kind
+!               CALL get_atomic_kind(atomic_kind, kind_number=ikind)
+!               CALL get_qs_kind(qs_kind_set(ikind), core_charge=charge, ghost=ghost, floating=floating)
+!
+!               qn = charge/norm
+!!               IF(para_env%mepos==0) WRITE(*,*) "qn", qn
+!!               IF(para_env%mepos==0) WRITE(*,*) "ATOM", atomic_kind%name
+!               IF (.NOT. ghost .AND. .NOT. floating) THEN
+!                  ria = particle_set(ia)%r
+!                  ria = pbc(ria, cell)
+!                  IF(para_env%mepos==0) WRITE(*,*) "ria", ria
+!
+!                  DO i = 1, 3
+!                     IF(para_env%mepos==0) WRITE(*,*) "DIRECTION", i
+!                     kvec(:) = twopi*cell%h_inv(i, :)
+!                     IF(para_env%mepos==0) WRITE(*,*) "kvec", kvec(:)
+!                     dd = SUM(kvec(:)*ria(:))
+!!                     IF(para_env%mepos==0) WRITE(*,*) "dd", dd
+!!                     IF(para_env%mepos==0) WRITE(*,*) "d01 (each)", d01(i)
+!!                     IF(para_env%mepos==0) WRITE(*,*) "d11 (each)", d11(i)
+!
+!                     ! ik-derivation
+!!                     d01(i) = d01(i) + qn*CMPLX(COS(dd), -1.0_dp*SIN(dd), KIND=dp)
+!!                     d11(i) = d11(i) + qn*ria(i)*CMPLX(COS(dd), -1.0_dp*SIN(dd), KIND=dp)
+!                     ! t-derivation
+!                     d01(i) = d01(i) + qn*CMPLX(COS(dd), -1.0_dp*SIN(dd), KIND=dp)
+!                     d11(i) = d11(i) + qn*CMPLX(0.0_dp, -1.0_dp*dd, dp)*&
+!                                       CMPLX(COS(dd), -1.0_dp*SIN(dd), KIND=dp)
+!                     IF(para_env%mepos==0) WRITE(*,*) "d01", d01(i)
+!                     IF(para_env%mepos==0) WRITE(*,*) "d11", d11(i)
+!                  END DO
+!               ENDIF
+!            END DO
+!
+!            IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 10)
+!            zi(:) = d11(:)/d01(:)
+!            IF(para_env%mepos==0) WRITE(*,*) "zi", zi
+!
+!            ! t-deriv
+!            DO i = 1, 3
+!               kvec(:) = twopi*cell%h_inv(i, :)
+!               zi(:) = d11(:)/d01(:) / CMPLX(0.0_dp, -1.0_dp*kvec(i), dp)
+!            END DO
+!            ci = REAL(zi, KIND=dp)*nelectron
+!            newqq = REAL(zi, dp)*nelectron
+!
+!            ! ik-deriv
+!!            ci = REAL(zi, KIND=dp)*nelectron
+!!            newqq = REAL(zi, dp)*nelectron
+!            IF(para_env%mepos==0) WRITE(*,*) "ci", ci
+!            IF(para_env%mepos==0) WRITE(*,*) "newqq", newqq
+!            
+!!            newrmom(2:4, 2) = newqq
+!            newrmom(2:4, 2) = ci
+!            IF(para_env%mepos==0) WRITE(*,*) "Nuclear new", newrmom(2:4, 2)
+!            IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 27)
+!            ! NEW NEW NEW NEW 
+
             ! NEW NEW NEW NEW 
             IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 27)
             IF(para_env%mepos==0) WRITE(*,*) "Nuclear New" 
@@ -4537,30 +4695,32 @@ CONTAINS
                CALL get_qs_kind(qs_kind_set(ikind), core_charge=charge, ghost=ghost, floating=floating)
 
                qn = charge/norm
+!               IF(para_env%mepos==0) WRITE(*,*) "qn", qn
 !               IF(para_env%mepos==0) WRITE(*,*) "ATOM", atomic_kind%name
                IF (.NOT. ghost .AND. .NOT. floating) THEN
                   ria = particle_set(ia)%r
                   ria = pbc(ria, cell)
-!                  IF(para_env%mepos==0) WRITE(*,*) "ria", ria
+                  ria = rcc - ria 
+                  IF(para_env%mepos==0) WRITE(*,*) "ria", ria
 
                   DO i = 1, 3
-!                     IF(para_env%mepos==0) WRITE(*,*) "DIRECTION", i
+                     IF(para_env%mepos==0) WRITE(*,*) "DIRECTION", i
                      kvec(:) = twopi*cell%h_inv(i, :)
-!                     IF(para_env%mepos==0) WRITE(*,*) "kvec", kvec(:)
+                     IF(para_env%mepos==0) WRITE(*,*) "kvec", kvec(:)
                      dd = SUM(kvec(:)*ria(:))
+!                     IF(para_env%mepos==0) WRITE(*,*) "dd", dd
 !                     IF(para_env%mepos==0) WRITE(*,*) "d01 (each)", d01(i)
 !                     IF(para_env%mepos==0) WRITE(*,*) "d11 (each)", d11(i)
 
                      ! ik-derivation
-                     d01(i) = d01(i) + qn*CMPLX(COS(dd), -1.0_dp*SIN(dd), KIND=dp)
-                     d11(i) = d11(i) + qn*ria(i)*CMPLX(COS(dd), -1.0_dp*SIN(dd), KIND=dp)
-                     ! t-derivation
 !                     d01(i) = d01(i) + qn*CMPLX(COS(dd), -1.0_dp*SIN(dd), KIND=dp)
-!                     d11(i) = d11(i) + qn*CMPLX(0.0_dp, -1.0_dp*dd, dp)*&
-!                                       CMPLX(COS(dd), -1.0_dp*SIN(dd), KIND=dp)/&
-!                                       (CMPLX(0.0_dp, kvec(i), dp))
-!                     IF(para_env%mepos==0) WRITE(*,*) "d01", d01(i)
-!                     IF(para_env%mepos==0) WRITE(*,*) "d11", d11(i)
+!                     d11(i) = d11(i) + qn*ria(i)*CMPLX(COS(dd), -1.0_dp*SIN(dd), KIND=dp)
+                     ! t-derivation
+                     d01(i) = d01(i) + qn*CMPLX(COS(dd), SIN(dd), KIND=dp)
+                     d11(i) = d11(i) + qn*CMPLX(0.0_dp, dd, dp)*&
+                                       CMPLX(COS(dd), SIN(dd), KIND=dp)
+                     IF(para_env%mepos==0) WRITE(*,*) "d01", d01(i)
+                     IF(para_env%mepos==0) WRITE(*,*) "d11", d11(i)
                   END DO
                ENDIF
             END DO
@@ -4570,19 +4730,16 @@ CONTAINS
             IF(para_env%mepos==0) WRITE(*,*) "zi", zi
 
             ! t-deriv
-!            zi(:) = d11(:)/d01(:)
-!            ci = AIMAG(zi)
-!            newqq = AIMAG(zi)
-
-            ! ik-deriv
+            DO i = 1, 3
+               kvec(:) = twopi*cell%h_inv(i, :)
+               zi(:) = d11(:)/d01(:) / CMPLX(0.0_dp, -1.0_dp*kvec(i), dp)
+            END DO
             ci = REAL(zi, KIND=dp)*nelectron
             newqq = REAL(zi, dp)*nelectron
-!            ci = AIMAG(zi)*nelectron
-!            newqq = AIMAG(zi)*nelectron
-!            ci = REAL(zi, KIND=dp)
-!            newqq = REAL(zi, dp)
-!            ci = AIMAG(zi)
-!            newqq = AIMAG(zi)
+
+            ! ik-deriv
+!            ci = REAL(zi, KIND=dp)*nelectron
+!            newqq = REAL(zi, dp)*nelectron
             IF(para_env%mepos==0) WRITE(*,*) "ci", ci
             IF(para_env%mepos==0) WRITE(*,*) "newqq", newqq
             
@@ -4591,6 +4748,9 @@ CONTAINS
             IF(para_env%mepos==0) WRITE(*,*) "Nuclear new", newrmom(2:4, 2)
             IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 27)
             ! NEW NEW NEW NEW 
+
+
+
 
          CASE (2)
             ! Quadrupole
@@ -4670,20 +4830,29 @@ CONTAINS
                kvec(:) = twopi*cell%h_inv(i, :)
 !               IF(para_env%mepos==0) WRITE(*,*) "kvec(:)", kvec(:)
                ! d/dt (a|e^(ikr)|b)
-               CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec,  nderivative = 1,&
+               CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec, &
+                                              reference, ref_point, nderivative = 1, &
                                                dkcos = dkcos(i)%matrix, dksin = dksin(i)%matrix)
 
-!               CALL build_berry_moment_matrix2(qs_env, cosmat, sinmat, kvec,  nderivative = 1,&
+
+!               ! ik-derivative
+!               CALL build_berry_moment_matrix2(qs_env, cosmat, sinmat, kvec, nderivative = 1,&
 !                                               dkcos = dkcos, dksin = dksin)
 
+!               CALL numer_berry_moment_matrix(qs_env, kvec, nmoments=1, &
+!                                              dkc=dkcos, dks=dksin)
 
-!               WRITE(*,*) "t-Derivation"
-!               IF(para_env%mepos==0) WRITE(*,*) "cosmat"
-!               CALL dbcsr_print(cosmat, matlab_format = .TRUE.)
+               ! modified t-derivation
+!               CALL build_berry_moment_matrix4(qs_env, cosmat, sinmat, kvec, nderivative = 1, &
+!                                               dkcos = dkcos(i)%matrix, dksin = dksin(i)%matrix)
+
+               WRITE(*,*) "t-Derivation"
+               IF(para_env%mepos==0) WRITE(*,*) "cosmat"
+               CALL dbcsr_print(cosmat, matlab_format = .TRUE.)
 !               IF(para_env%mepos==0) WRITE(*,*) "sinmat"
 !               CALL dbcsr_print(sinmat, matlab_format = .TRUE.)
 !               IF(para_env%mepos==0) WRITE(*,*) "dkcos"
-!               CALL dbcsr_print(dkcos(i)%matrix, matlab_format = .TRUE.)
+               CALL dbcsr_print(dkcos(i)%matrix, matlab_format = .TRUE.)
 !               IF(para_env%mepos==0) WRITE(*,*) "dksin"
 !               CALL dbcsr_print(dksin(i)%matrix, matlab_format = .TRUE.)
                              
@@ -4723,6 +4892,23 @@ CONTAINS
                ! Invert d01
                CALL cp_cfm_lu_invert(eigrmat(ispin)%matrix)
 
+!               !-------------------------------------------
+!               CALL cp_cfm_to_fm(msource = deigrmat(1)%matrix, &
+!                                 mtargetr = dop_fm_set(1,1)%matrix, &
+!                                 mtargeti = dop_fm_set(2,1)%matrix)
+!               IF(para_env%mepos==0)   WRITE(*,*) "deriveigrmat - COS deriv"
+!               CALL cp_fm_write_formatted(dop_fm_set(1,1)%matrix, 6)
+!               IF(para_env%mepos==0) WRITE(*,*) "deriveigrmat - SIN deriv"
+!               CALL cp_fm_write_formatted(dop_fm_set(2,1)%matrix, 6)
+!               CALL cp_cfm_to_fm(msource = eigrmat(1)%matrix, &
+!                                 mtargetr = op_fm_set(1,1)%matrix, &
+!                                 mtargeti = op_fm_set(2,1)%matrix)
+!               IF(para_env%mepos==0) WRITE(*,*) "inveigrmat - COS inv"
+!               CALL cp_fm_write_formatted(op_fm_set(1,1)%matrix, 6)
+!               IF(para_env%mepos==0) WRITE(*,*) "inveigrmat - SIN inv"
+!               CALL cp_fm_write_formatted(op_fm_set(2,1)%matrix, 6)
+!               !-------------------------------------------
+
                ! tr(d01^-1 * d11)
                CALL cp_cfm_trace(matrix_a = eigrmat(ispin)%matrix, &
                                  matrix_b = deigrmat(ispin)%matrix, &
@@ -4734,13 +4920,55 @@ CONTAINS
                IF (dft_control%nspins == 1) THEN
                   etr = etr + et1
                ENDIF
+
+!               !---------------------------------------------
+!               CALL cp_cfm_get_info(cumulant_matrix(1)%matrix, ncol_local = ncol_local)
+!
+!               ! matrix_c = alpha * op1( matrix_a ) * op2( matrix_b ) + beta*matrix_c.
+!!               CALL cp_cfm_gemm("N","N", ncol_local, ncol_local, ncol_local, &
+!!                                z_one, eigrmat(1)%matrix, deigrmat(1)%matrix, &
+!!                                z_zero, cumulant_matrix(1)%matrix)
+!
+!               CALL  cp_cfm_schur_product(matrix_a = eigrmat(1)%matrix,&
+!                                          matrix_b = deigrmat(1)%matrix,&
+!                                          matrix_c = cumulant_matrix(1)%matrix)
+!
+!               ! cfm -> fm
+!               ! nmo x nmo 
+!               CALL cp_cfm_to_fm(msource = cumulant_matrix(1)%matrix, &
+!                                 mtargetr = op_fm_set(1,1)%matrix, &
+!                                 mtargeti = op_fm_set(2,1)%matrix)
+!   
+!               ! fm -> dbcsr
+!               CALL copy_fm_to_dbcsr(op_fm_set(1,1)%matrix, cosmat)
+!               CALL copy_fm_to_dbcsr(op_fm_set(2,1)%matrix, sinmat)
+!
+!               ! calculate trace
+!               CALL dbcsr_trace(cosmat, relem)
+!               CALL dbcsr_trace(sinmat, ielem)
+!               et1 =  CMPLX(relem, ielem, dp)
+!   
+!               etr = z_one*et1
+!               
+!               ! Closed shell
+!               IF (dft_control%nspins == 1) THEN
+!                  etr = etr + et1
+!               ENDIF
+!               !---------------------------------------------
+
             END DO
-            ctrace(i) = etr / CMPLX(0.0_dp, kvec(i), dp)
+!            ctrace(i) = etr / CMPLX(0.0_dp, kvec(i), dp)
+            ! t-derivative
+            ctrace(i) = etr 
+            ctrace2(i) = etr / CMPLX(0.0_dp, kvec(i), dp)
+
+            ! ik-derivative
+!            ctrace(i) = etr * CMPLX(0.0_dp, -1.0_dp*kvec(i), dp)
 
 !------------------------------------------------------------------------------
 !------------------------------------------------------------------------------
 !               ! get traces
-!               strace = 0.0_dp
+!!               strace = 0.0_dp
 !               DO ispin = 1, dft_control%nspins
 !
 !                  ! Trace deriv real
@@ -4821,6 +5049,7 @@ CONTAINS
 !------------------------------------------------------------------------------
             END DO ! i
             IF(para_env%mepos==0) WRITE(*,*) "ctrace", ctrace
+            IF(para_env%mepos==0) WRITE(*,*) "ctrace2", ctrace2
             ! Beware, missing multiplication with phase??
 !            ctrace = ctrace*xphase
 
@@ -4885,81 +5114,65 @@ CONTAINS
             IF(para_env%mepos==0) WRITE(*,*)  "ci after pi", ci
             rmom(2:4, 1) = MATMUL(cell%hmat, ci)/twopi
 
-           tracei(:) = REAL(ctrace(:),dp)
+           ! ik-derivative
+!           tracei(:) = REAL(ctrace(:),dp)
+           ! t-derivative
+           tracei(:) = AIMAG(ctrace(:))
+           tracei2(:) = REAL(ctrace2(:),dp)
            
-           IF(para_env%mepos==0) WRITE(*,*) "tracei", tracei
+           ! shift new elec based on old nuclear
            IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 27)
-            
-             ! shift new elec based on old nuclear
-!            DO i = 1, 3
-!               IF(para_env%mepos==0) WRITE(*,*) "START"
-!               IF(para_env%mepos==0) WRITE(*,*) "iteration", i
-!               IF(para_env%mepos==0) WRITE(*,*) "qq(i) =", qq(i)
-!               IF(para_env%mepos==0) WRITE(*,*) "qq(i)+tracei(i) =", qq(i)+tracei(i)
-!               DO WHILE  (qq(i)+tracei(i) > pi)
-!                  IF(para_env%mepos==0) WRITE(*,*) "First Do While", qq(i)+tracei(i)
-!                  IF(para_env%mepos==0) WRITE(*,*) "tracei(i)", tracei(i)
-!                  tracei(i) = tracei(i)-twopi
-!                  IF(para_env%mepos==0) WRITE(*,*) "qq(i)+tracei(i)", qq(i)+tracei(i)
-!               END DO
-!               IF(para_env%mepos==0) WRITE(*,*) "tracei(i) after first DO WHILE", tracei(i)
-!               IF(para_env%mepos==0) WRITE(*,*) "criteria after first DO WHILE", qq(i)+tracei(i)
-!               DO WHILE (qq(i)+tracei(i) < -pi)
-!                  IF(para_env%mepos==0) WRITE(*,*) "Second Do While", qq(i)+tracei(i)
-!                  IF(para_env%mepos==0) WRITE(*,*) "tracei(i)", tracei(i)
-!                  tracei(i) = tracei(i)+twopi
-!                  IF(para_env%mepos==0) WRITE(*,*) "qq(i)+tracei(i)", qq(i)+tracei(i)
-!               END DO
-!               IF(para_env%mepos==0) WRITE(*,*) "criteria  after second DO WHILE", qq(i)+tracei(i)
-!            END DO
-!            IF(para_env%mepos==0) WRITE(*,*) "tracei AFTER", tracei
+           IF(para_env%mepos==0) WRITE(*,*) "Berry nuclear + Greg elec"
+           IF(para_env%mepos==0) WRITE(*,*) "tracei", tracei
+            DO i = 1, 3
+               IF(para_env%mepos==0) WRITE(*,*) "START"
+               IF(para_env%mepos==0) WRITE(*,*) "iteration", i
+               IF(para_env%mepos==0) WRITE(*,*) "qq(i) =", qq(i)
+               IF(para_env%mepos==0) WRITE(*,*) "qq(i)+tracei(i) =", qq(i)+tracei(i)
+               DO WHILE  (qq(i)+tracei(i) > pi)
+                  IF(para_env%mepos==0) WRITE(*,*) "First Do While", qq(i)+tracei(i)
+                  IF(para_env%mepos==0) WRITE(*,*) "tracei(i)", tracei(i)
+                  tracei(i) = tracei(i)-twopi
+                  IF(para_env%mepos==0) WRITE(*,*) "qq(i)+tracei(i)", qq(i)+tracei(i)
+               END DO
+               DO WHILE (qq(i)+tracei(i) < -pi)
+                  IF(para_env%mepos==0) WRITE(*,*) "Second Do While", qq(i)+tracei(i)
+                  IF(para_env%mepos==0) WRITE(*,*) "tracei(i)", tracei(i)
+                  tracei(i) = tracei(i)+twopi
+                  IF(para_env%mepos==0) WRITE(*,*) "qq(i)+tracei(i)", qq(i)+tracei(i)
+               END DO
+               IF(para_env%mepos==0) WRITE(*,*) "criteria  after second DO WHILE", qq(i)+tracei(i)
+            END DO
+            IF(para_env%mepos==0) WRITE(*,*) "tracei AFTER", tracei
            
             ! Shift electronic based on new nuclear
             IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 27)
+           IF(para_env%mepos==0) WRITE(*,*) "Greg nuclear + elec"
             DO i = 1, 3
                IF(para_env%mepos==0) WRITE(*,*) "iteration", i
                IF(para_env%mepos==0) WRITE(*,*) "newqq(i) =", newqq(i)
-               IF(para_env%mepos==0) WRITE(*,*) "newqq(i)+tracei(i) =", newqq(i)+tracei(i)
+               IF(para_env%mepos==0) WRITE(*,*) "newqq(i)+tracei2(i) =", newqq(i)+tracei2(i)
                IF(para_env%mepos==0) WRITE(*,*) "START"
-               DO WHILE  (newqq(i)+tracei(i) > pi)
-                  tracei(i) = tracei(i)-twopi
-                  IF(para_env%mepos==0) WRITE(*,*) "newqq(i)+tracei(i)", newqq(i)+tracei(i)
+               DO WHILE  (newqq(i)+tracei2(i) > pi)
+                  tracei2(i) = tracei2(i)-twopi
+                  IF(para_env%mepos==0) WRITE(*,*) "newqq(i)+tracei(i)", newqq(i)+tracei2(i)
                END DO
-               IF(para_env%mepos==0) WRITE(*,*) "tracei(i) after -2pi", newqq(i)+tracei(i)
-               DO WHILE (newqq(i)+tracei(i) < -pi)
-                  tracei(i) = tracei(i)+twopi
-                  IF(para_env%mepos==0) WRITE(*,*) "newqq(i)+tracei(i)", newqq(i)+tracei(i)
+               IF(para_env%mepos==0) WRITE(*,*) "tracei(i) after -2pi", newqq(i)+tracei2(i)
+               DO WHILE (newqq(i)+tracei2(i) < -pi)
+                  tracei2(i) = tracei2(i)+twopi
+                  IF(para_env%mepos==0) WRITE(*,*) "newqq(i)+tracei(i)", newqq(i)+tracei2(i)
                END DO
-               IF(para_env%mepos==0) WRITE(*,*) "criteria  after -2pi", newqq(i)+tracei(i)
+               IF(para_env%mepos==0) WRITE(*,*) "criteria  after +2pi", newqq(i)+tracei2(i)
             END DO
-            IF(para_env%mepos==0) WRITE(*,*) "tracei AFTER", tracei
+            IF(para_env%mepos==0) WRITE(*,*) "tracei2 AFTER", tracei2
             IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 27)
 
-            ! shift new nuclear and elec
-            crit(:) = 0.0_dp
-!            DO i = 1, 3
-!               IF(para_env%mepos==0) WRITE(*,*) "iteration", i
-!               IF(para_env%mepos==0) WRITE(*,*) "newqq(i) =", newqq(i)
-!               IF(para_env%mepos==0) WRITE(*,*) "crit = newqq(i)+tracei(i) =", newqq(i)+tracei(i)
-!               IF(para_env%mepos==0) WRITE(*,*) "START"
-!               crit(i) = newqq(i)+tracei(i)
-!               DO WHILE  (crit(i) > pi)
-!                  crit(i) = crit(i)-twopi
-!                  IF(para_env%mepos==0) WRITE(*,*) "crit(i)", crit(i)
-!               END DO
-!               IF(para_env%mepos==0) WRITE(*,*) "criteria after -n*2pi", crit(i)
-!               DO WHILE (crit(i) < -pi)
-!                  crit(i) = crit(i)+twopi
-!                  IF(para_env%mepos==0) WRITE(*,*) "crit(i)", crit(i)
-!               END DO
-!            END DO
-!            IF(para_env%mepos==0) WRITE(*,*) "tracei AFTER", crit(:)
-!            tracei(:) = crit(:)
-
             ! Derivation wrt t pulls down additional k (2pi/L)
-            newrmom(2:4, 1) = tracei(:)
-            ! Derivation wrt k
-            !newrmom = 2.0_dp*tracei
+
+            ! t & ik-derivative
+!            newrmom(2:4, 1) = MATMUL(cell%hmat, tracei(:))/twopi
+            newrmom(2:4, 1) = MATMUL(cell%hmat, tracei(:))/twopi
+            newrmom2(2:4, 1) = tracei2(:)
 
          CASE (2)
             ! Quadrupole
@@ -4992,19 +5205,20 @@ CONTAINS
          END SELECT
       END DO
 !------------------------------------------------------------------------------
+      ! Berry phase
       rmom(:, 3) = rmom(:, 1)+rmom(:, 2)
-
-      ! Greg elec and nucl
-      newrmom(:, 3) = newrmom(:, 1)+newrmom(:, 2)
       ! Greg elec and Berry nucl
-!      newrmom(:, 3) = newrmom(:, 1)+rmom(:, 2)
-
+      newrmom(:, 3) = newrmom(:, 1)+rmom(:, 2)
+      ! Greg elec and nucl
+      newrmom2(:, 3) = newrmom2(:, 1)+newrmom(:, 2)
       IF(para_env%mepos==0) THEN 
          WRITE(*,*) ""
          WRITE(*,*) "nuclear", rmom(2:4, 2)
-         WRITE(*,*) "newnuclear", newrmom(2:4, 2)
          WRITE(*,*) "rmom", rmom(2:4, 1)
+         WRITE(*,*) ""
+         WRITE(*,*) "newnuclear", newrmom(2:4, 2)
          WRITE(*,*) "newrmom", newrmom(2:4, 1)
+         WRITE(*,*) "newrmom2", newrmom2(2:4, 1)
          WRITE(*,*) ""
 !         WRITE(*,*) "Electronic contribution OLD [Debye]"
 !         WRITE(*,*) rmom(2:4, 1)*debye
@@ -5014,11 +5228,12 @@ CONTAINS
 !         WRITE(*,*) ""
          WRITE(*,*) "TOTAL_OLD", rmom(2:4, 2)+rmom(2:4, 1)
          WRITE(*,*) ""
-         WRITE(*,*) "TOTAL_NEW", newrmom(2:4, 2)+newrmom(2:4, 1)
+         WRITE(*,*) "TOTAL_oNnE", rmom(2:4, 2)+newrmom(2:4, 1)
+         WRITE(*,*) ""
+         WRITE(*,*) "TOTAL_NEW", newrmom2(2:4, 3)
          WRITE(*,*) ""
 
-         WRITE(*,*) "DIVIDE: old / new TOTAL"
-      
+         WRITE(*,*) "DIVIDE: old / oNnE TOTAL (Berry vs 1/2 Greg)"
          IF (newrmom(2,1) .NE. 0) THEN
             WRITE(*,*) rmom(2,3) / newrmom(2, 3)
             WRITE(*,*) "Error X [%]", 100.0_dp*(rmom(2,3) - newrmom(2, 3)) / newrmom(2, 3)
@@ -5037,6 +5252,26 @@ CONTAINS
          ELSE
             WRITE(*,*) 0.0_dp
          END IF
+
+         WRITE(*,*) "DIVIDE: old / new  TOTAL (Berry vs Greg)"
+         IF (newrmom(2,1) .NE. 0) THEN
+            WRITE(*,*) rmom(2,3) / newrmom2(2, 3)
+            WRITE(*,*) "Error X [%]", 100.0_dp*(rmom(2,3) - newrmom2(2, 3)) / newrmom2(2, 3)
+         ELSE
+            WRITE(*,*) 0.0_dp
+         END IF
+         IF (newrmom(3,1) .NE. 0) THEN
+            WRITE(*,*) rmom(3,3) / newrmom2(3, 3)
+            WRITE(*,*) "Error Y [%]", 100.0_dp*(rmom(3,3) - newrmom2(3, 3)) / newrmom2(3, 3)
+         ELSE
+            WRITE(*,*) 0.0_dp
+         END IF
+         IF (newrmom(4,1) .NE. 0) THEN
+            WRITE(*,*) rmom(4,3) / newrmom2(4, 3)
+            WRITE(*,*) "Error Z [%]", 100.0_dp*(rmom(4,3) - newrmom2(4, 3)) / newrmom2(4, 3) 
+         ELSE
+            WRITE(*,*) 0.0_dp
+         END IF
       END IF
 
       description = "[DIPOLE]"
@@ -5046,12 +5281,17 @@ CONTAINS
       IF (magnetic) THEN
          CALL print_moments(unit_number, nmom, rmom, rlab, rcc, cell, periodic=.TRUE., mmom=mmom)
       ELSE
+         IF(para_env%mepos==0) WRITE(*,*) "Berry phase"
          CALL print_moments(unit_number, nmom, rmom, rlab, rcc, cell, periodic=.TRUE.)
+         IF(para_env%mepos==0) WRITE(*,*) "Berry nuclear + Greg elec"
          CALL print_moments(unit_number, nmom, newrmom, rlab, rcc, cell, periodic=.TRUE.)
+         IF(para_env%mepos==0) WRITE(*,*) "Greg nuclear + elec"
+         CALL print_moments(unit_number, nmom, newrmom2, rlab, rcc, cell, periodic=.TRUE.)
       END IF
 
       DEALLOCATE (rmom)
       DEALLOCATE (newrmom)
+      DEALLOCATE (newrmom2)
       DEALLOCATE (rlab)
       IF (magnetic) THEN
          DEALLOCATE (mmom)

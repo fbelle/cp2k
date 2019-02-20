@@ -183,7 +183,6 @@ MODULE qs_scf_post_gpw
                                               qs_moment_berry_phase2,&
                                               qs_moment_berry_phase3,&
                                               qs_moment_berry_phase4,&
-                                              qs_moment_berry_phase_numerical,&
                                               qs_moment_locop
    USE qs_neighbor_list_types,          ONLY: get_iterator_info,&
                                               get_neighbor_list_set_p,&
