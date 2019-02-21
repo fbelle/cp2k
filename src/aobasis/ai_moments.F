@@ -52,26 +52,26 @@ MODULE ai_moments
 
 CONTAINS
 
-!   SUBROUTINE contract_cossin(cos_block, sin_block, &
-!                              iatom, ncoa, nsgfa, sgfa, sphi_a, ldsa, &
-!                              jatom, ncob, nsgfb, sgfb, sphi_b, ldsb, &
-!                              cosab, sinab, ldab, work, ldwork)
-!
-!      REAL(dp), DIMENSION(:, :), POINTER                 :: cos_block, sin_block
-!      INTEGER, INTENT(IN)                                :: iatom, ncoa, nsgfa, sgfa
-!      REAL(dp), DIMENSION(:, :), INTENT(IN)              :: sphi_a
-!      INTEGER, INTENT(IN)                                :: ldsa, jatom, ncob, nsgfb, sgfb
-!      REAL(dp), DIMENSION(:, :), INTENT(IN)              :: sphi_b
-!      INTEGER, INTENT(IN)                                :: ldsb
-!      REAL(dp), DIMENSION(:, :), INTENT(IN)              :: cosab, sinab
-!      INTEGER, INTENT(IN)                                :: ldab
-!      REAL(dp), DIMENSION(:, :)                          :: work
-!      INTEGER, INTENT(IN)                                :: ldwork
-!
-!!      INTEGER :: i,j
-!
-!! Calculate cosine
-!
+   SUBROUTINE contract_cossin(cos_block, sin_block, &
+                              iatom, ncoa, nsgfa, sgfa, sphi_a, ldsa, &
+                              jatom, ncob, nsgfb, sgfb, sphi_b, ldsb, &
+                              cosab, sinab, ldab, work, ldwork)
+
+      REAL(dp), DIMENSION(:, :), POINTER                 :: cos_block, sin_block
+      INTEGER, INTENT(IN)                                :: iatom, ncoa, nsgfa, sgfa
+      REAL(dp), DIMENSION(:, :), INTENT(IN)              :: sphi_a
+      INTEGER, INTENT(IN)                                :: ldsa, jatom, ncob, nsgfb, sgfb
+      REAL(dp), DIMENSION(:, :), INTENT(IN)              :: sphi_b
+      INTEGER, INTENT(IN)                                :: ldsb
+      REAL(dp), DIMENSION(:, :), INTENT(IN)              :: cosab, sinab
+      INTEGER, INTENT(IN)                                :: ldab
+      REAL(dp), DIMENSION(:, :)                          :: work
+      INTEGER, INTENT(IN)                                :: ldwork
+
+!      INTEGER :: i,j
+
+! Calculate cosine
+
 !      WRITE(*,*) "CONTRACT COSSIN"
 !      WRITE(*,*) "SIZE(cosab,1)", SIZE(cosab,1)
 !      WRITE(*,*) "SIZE(cosab,2)", SIZE(cosab,2)
@@ -87,60 +87,60 @@ CONTAINS
 !      WRITE(*,*) "ncoa, nsgfa, sgfa", ncoa, nsgfa, sgfa
 !      WRITE(*,*) "ncob, nsgfb, sgfb", ncob, nsgfb, sgfb
 !      WRITE(*,*) "ldab, ldsa, ldsb", ldab, ldsa, ldsb
+
+      CALL dgemm("N", "N", ncoa, nsgfb, ncob, &
+                 1.0_dp, cosab(1, 1), ldab, &
+                 sphi_b(1, sgfb), ldsb, &
+                 0.0_dp, work(1, 1), ldwork)
+
+!      DO i = 1, SIZE(cosab,1)
+!         DO j = 1, SIZE(cosab,2)
+!            WRITE(*,*) "cosab(i,j)", i, j, cosab(i,j)
+!         END DO 
+!      END DO
 !
-!      CALL dgemm("N", "N", ncoa, nsgfb, ncob, &
-!                 1.0_dp, cosab(1, 1), ldab, &
-!                 sphi_b(1, sgfb), ldsb, &
-!                 0.0_dp, work(1, 1), ldwork)
-!
-!!      DO i = 1, SIZE(cosab,1)
-!!         DO j = 1, SIZE(cosab,2)
-!!            WRITE(*,*) "cosab(i,j)", i, j, cosab(i,j)
-!!         END DO 
-!!      END DO
-!!
-!!      DO i = 1, SIZE(sphi_b,1)
-!!         DO j = 1, SIZE(sphi_b,2)
-!!            WRITE(*,*) "sphi_b(i,j)", i, j, sphi_b(i,j)
-!!         END DO 
-!!      END DO
-!
-!
-!      IF (iatom <= jatom) THEN
-!         CALL dgemm("T", "N", nsgfa, nsgfb, ncoa, &
-!                    1.0_dp, sphi_a(1, sgfa), ldsa, &
-!                    work(1, 1), ldwork, &
-!                    1.0_dp, cos_block(sgfa, sgfb), &
-!                    SIZE(cos_block, 1))
-!      ELSE
-!         CALL dgemm("T", "N", nsgfb, nsgfa, ncoa, &
-!                    1.0_dp, work(1, 1), ldwork, &
-!                    sphi_a(1, sgfa), ldsa, &
-!                    1.0_dp, cos_block(sgfb, sgfa), &
-!                    SIZE(cos_block, 1))
-!      END IF
-!
-!      ! Calculate sine
-!      CALL dgemm("N", "N", ncoa, nsgfb, ncob, &
-!                 1.0_dp, sinab(1, 1), ldab, &
-!                 sphi_b(1, sgfb), ldsb, &
-!                 0.0_dp, work(1, 1), ldwork)
-!
-!      IF (iatom <= jatom) THEN
-!         CALL dgemm("T", "N", nsgfa, nsgfb, ncoa, &
-!                    1.0_dp, sphi_a(1, sgfa), ldsa, &
-!                    work(1, 1), ldwork, &
-!                    1.0_dp, sin_block(sgfa, sgfb), &
-!                    SIZE(sin_block, 1))
-!      ELSE
-!         CALL dgemm("T", "N", nsgfb, nsgfa, ncoa, &
-!                    1.0_dp, work(1, 1), ldwork, &
-!                    sphi_a(1, sgfa), ldsa, &
-!                    1.0_dp, sin_block(sgfb, sgfa), &
-!                    SIZE(sin_block, 1))
-!      END IF
-!
-!   END SUBROUTINE contract_cossin
+!      DO i = 1, SIZE(sphi_b,1)
+!         DO j = 1, SIZE(sphi_b,2)
+!            WRITE(*,*) "sphi_b(i,j)", i, j, sphi_b(i,j)
+!         END DO 
+!      END DO
+
+
+      IF (iatom <= jatom) THEN
+         CALL dgemm("T", "N", nsgfa, nsgfb, ncoa, &
+                    1.0_dp, sphi_a(1, sgfa), ldsa, &
+                    work(1, 1), ldwork, &
+                    1.0_dp, cos_block(sgfa, sgfb), &
+                    SIZE(cos_block, 1))
+      ELSE
+         CALL dgemm("T", "N", nsgfb, nsgfa, ncoa, &
+                    1.0_dp, work(1, 1), ldwork, &
+                    sphi_a(1, sgfa), ldsa, &
+                    1.0_dp, cos_block(sgfb, sgfa), &
+                    SIZE(cos_block, 1))
+      END IF
+
+      ! Calculate sine
+      CALL dgemm("N", "N", ncoa, nsgfb, ncob, &
+                 1.0_dp, sinab(1, 1), ldab, &
+                 sphi_b(1, sgfb), ldsb, &
+                 0.0_dp, work(1, 1), ldwork)
+
+      IF (iatom <= jatom) THEN
+         CALL dgemm("T", "N", nsgfa, nsgfb, ncoa, &
+                    1.0_dp, sphi_a(1, sgfa), ldsa, &
+                    work(1, 1), ldwork, &
+                    1.0_dp, sin_block(sgfa, sgfb), &
+                    SIZE(sin_block, 1))
+      ELSE
+         CALL dgemm("T", "N", nsgfb, nsgfa, ncoa, &
+                    1.0_dp, work(1, 1), ldwork, &
+                    sphi_a(1, sgfa), ldsa, &
+                    1.0_dp, sin_block(sgfb, sgfa), &
+                    SIZE(sin_block, 1))
+      END IF
+
+   END SUBROUTINE contract_cossin
 
 
 ! **************************************************************************************************
@@ -165,100 +165,100 @@ CONTAINS
 !> \param work ...
 !> \param ldwork ...
 ! **************************************************************************************************
-   SUBROUTINE contract_cossin(cos_block, sin_block, &
-                              iatom, ncoa, nsgfa, sgfa, sphi_a, ldsa, &
-                              jatom, ncob, nsgfb, sgfb, sphi_b, ldsb, &
-                              cosab, sinab, ldab, work, ldwork)
-
-      REAL(dp), DIMENSION(:, :), POINTER                 :: cos_block, sin_block
-      INTEGER, INTENT(IN)                                :: iatom, ncoa, nsgfa, sgfa
-      REAL(dp), DIMENSION(:, :), INTENT(IN)              :: sphi_a
-      INTEGER, INTENT(IN)                                :: ldsa, jatom, ncob, nsgfb, sgfb
-      REAL(dp), DIMENSION(:, :), INTENT(IN)              :: sphi_b
-      INTEGER, INTENT(IN)                                :: ldsb
-      REAL(dp), DIMENSION(:, :), INTENT(IN)              :: cosab, sinab
-      INTEGER, INTENT(IN)                                :: ldab
-      REAL(dp), DIMENSION(:, :)                          :: work
-      INTEGER, INTENT(IN)                                :: ldwork
-
-      INTEGER :: totsgfa, totsgfb
-      INTEGER :: i, j
-
-      totsgfa = SIZE(sphi_a,2)
-      totsgfb = SIZE(sphi_b,2)
-
-! Calculate cosine
-
-!      WRITE(*,*) "CONTRACT COSSIN"
-!      WRITE(*,*) "SIZE(cosab,1)", SIZE(cosab,1)
-!      WRITE(*,*) "SIZE(cosab,2)", SIZE(cosab,2)
-
-!      WRITE(*,*) "SIZE(sphi_a,1)", SIZE(sphi_a,1)
-!      WRITE(*,*) "SIZE(sphi_a,2)", SIZE(sphi_a,2)
+!   SUBROUTINE contract_cossin(cos_block, sin_block, &
+!                              iatom, ncoa, nsgfa, sgfa, sphi_a, ldsa, &
+!                              jatom, ncob, nsgfb, sgfb, sphi_b, ldsb, &
+!                              cosab, sinab, ldab, work, ldwork)
+!
+!      REAL(dp), DIMENSION(:, :), POINTER                 :: cos_block, sin_block
+!      INTEGER, INTENT(IN)                                :: iatom, ncoa, nsgfa, sgfa
+!      REAL(dp), DIMENSION(:, :), INTENT(IN)              :: sphi_a
+!      INTEGER, INTENT(IN)                                :: ldsa, jatom, ncob, nsgfb, sgfb
+!      REAL(dp), DIMENSION(:, :), INTENT(IN)              :: sphi_b
+!      INTEGER, INTENT(IN)                                :: ldsb
+!      REAL(dp), DIMENSION(:, :), INTENT(IN)              :: cosab, sinab
+!      INTEGER, INTENT(IN)                                :: ldab
+!      REAL(dp), DIMENSION(:, :)                          :: work
+!      INTEGER, INTENT(IN)                                :: ldwork
+!
+!      INTEGER :: totsgfa, totsgfb
+!      INTEGER :: i, j
+!
+!      totsgfa = SIZE(sphi_a,2)
+!      totsgfb = SIZE(sphi_b,2)
+!
+!! Calculate cosine
+!
+!!      WRITE(*,*) "CONTRACT COSSIN"
+!!      WRITE(*,*) "SIZE(cosab,1)", SIZE(cosab,1)
+!!      WRITE(*,*) "SIZE(cosab,2)", SIZE(cosab,2)
+!
+!!      WRITE(*,*) "SIZE(sphi_a,1)", SIZE(sphi_a,1)
+!!      WRITE(*,*) "SIZE(sphi_a,2)", SIZE(sphi_a,2)
+!!      WRITE(*,*) "SIZE(sphi_b,1)", SIZE(sphi_b,1)
+!!      WRITE(*,*) "SIZE(sphi_b,2)", SIZE(sphi_b,2)
+!
+!!      WRITE(*,*) "SIZE(work,1)", SIZE(work,1)
+!!      WRITE(*,*) "SIZE(work,2)", SIZE(work,2)
+!
+!!      WRITE(*,*) "ncoa, nsgfa, sgfa", ncoa, nsgfa, sgfa
+!!      WRITE(*,*) "ncob, nsgfb, sgfb", ncob, nsgfb, sgfb
+!!      WRITE(*,*) "ldab, ldsa, ldsb", ldab, ldsa, ldsb
+!
+!
+!
+!      WRITE(*,*) "WRITE sphi_b"
 !      WRITE(*,*) "SIZE(sphi_b,1)", SIZE(sphi_b,1)
 !      WRITE(*,*) "SIZE(sphi_b,2)", SIZE(sphi_b,2)
-
-!      WRITE(*,*) "SIZE(work,1)", SIZE(work,1)
-!      WRITE(*,*) "SIZE(work,2)", SIZE(work,2)
-
-!      WRITE(*,*) "ncoa, nsgfa, sgfa", ncoa, nsgfa, sgfa
-!      WRITE(*,*) "ncob, nsgfb, sgfb", ncob, nsgfb, sgfb
-!      WRITE(*,*) "ldab, ldsa, ldsb", ldab, ldsa, ldsb
-
-
-
-      WRITE(*,*) "WRITE sphi_b"
-      WRITE(*,*) "SIZE(sphi_b,1)", SIZE(sphi_b,1)
-      WRITE(*,*) "SIZE(sphi_b,2)", SIZE(sphi_b,2)
-
-      DO i = 1, SIZE(sphi_b,1)
-         DO j = sgfb, SIZE(sphi_b,2)
-            WRITE(*,*) "sphi_b(1:ldsb, sgfb:totsgfb)", i, j, sphi_b(i,j)
-         END DO
-      END DO
-
-      CALL dgemm("N", "N", ncoa, nsgfb, ncob, &
-                 1.0_dp, cosab(1:ldab, 1:ldab), ldab, &
-                 sphi_b(1:ldsb, sgfb:totsgfb), ldsb, &
-                 0.0_dp, work(1:ldab, 1:ldab), ldwork)
-
-
-
-      IF (iatom <= jatom) THEN
-         CALL dgemm("T", "N", nsgfa, nsgfb, ncoa, &
-                    1.0_dp, sphi_a(1:ldsa, sgfa:totsgfa), ldsa, &
-                    work(1:ldab, 1:ldab), ldwork, &
-                    1.0_dp, cos_block(sgfa:totsgfa, sgfb:totsgfb), &
-                    SIZE(cos_block, 1))
-      ELSE
-         CALL dgemm("T", "N", nsgfb, nsgfa, ncoa, &
-                    1.0_dp, work(1:ldab, 1:ldab), ldwork, &
-                    sphi_a(1:ldsa, sgfa:totsgfa), ldsa, &
-                    1.0_dp, cos_block(sgfb:totsgfb, sgfa:totsgfa), &
-                    SIZE(cos_block, 1))
-      END IF
-
-      ! Calculate sine
-      CALL dgemm("N", "N", ncoa, nsgfb, ncob, &
-                 1.0_dp, sinab(1:ldab, 1:ldab), ldab, &
-                 sphi_b(1:ldsb, sgfb:totsgfb), ldsb, &
-                 0.0_dp, work(1:ldab, 1:ldab), ldwork)
-
-      IF (iatom <= jatom) THEN
-         CALL dgemm("T", "N", nsgfa, nsgfb, ncoa, &
-                    1.0_dp, sphi_a(1:ldsa, sgfa:totsgfa), ldsa, &
-                    work(1:ldab, 1:ldab), ldwork, &
-                    1.0_dp, sin_block(sgfa:totsgfa, sgfb:totsgfb), &
-                    SIZE(sin_block, 1))
-      ELSE
-         CALL dgemm("T", "N", nsgfb, nsgfa, ncoa, &
-                    1.0_dp, work(1:ldab, 1:ldab), ldwork, &
-                    sphi_a(1:ldsa, sgfa:totsgfa), ldsa, &
-                    1.0_dp, sin_block(sgfb:totsgfb, sgfa:totsgfa), &
-                    SIZE(sin_block, 1))
-      END IF
-
-   END SUBROUTINE contract_cossin
+!
+!      DO i = 1, SIZE(sphi_b,1)
+!         DO j = sgfb, SIZE(sphi_b,2)
+!            WRITE(*,*) "sphi_b(1:ldsb, sgfb:totsgfb)", i, j, sphi_b(i,j)
+!         END DO
+!      END DO
+!
+!      CALL dgemm("N", "N", ncoa, nsgfb, ncob, &
+!                 1.0_dp, cosab(1:ldab, 1:ldab), ldab, &
+!                 sphi_b(1:ldsb, sgfb:totsgfb), ldsb, &
+!                 0.0_dp, work(1:ldab, 1:ldab), ldwork)
+!
+!
+!
+!      IF (iatom <= jatom) THEN
+!         CALL dgemm("T", "N", nsgfa, nsgfb, ncoa, &
+!                    1.0_dp, sphi_a(1:ldsa, sgfa:totsgfa), ldsa, &
+!                    work(1:ldab, 1:ldab), ldwork, &
+!                    1.0_dp, cos_block(sgfa:totsgfa, sgfb:totsgfb), &
+!                    SIZE(cos_block, 1))
+!      ELSE
+!         CALL dgemm("T", "N", nsgfb, nsgfa, ncoa, &
+!                    1.0_dp, work(1:ldab, 1:ldab), ldwork, &
+!                    sphi_a(1:ldsa, sgfa:totsgfa), ldsa, &
+!                    1.0_dp, cos_block(sgfb:totsgfb, sgfa:totsgfa), &
+!                    SIZE(cos_block, 1))
+!      END IF
+!
+!      ! Calculate sine
+!      CALL dgemm("N", "N", ncoa, nsgfb, ncob, &
+!                 1.0_dp, sinab(1:ldab, 1:ldab), ldab, &
+!                 sphi_b(1:ldsb, sgfb:totsgfb), ldsb, &
+!                 0.0_dp, work(1:ldab, 1:ldab), ldwork)
+!
+!      IF (iatom <= jatom) THEN
+!         CALL dgemm("T", "N", nsgfa, nsgfb, ncoa, &
+!                    1.0_dp, sphi_a(1:ldsa, sgfa:totsgfa), ldsa, &
+!                    work(1:ldab, 1:ldab), ldwork, &
+!                    1.0_dp, sin_block(sgfa:totsgfa, sgfb:totsgfb), &
+!                    SIZE(sin_block, 1))
+!      ELSE
+!         CALL dgemm("T", "N", nsgfb, nsgfa, ncoa, &
+!                    1.0_dp, work(1:ldab, 1:ldab), ldwork, &
+!                    sphi_a(1:ldsa, sgfa:totsgfa), ldsa, &
+!                    1.0_dp, sin_block(sgfb:totsgfb, sgfa:totsgfa), &
+!                    SIZE(sin_block, 1))
+!      END IF
+!
+!   END SUBROUTINE contract_cossin
 
 ! **************************************************************************************************
 !> \brief ...                      GREGS t-derivation 

@@ -1423,7 +1423,7 @@ CONTAINS
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: cosmint, sinmint
       REAL(dp), DIMENSION(:, :), POINTER                 :: ckblk, skblk, c2kblk, s2kblk
       REAL(dp), DIMENSION(3)                             :: rcc
-      INTEGER                                            :: i, j 
+!      INTEGER                                            :: i, j 
 
       CALL timeset(routineN, handle)
 
@@ -1609,9 +1609,9 @@ CONTAINS
                sgfa = first_sgfa(1, iset)
 
                WRITE(*,*) "iset", iset
-               WRITE(*,*) "ncoa", ncoa
-               WRITE(*,*) "sgfa", sgfa
-               WRITE(*,*) ""
+!               WRITE(*,*) "ncoa", ncoa
+!               WRITE(*,*) "sgfa", sgfa
+!               WRITE(*,*) ""
 
                DO jset = 1, nsetb
 
@@ -1621,9 +1621,9 @@ CONTAINS
                   sgfb = first_sgfb(1, jset)
 
                   WRITE(*,*) "jset", jset
-                  WRITE(*,*) "ncob", ncob
-                  WRITE(*,*) "sgfb", sgfb
-                  WRITE(*,*) ""
+!                  WRITE(*,*) "ncob", ncob
+!                  WRITE(*,*) "sgfb", sgfb
+!                  WRITE(*,*) ""
 
                   ! Calculate the (a|exp(ikr)|b) integrals and derivatives (a|(ikr)^nder*exp(ikr)|b)
                   ! Careful, this derivative is wrt to a factor t in front of each k (t -> 1)
@@ -1639,26 +1639,26 @@ CONTAINS
                                 ra, rb, kvec, cosab = cosmint(:, :, 1), sinab = sinmint(:, :, 1), &
                                 dksc = cosmint(:, :, 2), dkss = sinmint(:, :, 2))
 
-                    WRITE(*,*) "AFTER COSSIN - CASE 1"
-                    WRITE(*,*) "SIZE(cosmint(:, :, 1),1)", SIZE(cosmint(:, :, 1),1)
-                    WRITE(*,*) "SIZE(cosmint(:, :, 1),2)", SIZE(cosmint(:, :, 1),2)
-                    WRITE(*,*) "SIZE(cosmint(:, :, 2),1)", SIZE(cosmint(:, :, 2),1)
-                    WRITE(*,*) "SIZE(cosmint(:, :, 2),2)", SIZE(cosmint(:, :, 2),2)
-                    
-                    WRITE(*,*) "COS"
-                    DO i = 1, SIZE(cosmint(:,:,1),1)
-!                       DO j = 1, SIZE(cosmint(:,:,1),2)
-!                          WRITE(*,*) "cosmint(i,j,1)", i, j, cosmint(i,j,1)
-!                          WRITE(*,*) "cosmint(i,i,1)", i, i, cosmint(i,i,1)
-!                       END DO 
-                    END DO
-                    WRITE(*,*) "DKCOS"
-                    DO i = 1, SIZE(cosmint(:,:,2),1)
-!                       DO j = 1, SIZE(cosmint(:,:,2),2)
-!                          WRITE(*,*) "cosmint(i,j,2)", i, j, cosmint(i,j,2)
-!                          WRITE(*,*) "cosmint(i,i,2)", i, i, cosmint(i,i,2)
-!                       END DO 
-                    END DO
+!                    WRITE(*,*) "AFTER COSSIN - CASE 1"
+!                    WRITE(*,*) "SIZE(cosmint(:, :, 1),1)", SIZE(cosmint(:, :, 1),1)
+!                    WRITE(*,*) "SIZE(cosmint(:, :, 1),2)", SIZE(cosmint(:, :, 1),2)
+!                    WRITE(*,*) "SIZE(cosmint(:, :, 2),1)", SIZE(cosmint(:, :, 2),1)
+!                    WRITE(*,*) "SIZE(cosmint(:, :, 2),2)", SIZE(cosmint(:, :, 2),2)
+!                    
+!                    WRITE(*,*) "COS"
+!                    DO i = 1, SIZE(cosmint(:,:,1),1)
+!!                       DO j = 1, SIZE(cosmint(:,:,1),2)
+!!                          WRITE(*,*) "cosmint(i,j,1)", i, j, cosmint(i,j,1)
+!!                          WRITE(*,*) "cosmint(i,i,1)", i, i, cosmint(i,i,1)
+!!                       END DO 
+!                    END DO
+!                    WRITE(*,*) "DKCOS"
+!                    DO i = 1, SIZE(cosmint(:,:,2),1)
+!!                       DO j = 1, SIZE(cosmint(:,:,2),2)
+!!                          WRITE(*,*) "cosmint(i,j,2)", i, j, cosmint(i,j,2)
+!!                          WRITE(*,*) "cosmint(i,i,2)", i, i, cosmint(i,i,2)
+!!                       END DO 
+!                    END DO
 !                    IF(ldab >= 2) THEN
 !                       WRITE(*,*) "cosmint(2, 1, 1)", cosmint(2, 1, 1) 
 !                       WRITE(*,*) "cosmint(1, 2, 1)", cosmint(1, 2, 1) 
@@ -1690,20 +1690,20 @@ CONTAINS
                                        cosmint(1:ldab, 1:ldab, 1), sinmint(1:ldab, 1:ldab, 1), &
                                        ldab, work(1:ldwork,1:ldwork), ldwork)
 
-                  WRITE(*,*) "AFTER CONTRACTION - CASE 0"
-                  WRITE(*,*) "SIZE(cblock,1)", SIZE(cblock,1)
-                  WRITE(*,*) "SIZE(cblock,2)", SIZE(cblock,2)
-                  WRITE(*,*) "COS"
-                  DO i = 1, SIZE(cblock,1)
-                     DO j = 1, SIZE(cblock,2)
-!                        WRITE(*,*) "cblock(i,j)", i, j, cblock(i,j)
-                     END DO 
-                  END DO
+!                  WRITE(*,*) "AFTER CONTRACTION - CASE 0"
+!                  WRITE(*,*) "SIZE(cblock,1)", SIZE(cblock,1)
+!                  WRITE(*,*) "SIZE(cblock,2)", SIZE(cblock,2)
+!                  WRITE(*,*) "COS"
+!                  DO i = 1, SIZE(cblock,1)
+!                     DO j = 1, SIZE(cblock,2)
+!!                        WRITE(*,*) "cblock(i,j)", i, j, cblock(i,j)
+!                     END DO 
+!                  END DO
 
                   IF (nder >= 1) THEN
                      ! Contraction of matrices storing first derivatives
 
-                     WRITE(*,*) "CONTRACTION OF DKCOS and DKSIN"
+!                     WRITE(*,*) "CONTRACTION OF DKCOS and DKSIN"
 !                     WRITE(*,*) "SIZE(sphi_a,1)", SIZE(sphi_a,1)
 !                     WRITE(*,*) "SIZE(sphi_a,2)", SIZE(sphi_a,2)
 !                     WRITE(*,*) "SIZE(sphi_b,1)", SIZE(sphi_b,1)
@@ -1715,22 +1715,22 @@ CONTAINS
                                           cosmint(1:ldab, 1:ldab, 2), sinmint(1:ldab, 1:ldab, 2),&
                                           ldab, work(1:ldwork,1:ldwork), ldwork)
 
-                     WRITE(*,*) "AFTER CONTRACTION - CASE 1"
+!                     WRITE(*,*) "AFTER CONTRACTION - CASE 1"
 !                     WRITE(*,*) "cosmint(1, 1, 2)", cosmint(1, 1, 2) 
 !                     WRITE(*,*) "sinmint(1, 1, 2)", sinmint(1, 1, 2) 
 !                     WRITE(*,*) "ckblk(1, 1)", ckblk(1, 1) 
 !                     WRITE(*,*) "skblk(1, 1)", skblk(1, 1) 
 
-                     WRITE(*,*) "SIZE(cosmint,1)", SIZE(cosmint,1)
-                     WRITE(*,*) "SIZE(cosmint,2)", SIZE(cosmint,2)
-                     WRITE(*,*) "SIZE(ckblk,1)", SIZE(ckblk,1)
-                     WRITE(*,*) "SIZE(ckblk,2)", SIZE(ckblk,2)
-                     WRITE(*,*) "DKCOS"
-                     DO i = 1, SIZE(ckblk,1)
-                        DO j = 1, SIZE(ckblk,2)
-                           WRITE(*,*) "ckblk(i,j)", i, j, ckblk(i,j)
-                        END DO 
-                     END DO
+!                     WRITE(*,*) "SIZE(cosmint,1)", SIZE(cosmint,1)
+!                     WRITE(*,*) "SIZE(cosmint,2)", SIZE(cosmint,2)
+!                     WRITE(*,*) "SIZE(ckblk,1)", SIZE(ckblk,1)
+!                     WRITE(*,*) "SIZE(ckblk,2)", SIZE(ckblk,2)
+!                     WRITE(*,*) "DKCOS"
+!                     DO i = 1, SIZE(ckblk,1)
+!                        DO j = 1, SIZE(ckblk,2)
+!                           WRITE(*,*) "ckblk(i,j)", i, j, ckblk(i,j)
+!                        END DO 
+!                     END DO
 
                   END IF
 
@@ -3739,7 +3739,7 @@ CONTAINS
             DO i = 1, 3
                IF(para_env%mepos==0) WRITE(*,*) "DIPOLE DIRECTION i IN OLD", i
                kvec(:) = twopi*cell%h_inv(i, :)
-               CALL build_berry_moment_matrix3(qs_env, cosmat, sinmat, kvec)
+               CALL build_berry_moment_matrix(qs_env, cosmat, sinmat, kvec)
                IF (qs_env%run_rtp) THEN
                   CALL get_qs_env(qs_env, rtp=rtp)
                   CALL get_rtp(rtp, mos_new=mos_new)
@@ -4825,7 +4825,7 @@ CONTAINS
 
             ! Dipole
             DO i = 1, 3
-!               IF(para_env%mepos==0) WRITE(*,*) "DIPOLE DIRECTION i", i
+               IF(para_env%mepos==0) WRITE(*,*) "DIPOLE DIRECTION i", i
                !ORGINIAL
                kvec(:) = twopi*cell%h_inv(i, :)
 !               IF(para_env%mepos==0) WRITE(*,*) "kvec(:)", kvec(:)
@@ -4846,13 +4846,13 @@ CONTAINS
 !               CALL build_berry_moment_matrix4(qs_env, cosmat, sinmat, kvec, nderivative = 1, &
 !                                               dkcos = dkcos(i)%matrix, dksin = dksin(i)%matrix)
 
-               WRITE(*,*) "t-Derivation"
-               IF(para_env%mepos==0) WRITE(*,*) "cosmat"
-               CALL dbcsr_print(cosmat, matlab_format = .TRUE.)
+!               WRITE(*,*) "t-Derivation"
+!               IF(para_env%mepos==0) WRITE(*,*) "cosmat"
+!               CALL dbcsr_print(cosmat, matlab_format = .TRUE.)
 !               IF(para_env%mepos==0) WRITE(*,*) "sinmat"
 !               CALL dbcsr_print(sinmat, matlab_format = .TRUE.)
 !               IF(para_env%mepos==0) WRITE(*,*) "dkcos"
-               CALL dbcsr_print(dkcos(i)%matrix, matlab_format = .TRUE.)
+!               CALL dbcsr_print(dkcos(i)%matrix, matlab_format = .TRUE.)
 !               IF(para_env%mepos==0) WRITE(*,*) "dksin"
 !               CALL dbcsr_print(dksin(i)%matrix, matlab_format = .TRUE.)
                              
