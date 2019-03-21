@@ -1441,13 +1441,22 @@ CONTAINS
       REAL(KIND=dp)                                      :: ds, d2s, d3s, d4s
       REAL(KIND=dp)                                      :: d1cos, d2cos, d3cos, d4cos
       REAL(KIND=dp)                                      :: d1sin, d2sin, d3sin, d4sin 
+      REAL(KIND=dp)                                      :: dx 
+      REAL(KIND=dp)                                      :: dk 
+      REAL(KIND=dp)                                      :: diffdcos 
 
-!      WRITE(*,*) "cossin3 - BEGINNING"
+      WRITE(*,*) "cossin3 - BEGINNING"
   
       rab = rbc-rac
       rab2 = SUM(rab**2)
       dab = SQRT(rab2)
       k2 = kvec(1)*kvec(1)+kvec(2)*kvec(2)+kvec(3)*kvec(3)
+
+      WRITE(*,*) "rab", rab
+      WRITE(*,*) "rab2", rab2
+      WRITE(*,*) "dab", dab
+      WRITE(*,*) "k2", k2
+
 
       IF (PRESENT(dcosab)) THEN
          da_max = 1
@@ -1488,6 +1497,11 @@ CONTAINS
 
 !   *** Loop over all pairs of primitive Gaussian-type functions ***
 
+
+      WRITE(*,*) "npgfa", npgfa
+      WRITE(*,*) "npgfb", npgfb
+
+
       na = 0
       DO ipgf = 1, npgfa
 
@@ -1521,17 +1535,33 @@ CONTAINS
             f1 = zetb(jpgf)*zetp
             f2 = 0.5_dp*zetp
 
+            WRITE(*,*) "zetp", zetp
+            WRITE(*,*) "zeta", zeta(ipgf)
+            WRITE(*,*) "zetb", zetb(jpgf)
+            WRITE(*,*) "rac", rac
+            WRITE(*,*) "rbc", rbc
+            WRITE(*,*) "rdp", zeta(ipgf)*rac+zetb(jpgf)*rbc
+
             kdp = zetp*DOT_PRODUCT(kvec, zeta(ipgf)*rac+zetb(jpgf)*rbc)
 
             r = zetp*(zeta(ipgf)*rac+zetb(jpgf)*rbc)
 
+            WRITE(*,*) "kdp", kdp
+            WRITE(*,*) "r", r
+
 !       *** Calculate the basic two-center cos/sin integral [s|cos/sin|s] ***
 
             s = f0*EXP(-zeta(ipgf)*f1*rab2)*EXP(-0.25_dp*k2*zetp)
-            
+
+            WRITE(*,*) "coskdp", COS(kdp)
+            WRITE(*,*) "sinkdp", SIN(kdp)
+            WRITE(*,*) "s", s
+
             sc(1, 1) = s*COS(kdp)
             ss(1, 1) = s*SIN(kdp)
 
+            WRITE(*,*) "sc(1,1)", sc(1,1)
+            WRITE(*,*) "ss(1,1)", ss(1,1)
 
             ! We introduce a derivation variable t 
             !
@@ -1575,6 +1605,8 @@ CONTAINS
             IF (PRESENT(dksc) .AND. PRESENT(dkss)) THEN
                dsc(1,1) = -f2*k2*sc(1,1) - kdp*ss(1,1) 
                dss(1,1) = -f2*k2*ss(1,1) + kdp*sc(1,1) 
+               WRITE(*,*) "dsc(1,1)", dsc(1,1)
+               WRITE(*,*) "dss(1,1)", dss(1,1)
             END IF
 
            ! d^2/dt^2 (sc) = -f2*sc(1,1) - f2*k2*dsc(1,1) - kdp*dss(1,1)
@@ -1600,6 +1632,8 @@ CONTAINS
             d3s = f2**2*k2**2*(3 - f2*k2)*s
             d4s = f2**2*k2**2*(f2**2*k2**2 - 6*f2*k2 + 3)*s
 
+            WRITE(*,*) "ds", ds
+
             d1cos = (-1)*kdp*SIN(kdp)
             d2cos = (-1)*kdp**2*COS(kdp) 
             d3cos = kdp**3*SIN(kdp)
@@ -1609,6 +1643,12 @@ CONTAINS
             d2sin = (-1)*kdp**2*SIN(kdp)
             d3sin = (-1)*kdp**3*COS(kdp)
             d4sin = kdp**4*SIN(kdp)
+
+!            WRITE(*,*) "dsc(1,1)exp", ds*COS(kdp) + s*d1cos
+!            WRITE(*,*) "dss(1,1)exp", ds*SIN(kdp) + s*d1sin
+
+!            WRITE(*,*) "dsc(1,1)exp"
+!            WRITE(*,*) "dss(1,1)exp"
 
 !            IF (PRESENT(dksc)) THEN
 !               dsc(1,1) = ds*COS(kdp) + s*d1cos
@@ -1635,10 +1675,44 @@ CONTAINS
 ! -----------------------------------------------------------------------------
 ! -----------------------------------------------------------------------------
 
+            dx = 1.0E-7_dp
+
+!            d1cos = (COS(dk + dx) - COS(dk - dx))/(2.0_dp*dx)
+!            d1sin = (SIN(dk + dx) - SIN(dk - dx))/(2.0_dp*dx)
+
+
+            ! Overwrite analytical with numerical derivative
+!            dsc(1,1) = ds*COS(kdp) + s*d1cos
+!            dss(1,1) = ds*SIN(kdp) + s*d1sin
+
+
+            ! Write numerical derivative
+!            WRITE(*,*) "dsc(1,1)exp", ds*COS(kdp) + s*d1cos
+!            WRITE(*,*) "dss(1,1)exp", ds*SIN(kdp) + s*d1sin
+
+
+            dk = 0.0_dp
+            diffdcos = 0.0_dp
+            WRITE(*,*) "dk, numderiv, anaderiv, DIFF"
+!            DO WHILE (dk <= 3.15_dp ) 
+!            
+!               d1cos = (COS(dk + dx) - COS(dk - dx))/(2.0_dp*dx)
+!               d1sin = (SIN(dk + dx) - SIN(dk - dx))/(2.0_dp*dx)
+!
+!               diffdcos = ABS(d1cos + SIN(dk))
+!
+!               WRITE(*,*) dk, d1cos, -SIN(dk), diffdcos 
+!
+!               dk = dk + 0.01_dp
+!            end DO
+
+! -----------------------------------------------------------------------------
+! -----------------------------------------------------------------------------
+
 !       *** Recurrence steps: [s|O|s] -> [a|O|b] ***
 
             IF (la_max > 0) THEN
-!            WRITE(*,*) "la_max > 0", la_max
+            WRITE(*,*) "la_max > 0", la_max
 
 !         *** Vertical recurrence steps: [s|O|s] -> [a|O|s] ***
 
@@ -1653,6 +1727,13 @@ CONTAINS
                ss(3, 1) = rap(2)*ss(1, 1)+f2*kvec(2)*sc(1, 1)
                ss(4, 1) = rap(3)*ss(1, 1)+f2*kvec(3)*sc(1, 1)
 
+               WRITE(*,*) "sc(2,1)", sc(2, 1)
+               WRITE(*,*) "sc(3,1)", sc(3, 1)
+               WRITE(*,*) "sc(4,1)", sc(4, 1)
+               WRITE(*,*) "ss(2,1)", ss(2, 1)
+               WRITE(*,*) "ss(3,1)", ss(3, 1)
+               WRITE(*,*) "ss(4,1)", ss(4, 1)
+
                IF (PRESENT(dksc) .AND. PRESENT(dkss)) THEN
                   dsc(2, 1) = rap(1)*dsc(1, 1)-f2*kvec(1)*ss(1, 1)-f2*kvec(1)*dss(1, 1)
                   dsc(3, 1) = rap(2)*dsc(1, 1)-f2*kvec(2)*ss(1, 1)-f2*kvec(2)*dss(1, 1)
@@ -1661,6 +1742,14 @@ CONTAINS
                   dss(3, 1) = rap(2)*dss(1, 1)+f2*kvec(2)*sc(1, 1)+f2*kvec(2)*dsc(1, 1)
                   dss(4, 1) = rap(3)*dss(1, 1)+f2*kvec(3)*sc(1, 1)+f2*kvec(3)*dsc(1, 1)
                END IF
+
+               WRITE(*,*) "dsc(2,1)", dsc(2, 1)
+               WRITE(*,*) "dsc(3,1)", dsc(3, 1)
+               WRITE(*,*) "dsc(4,1)", dsc(4, 1)
+               WRITE(*,*) "dss(2,1)", dss(2, 1)
+               WRITE(*,*) "dss(3,1)", dss(3, 1)
+               WRITE(*,*) "dss(4,1)", dss(4, 1)
+
                IF (PRESENT(ddksc) .AND. PRESENT(ddkss)) THEN
                   ddsc(2, 1) = rap(1)*ddsc(1, 1)-2*f2*kvec(1)*dss(1, 1)-f2*kvec(1)*ddss(1, 1)
                   ddsc(3, 1) = rap(2)*ddsc(1, 1)-2*f2*kvec(2)*dss(1, 1)-f2*kvec(2)*ddss(1, 1)
@@ -1690,7 +1779,7 @@ CONTAINS
 !         ***           + [a-1i|dO|s]                               ***
 
                DO la = 2, la_max
-!                  WRITE(*,*) "la_max >= 2", la, la_max
+                  WRITE(*,*) "la_max >= 2", la, la_max
 
 !           *** Increase the angular momentum component z of function a ***
 
@@ -3686,6 +3775,15 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(3)                        :: r 
       REAL(KIND=dp), DIMENSION(ncoset(la_max_set+1), ncoset(lb_max), 3) :: dsc, dss
       REAL(KIND=dp), DIMENSION(ncoset(la_max_set+1), ncoset(lb_max), 6) :: ddsc, ddss
+      ! fbelle
+      REAL(KIND=dp)                                      :: dsx, dsy, dsz
+      REAL(KIND=dp)                                      :: d1cosx, d1cosy, d1cosz
+      REAL(KIND=dp)                                      :: d1sinx, d1siny, d1sinz
+      REAL(KIND=dp)                                      :: kdpxp, kdpyp, kdpzp
+      REAL(KIND=dp)                                      :: kdpxm, kdpym, kdpzm
+      REAL(KIND=dp)                                      :: dx 
+      REAL(KIND=dp)                                      :: dk 
+      REAL(KIND=dp)                                      :: diffdcos 
 
 !      WRITE(*,*) "cossin2 - BEGINNING"
 
@@ -3693,6 +3791,10 @@ CONTAINS
       rab2 = SUM(rab**2)
       dab = SQRT(rab2)
       k2 = kvec(1)*kvec(1)+kvec(2)*kvec(2)+kvec(3)*kvec(3)
+
+      WRITE(*,*) "rab", rab
+      WRITE(*,*) "rac", rac
+      WRITE(*,*) "rbc", rbc
 
       IF (PRESENT(dcosab)) THEN
          da_max = 1
@@ -3772,11 +3874,21 @@ CONTAINS
 
             r = zetp*(zeta(ipgf)*rac+zetb(jpgf)*rbc)
 
+            WRITE(*,*) "kdp", kdp
+            WRITE(*,*) "r", r
+
+
 !       *** Calculate the basic two-center cos/sin integral [s|cos/sin|s] ***
 
             s = f0*EXP(-zeta(ipgf)*f1*rab2)*EXP(-0.25_dp*k2*zetp)
             sc(1, 1) = s*COS(kdp)
             ss(1, 1) = s*SIN(kdp)
+
+            WRITE(8,*) "s", s
+            WRITE(*,*) "coskdp", COS(kdp)
+            WRITE(*,*) "sinkdp", SIN(kdp)
+            WRITE(*,*) "sc(1,1)", sc(1,1)
+            WRITE(*,*) "ss(1,1)", ss(1,1)
 
             IF (PRESENT(dksc)) THEN
                ! dsc/dk1
@@ -3785,15 +3897,19 @@ CONTAINS
                dsc(1,1,2) = -f2*kvec(2)*sc(1,1) - r(2)*ss(1,1) 
                ! dsc/dk3
                dsc(1,1,3) = -f2*kvec(3)*sc(1,1) - r(3)*ss(1,1)
-            
-            END IF
-            IF (PRESENT(dkss)) THEN
                ! dss/dk1
                dss(1,1,1) = -f2*kvec(1)*ss(1,1) + r(1)*sc(1,1) 
                ! dss/dk2
                dss(1,1,2) = -f2*kvec(2)*ss(1,1) + r(2)*sc(1,1) 
                ! dss/dk3
                dss(1,1,3) = -f2*kvec(3)*ss(1,1) + r(3)*sc(1,1) 
+
+               WRITE(*,*) "dsc(1,1,1)", dsc(1,1,1)
+               WRITE(*,*) "dsc(1,1,2)", dsc(1,1,2)
+               WRITE(*,*) "dsc(1,1,3)", dsc(1,1,3)
+               WRITE(*,*) "dss(1,1,1)", dss(1,1,1)
+               WRITE(*,*) "dss(1,1,2)", dss(1,1,2)
+               WRITE(*,*) "dss(1,1,3)", dss(1,1,3)
             END IF
 
             IF (PRESENT(ddksc)) THEN
@@ -3825,6 +3941,88 @@ CONTAINS
                ! d(dss(1,1,3)) / dk3
                ddss(1,1,6) = -f2*ss(1,1) - f2*kvec(3)*dss(1,1,3) + r(3)*dsc(1,1,3)
             END IF
+
+
+! -----------------------------------------------------------------------------
+! Just a try just DUMPED THI HERE, DELETE ASAP
+! -----------------------------------------------------------------------------
+
+            ! What will be derived
+            ! d/dk s = ds = -f2*s 
+            ! d/dk cos(kdp) = dcos = (-1)*(r_i)*sin(kdp)
+            ! d/dk sin(kdp) = dsin = cos(kdp)
+            
+            dx = 1.0E-5_dp
+            WRITE(*,*) "dx", dx
+
+            dsx = -f2*kvec(1)*s
+            dsy = -f2*kvec(2)*s
+            dsz = -f2*kvec(3)*s
+
+            WRITE(*,*) "dsx", dsx
+            WRITE(*,*) "dsy", dsy
+            WRITE(*,*) "dsz", dsz
+
+!            d1cos = (-1)*kdp*SIN(kdp)
+!            d1sin = kdp*COS(kdp)
+
+            !kdp = zetp*DOT_PRODUCT(kvec, zeta(ipgf)*rac+zetb(jpgf)*rbc)
+
+            kdpxp = (kvec(1)+dx)*r(1) + kvec(2)*r(2) + kvec(3)*r(3)
+            kdpyp = (kvec(2)+dx)*r(2) + kvec(1)*r(1) + kvec(3)*r(3)
+            kdpzp = (kvec(3)+dx)*r(3) + kvec(1)*r(1) + kvec(2)*r(2)
+            kdpxm = (kvec(1)-dx)*r(1) + kvec(2)*r(2) + kvec(3)*r(3)
+            kdpym = (kvec(2)-dx)*r(2) + kvec(1)*r(1) + kvec(3)*r(3)
+            kdpzm = (kvec(3)-dx)*r(3) + kvec(1)*r(1) + kvec(2)*r(2)
+
+            d1cosx = (COS(kdpxp) - COS(kdpxm))/(2.0_dp*dx)
+            d1cosy = (COS(kdpyp) - COS(kdpym))/(2.0_dp*dx)
+            d1cosz = (COS(kdpzp) - COS(kdpzm))/(2.0_dp*dx)
+            d1sinx = (SIN(kdpxp) - SIN(kdpxm))/(2.0_dp*dx)
+            d1siny = (SIN(kdpyp) - SIN(kdpym))/(2.0_dp*dx)
+            d1sinz = (SIN(kdpzp) - SIN(kdpzm))/(2.0_dp*dx)
+
+            IF (PRESENT(dksc) .AND. PRESENT(dkss)) THEN
+               ! Delta = analytic - numeric
+               WRITE(*,*) "dscxdelta", dsc(1,1,1) - dsx*COS(kdp) - s*d1cosx
+               WRITE(*,*) "dscydelta", dsc(1,1,2) - dsy*COS(kdp) - s*d1cosy
+               WRITE(*,*) "dsczdelta", dsc(1,1,3) - dsz*COS(kdp) - s*d1cosz
+               WRITE(*,*) "dssxdelta", dss(1,1,1) - dsx*SIN(kdp) - s*d1sinx
+               WRITE(*,*) "dssydelta", dss(1,1,2) - dsy*SIN(kdp) - s*d1siny
+               WRITE(*,*) "dsszdelta", dss(1,1,3) - dsz*SIN(kdp) - s*d1sinz
+               ! overwrite analytic with numerical result
+!               dsc(1,1,1) =  dsx*COS(kdp) + s*d1cosx
+!               dsc(1,1,2) =  dsy*COS(kdp) + s*d1siny
+!               dsc(1,1,3) =  dsz*COS(kdp) + s*d1sinz
+!               dss(1,1,1) =  dsx*SIN(kdp) + s*d1sinx
+!               dss(1,1,2) =  dsy*SIN(kdp) + s*d1siny
+!               dss(1,1,3) =  dsz*SIN(kdp) + s*d1sinz
+               WRITE(*,*) "dsc(1,1,1)exp", dsx*COS(kdp) + s*d1cosx
+               WRITE(*,*) "dsc(1,1,2)exp", dsy*COS(kdp) + s*d1cosy
+               WRITE(*,*) "dsc(1,1,3)exp", dsz*COS(kdp) + s*d1cosz
+               WRITE(*,*) "dss(1,1,1)exp", dsx*SIN(kdp) + s*d1sinx
+               WRITE(*,*) "dss(1,1,2)exp", dsy*SIN(kdp) + s*d1siny
+               WRITE(*,*) "dss(1,1,3)exp", dsz*SIN(kdp) + s*d1sinz
+
+            END IF
+
+            dk = 0.0_dp
+            diffdcos = 0.0_dp
+            WRITE(*,*) "dk, numderiv, anaderiv, DIFF"
+!            DO WHILE (dk <= 3.15_dp ) 
+!            
+!               d1cos = (COS(dk + dx) - COS(dk - dx))/(2.0_dp*dx)
+!               d1sin = (SIN(dk + dx) - SIN(dk - dx))/(2.0_dp*dx)
+!
+!               diffdcos = ABS(d1cos + SIN(dk))
+!
+!               WRITE(*,*) dk, d1cos, -SIN(dk), diffdcos 
+!
+!               dk = dk + 0.01_dp
+!            end DO
+
+
+
 
 !       *** Recurrence steps: [s|O|s] -> [a|O|b] ***
 
