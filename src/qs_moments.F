@@ -4269,33 +4269,6 @@ CONTAINS
 !> \param nmoments ...
 !> \param reference ...
 !> \param ref_point ...
-!> \param unit_number ... 
-! **************************************************************************************************
-!   SUBROUTINE qs_moment_berry_num(qs_env, magnetic, nmoments, reference, ref_point, unit_number)
-!
-!      TYPE(qs_environment_type), POINTER                 :: qs_env
-!      LOGICAL, INTENT(IN)                                :: magnetic
-!      INTEGER, INTENT(IN)                                :: nmoments, reference
-!      REAL(dp), DIMENSION(:), POINTER                    :: ref_point
-!      INTEGER, INTENT(IN)                                :: unit_number
-!
-!      CHARACTER(LEN=*), PARAMETER :: routineN = 'qs_moment_berry_num', &
-!         routineP = moduleN//':'//routineN
-!
-!
-!
-!
-!
-!   END SUBROUTINE qs_moment_berry_num
-
-
-! **************************************************************************************************
-!> \brief ...
-!> \param qs_env ...
-!> \param magnetic ...
-!> \param nmoments ...
-!> \param reference ...
-!> \param ref_point ...
 !> \param unit_number ...
 ! **************************************************************************************************
    SUBROUTINE qs_moment_berry_phase2(qs_env, magnetic, nmoments, reference, ref_point, unit_number)
@@ -4695,9 +4668,6 @@ CONTAINS
             IF(para_env%mepos==0) WRITE(*,*) REPEAT("-", 27)
             ! NEW NEW NEW NEW 
 
-
-
-
          CASE (2)
             ! Quadrupole
             CPABORT("Berry phase moments bigger than 1 not implemented")
@@ -4713,12 +4683,8 @@ CONTAINS
       END DO
 
       ! electronic contribution
-
       ria = twopi*REAL(nmotot, dp)*occ*MATMUL(cell%h_inv, rcc)
       xphase = CMPLX(COS(ria), SIN(ria), dp)
-
-!      IF(para_env%mepos==0) WRITE(*,*) "Reaxphase", REAL(xphase,dp)
-!      IF(para_env%mepos==0) WRITE(*,*) "Imgxphase", AIMAG(xphase)
 
       ! charge
       trace = 0.0_dp
@@ -4780,7 +4746,6 @@ CONTAINS
                                               reference, ref_point, nderivative = 1, &
                                                dkcos = dkcos(i)%matrix, dksin = dksin(i)%matrix)
 
-
 !               ! ik-derivative
 !               CALL build_berry_moment_matrix2(qs_env, cosmat, sinmat, kvec, nderivative = 1,&
 !                                               dkcos = dkcos, dksin = dksin)
@@ -4800,16 +4765,6 @@ CONTAINS
 !               IF(para_env%mepos==0) WRITE(*,*) "dkcos"
 !               CALL dbcsr_print(dkcos(i)%matrix, matlab_format = .TRUE.)
 !               IF(para_env%mepos==0) WRITE(*,*) "dksin"
-!               CALL dbcsr_print(dksin(i)%matrix, matlab_format = .TRUE.)
-                             
-!               ! d/dk (a|e^(ikr)|b)
-!               CALL build_berry_moment_matrix4(qs_env, cosmat, sinmat, kvec, nderivative = 1, &
-!                                               dkcos = dkcos(i)%matrix, dksin = dksin(i)%matrix)
-
-!               WRITE(*,*) "t-recursion-derivation"                             
-!               CALL dbcsr_print(cosmat, matlab_format = .TRUE.)
-!               CALL dbcsr_print(sinmat, matlab_format = .TRUE.)
-!               CALL dbcsr_print(dkcos(i)%matrix, matlab_format = .TRUE.)
 !               CALL dbcsr_print(dksin(i)%matrix, matlab_format = .TRUE.)
 
                ! rotation onto MOs 
