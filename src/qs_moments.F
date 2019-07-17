@@ -24,11 +24,15 @@ MODULE qs_moments
    USE block_p_types,                   ONLY: block_p_type
    USE cell_types,                      ONLY: cell_type,&
                                               pbc
-   USE cp_cfm_basic_linalg,             ONLY: cp_cfm_lu_decompose
+   USE cp_cfm_basic_linalg,             ONLY: cp_cfm_lu_decompose,&
+                                              cp_cfm_gemm, &
+                                              cp_cfm_lu_invert, &
+                                              cp_cfm_trace
    USE cp_cfm_types,                    ONLY: cp_cfm_create,&
                                               cp_cfm_get_info,&
                                               cp_cfm_p_type,&
-                                              cp_cfm_release
+                                              cp_cfm_release,&
+                                              cp_cfm_to_fm
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_sm_fm_multiply,&
@@ -37,6 +41,7 @@ MODULE qs_moments
                                               cp_fm_to_dbcsr_row_template,&
                                               dbcsr_allocate_matrix_set,&
                                               dbcsr_deallocate_matrix_set
+   USE cp_fm_basic_linalg,              ONLY: cp_fm_scale
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
                                               cp_fm_struct_double,&
                                               cp_fm_struct_release,&
@@ -46,23 +51,28 @@ MODULE qs_moments
                                               cp_fm_p_type,&
                                               cp_fm_release,&
                                               cp_fm_set_all,&
-                                              cp_fm_type
+                                              cp_fm_type,&
+                                              cp_fm_write_formatted
    USE cp_gemm_interface,               ONLY: cp_gemm
    USE cp_para_types,                   ONLY: cp_para_env_type
    USE cp_result_methods,               ONLY: cp_results_erase,&
                                               put_results
    USE cp_result_types,                 ONLY: cp_result_type
    USE dbcsr_api,                       ONLY: &
-        dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_desymmetrize, &
-        dbcsr_distribution_type, dbcsr_dot, dbcsr_get_block_p, dbcsr_multiply, dbcsr_p_type, &
-        dbcsr_set, dbcsr_trace, dbcsr_type, dbcsr_type_symmetric
+        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_desymmetrize, &
+        dbcsr_distribution_type, dbcsr_dot, dbcsr_get_block_p, dbcsr_multiply, dbcsr_norm, &
+        dbcsr_print, dbcsr_p_type, dbcsr_scale, dbcsr_set, dbcsr_trace, dbcsr_type, &
+        dbcsr_type_symmetric
    USE distribution_1d_types,           ONLY: distribution_1d_type
    USE kinds,                           ONLY: default_string_length,&
                                               dp
    USE kpoint_types,                    ONLY: get_kpoint_info,&
                                               kpoint_type
    USE mathconstants,                   ONLY: pi,&
-                                              twopi
+                                              twopi,&
+                                              z_one,&
+                                              z_mone,&
+                                              z_zero
    USE message_passing,                 ONLY: mp_sum
    USE moments_utils,                   ONLY: get_reference_point
    USE orbital_pointers,                ONLY: current_maxl,&
@@ -804,8 +814,6 @@ CONTAINS
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       LOGICAL                                            :: floating, ghost
 
-      IF(para_env%mepos==0) WRITE(*,*) "cumulant1_numerical_nuclear_START"      
-      CALL timeset(routineN, handle)
 
       ! restrict maximum moment available
       nmom = MIN(nmoments, 1)
@@ -818,6 +826,9 @@ CONTAINS
                       particle_set=particle_set, &
                       qs_kind_set=qs_kind_set, &
                       para_env=para_env)
+                   
+      IF(para_env%mepos==0) WRITE(*,*) "cumulant1_numerical_nuclear_START"      
+      CALL timeset(routineN, handle)
 
       ! Deviation
       dx = 1.0E-7
@@ -3276,7 +3287,7 @@ CONTAINS
       ! charge
       trace = 0.0_dp
       DO ispin = 1, dft_control%nspins
-         CALL dbcsr_trace(rho_ao(ispin)%matrix, matrix_s(1)%matrix, trace)
+         CALL dbcsr_dot(rho_ao(ispin)%matrix, matrix_s(1)%matrix, trace)
          rmom(1, 1) = rmom(1, 1)+trace
       END DO
 
@@ -4155,7 +4166,7 @@ CONTAINS
       ! charge
       trace = 0.0_dp
       DO ispin = 1, dft_control%nspins
-         CALL dbcsr_trace(rho_ao(ispin)%matrix, matrix_s(1)%matrix, trace)
+         CALL dbcsr_dot(rho_ao(ispin)%matrix, matrix_s(1)%matrix, trace)
          rmom(1, 1) = rmom(1, 1)+trace
       END DO
 
@@ -5202,7 +5213,7 @@ CONTAINS
       ! charge
       trace = 0.0_dp
       DO ispin = 1, dft_control%nspins
-         CALL dbcsr_trace(rho_ao(ispin)%matrix, matrix_s(1)%matrix, trace)
+         CALL dbcsr_dot(rho_ao(ispin)%matrix, matrix_s(1)%matrix, trace)
          rmom(1, 1) = rmom(1, 1)+trace
          newrmom(1, 1) = newrmom(1, 1)+trace
       END DO
@@ -6273,7 +6284,7 @@ CONTAINS
 
       TYPE(dbcsr_type)                                   :: cosmat, sinmat
       TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
-      TYPE(cp_fm_p_type), DIMENSION(:, :), POINTER       :: op_fm_set
+      TYPE(cp_fm_p_type), DIMENSION(:, :)                :: op_fm_set
       TYPE(cp_fm_p_type), DIMENSION(:), POINTER          :: opvec
 
       INTEGER                                            :: i, nao, nmo
