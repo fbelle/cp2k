@@ -13,7 +13,7 @@ MODULE qs_energy
    USE almo_scf,                        ONLY: almo_entry_scf
    USE cp_control_types,                ONLY: dft_control_type
    USE dm_ls_scf,                       ONLY: ls_scf
-   USE kg_energy_corrections,           ONLY: kg_energy_correction
+   USE ec_energy_corrections,           ONLY: ec_energy_correction
    USE lri_environment_methods,         ONLY: lri_print_stat
    USE qs_energy_init,                  ONLY: qs_energies_init
    USE qs_energy_types,                 ONLY: qs_energy_type
@@ -90,12 +90,13 @@ CONTAINS
 
             ! if calculate forces, time to compute the w matrix
             CALL qs_energies_compute_matrix_w(qs_env, my_calc_forces)
-
          END IF
 
-         IF (dft_control%qs_control%do_kg) THEN
-            ! Check for energy correction
-            CALL kg_energy_correction(qs_env, calculate_forces=my_calc_forces)
+         ! Check for energy correction
+         IF (dft_control%qs_control%do_ec) THEN
+            !fbelle write
+            ! WRITE(*,*) "qs_energy - ENERGY CORRECTION"
+            CALL ec_energy_correction(qs_env, calculate_forces=my_calc_forces)
          END IF
 
          IF (PRESENT(consistent_energies)) THEN

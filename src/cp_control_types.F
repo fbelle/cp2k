@@ -259,7 +259,7 @@ MODULE cp_control_types
    END TYPE admm_control_type
 
 ! **************************************************************************************************
-! \brief Control parameters for a QUICKSTEP and KIM-GORDON calculation ***
+! \brief Control parameters for a QUICKSTEP, KIM-GORDON, and HARRIS FUNCTIONAL  calculation ***
 !        eps_pgf_orb: Cutoff value for the interaction of the primitive
 !                     Gaussian-type functions (primitive basis functions).
 ! **************************************************************************************************
@@ -280,6 +280,7 @@ MODULE cp_control_types
       LOGICAL                              :: do_almo_scf
       LOGICAL                              :: do_ls_scf
       LOGICAL                              :: do_kg
+      LOGICAL                              :: do_ec
       LOGICAL                              :: commensurate_mgrids
       LOGICAL                              :: realspace_mgrids
       LOGICAL                              :: map_consistent

@@ -63,6 +63,7 @@ MODULE qs_environment
                                               distribution_1d_type
    USE distribution_methods,            ONLY: distribute_molecules_1d
    USE dm_ls_scf_create,                ONLY: ls_scf_create
+   USE ec_environment,                  ONLY: ec_env_create
    USE et_coupling_types,               ONLY: et_coupling_create
    USE ewald_environment_types,         ONLY: ewald_env_create,&
                                               ewald_env_get,&
@@ -422,6 +423,11 @@ CONTAINS
       IF (dft_control%qs_control%do_kg) THEN
          CALL cite_reference(Iannuzzi2006)
          CALL kg_env_create(qs_env, qs_env%kg_env, qs_kind_set, qs_env%input)
+      END IF
+      IF (dft_control%qs_control%do_ec) THEN
+         ! fbelle - Write
+         WRITE(*,*) "CALL ec_env_create"
+         CALL ec_env_create(qs_env, qs_env%ec_env, qs_kind_set, qs_env%input)
       END IF
 
       et_coupling_section => section_vals_get_subs_vals(qs_env%input, &

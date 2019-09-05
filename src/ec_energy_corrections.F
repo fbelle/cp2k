@@ -10,7 +10,7 @@
 !>       03.2014 created
 !> \author JGH
 ! **************************************************************************************************
-MODULE kg_energy_corrections
+MODULE ec_energy_corrections
    USE atomic_kind_types,               ONLY: atomic_kind_type,&
                                               get_atomic_kind
    USE basis_set_types,                 ONLY: get_gto_basis_set,&
@@ -46,14 +46,13 @@ MODULE kg_energy_corrections
         dbcsr_release, dbcsr_set, dbcsr_type, dbcsr_type_no_symmetry, dbcsr_type_symmetric
    USE distribution_1d_types,           ONLY: distribution_1d_type
    USE distribution_2d_types,           ONLY: distribution_2d_type
+   USE ec_environment_types,            ONLY: ec_environment_type
    USE external_potential_types,        ONLY: get_potential,&
                                               gth_potential_type,&
                                               sgp_potential_type
-   USE input_constants,                 ONLY: kg_ec_diagonalization,&
-                                              kg_ec_functional_harris
+   USE input_constants,                 ONLY: ec_diagonalization,&
+                                              ec_functional_harris
    USE input_section_types,             ONLY: section_vals_val_get
-   USE kg_environment_types,            ONLY: energy_correction_type,&
-                                              kg_environment_type
    USE kinds,                           ONLY: default_string_length,&
                                               dp
    USE mao_basis,                       ONLY: mao_generate_basis
@@ -111,14 +110,14 @@ MODULE kg_energy_corrections
 
 ! *** Global parameters ***
 
-   CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'kg_energy_corrections'
+   CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'ec_energy_corrections'
 
-   PUBLIC :: kg_energy_correction
+   PUBLIC :: ec_energy_correction
 
 CONTAINS
 
 ! **************************************************************************************************
-!> \brief Energy correction to a KG simulation
+!> \brief Energy correction to a KG OR KS simulation
 !>
 !> \param qs_env ...
 !> \param calculate_forces ...
@@ -126,75 +125,70 @@ CONTAINS
 !>       03.2014 created
 !> \author JGH
 ! **************************************************************************************************
-   SUBROUTINE kg_energy_correction(qs_env, calculate_forces)
+   SUBROUTINE ec_energy_correction(qs_env, calculate_forces)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       LOGICAL, INTENT(IN), OPTIONAL                      :: calculate_forces
 
-      CHARACTER(len=*), PARAMETER :: routineN = 'kg_energy_correction', &
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_energy_correction', &
          routineP = moduleN//':'//routineN
 
       INTEGER                                            :: handle, unit_nr
       LOGICAL                                            :: my_calc_forces
       TYPE(cp_logger_type), POINTER                      :: logger
-      TYPE(energy_correction_type), POINTER              :: ec_env
-      TYPE(kg_environment_type), POINTER                 :: kg_env
+      TYPE(ec_environment_type), POINTER                 :: ec_env
 
+      WRITE(*,*) "ec_energy_correction"
       CALL timeset(routineN, handle)
 
       my_calc_forces = .FALSE.
       IF (PRESENT(calculate_forces)) my_calc_forces = calculate_forces
 
-      NULLIFY (ec_env, kg_env)
-      CALL get_qs_env(qs_env=qs_env, kg_env=kg_env)
+      NULLIFY (ec_env)
+      CALL get_qs_env(qs_env=qs_env, ec_env=ec_env)
 
-      ! Check for energy correction
-      IF (kg_env%energy_correction) THEN
+      ec_env%etotal = 0.0_dp
+      ec_env%eband = 0.0_dp
+      ec_env%ehartree = 0.0_dp
+      ec_env%exc = 0.0_dp
+      ec_env%vhxc = 0.0_dp
+      ec_env%edispersion = 0.0_dp
 
-         ec_env => kg_env%ec_env
 
-         ec_env%etotal = 0.0_dp
-         ec_env%eband = 0.0_dp
-         ec_env%ehartree = 0.0_dp
-         ec_env%exc = 0.0_dp
-         ec_env%vhxc = 0.0_dp
-         ec_env%edispersion = 0.0_dp
 
-         logger => cp_get_default_logger()
-         IF (logger%para_env%ionode) THEN
-            unit_nr = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
-         ELSE
-            unit_nr = -1
-         ENDIF
+      logger => cp_get_default_logger()
+      IF (logger%para_env%ionode) THEN
+         unit_nr = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
+      ELSE
+         unit_nr = -1
+      ENDIF
 
-         IF (unit_nr > 0) THEN
-            WRITE (unit_nr, '(/,T2,A)') '!-----------------------------------------------------------------------------!'
-            WRITE (unit_nr, '(T2,A,A,A,A,A)') "!", REPEAT("-", 27), " KG energy correction ", REPEAT("-", 28), "!"
-         END IF
-         ! build neighbor and task lists
-         CALL ec_build_neighborlist(qs_env, ec_env)
-         CALL ec_build_core_hamiltonian(qs_env, ec_env, my_calc_forces)
-         CALL ec_build_ks_matrix(qs_env, ec_env)
-         ! MAO basis
-         IF (ec_env%mao) THEN
-            IF (ASSOCIATED(ec_env%mao_coef)) CALL dbcsr_deallocate_matrix_set(ec_env%mao_coef)
-            NULLIFY (ec_env%mao_coef)
-            CALL mao_generate_basis(qs_env, ec_env%mao_coef, ref_basis_set="HARRIS", molecular=.TRUE., &
-                                    max_iter=ec_env%mao_max_iter, eps_grad=ec_env%mao_eps_grad, unit_nr=unit_nr)
-         END IF
-         CALL ec_ks_solver(qs_env, ec_env)
-         CALL ec_energy(qs_env, ec_env, unit_nr)
-         IF (calculate_forces) THEN
-!           CALL kg_response_solver(qs_env,ec_env)
-         END IF
-         IF (unit_nr > 0) THEN
-            WRITE (unit_nr, '(/,T2,A)') '!-----------------------------------------------------------------------------!'
-         END IF
-
+      IF (unit_nr > 0) THEN
+         WRITE (unit_nr, '(/,T2,A)') '!-----------------------------------------------------------------------------!'
+         WRITE (unit_nr, '(T2,A,A,A,A,A)') "!", REPEAT("-", 27), " HARRIS energy correction ", REPEAT("-", 28), "!"
+      END IF
+      ! build neighbor and task lists
+      CALL ec_build_neighborlist(qs_env, ec_env)
+      CALL ec_build_core_hamiltonian(qs_env, ec_env, my_calc_forces)
+      CALL ec_build_ks_matrix(qs_env, ec_env)
+      ! MAO basis
+      IF (ec_env%mao) THEN
+         IF (ASSOCIATED(ec_env%mao_coef)) CALL dbcsr_deallocate_matrix_set(ec_env%mao_coef)
+         NULLIFY (ec_env%mao_coef)
+         CALL mao_generate_basis(qs_env, ec_env%mao_coef, ref_basis_set="HARRIS", molecular=.TRUE., &
+                                 max_iter=ec_env%mao_max_iter, eps_grad=ec_env%mao_eps_grad, unit_nr=unit_nr)
+      END IF
+      CALL ec_ks_solver(qs_env, ec_env)
+      CALL ec_energy(qs_env, ec_env, unit_nr)
+      IF (calculate_forces) THEN
+!        CALL kg_response_solver(qs_env,ec_env)
+      END IF
+      IF (unit_nr > 0) THEN
+         WRITE (unit_nr, '(/,T2,A)') '!-----------------------------------------------------------------------------!'
       END IF
 
       CALL timestop(handle)
 
-   END SUBROUTINE kg_energy_correction
+   END SUBROUTINE ec_energy_correction
 
 ! **************************************************************************************************
 !> \brief Construction of the Core Hamiltonian Matrix
@@ -206,7 +200,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE ec_build_core_hamiltonian(qs_env, ec_env, calculate_forces)
       TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(energy_correction_type), POINTER              :: ec_env
+      TYPE(ec_environment_type), POINTER                 :: ec_env
       LOGICAL, INTENT(IN)                                :: calculate_forces
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'ec_build_core_hamiltonian', &
@@ -311,7 +305,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE ec_build_ks_matrix(qs_env, ec_env)
       TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(energy_correction_type), POINTER              :: ec_env
+      TYPE(ec_environment_type), POINTER                 :: ec_env
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'ec_build_ks_matrix', &
          routineP = moduleN//':'//routineN
@@ -477,7 +471,7 @@ CONTAINS
    SUBROUTINE ec_ks_solver(qs_env, ec_env)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(energy_correction_type), POINTER              :: ec_env
+      TYPE(ec_environment_type), POINTER                 :: ec_env
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'ec_ks_solver', routineP = moduleN//':'//routineN
 
@@ -512,7 +506,7 @@ CONTAINS
       ENDIF
 
       SELECT CASE (ec_env%ks_solver)
-      CASE (kg_ec_diagonalization)
+      CASE (ec_diagonalization)
          CALL ec_diag_solver(qs_env, ksmat, smat, pmat)
       CASE DEFAULT
          CPASSERT(.FALSE.)
@@ -539,7 +533,7 @@ CONTAINS
 
    SUBROUTINE mao_create_matrices(ec_env, ksmat, smat, pmat)
 
-      TYPE(energy_correction_type), POINTER              :: ec_env
+      TYPE(ec_environment_type), POINTER                 :: ec_env
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: ksmat, smat, pmat
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'mao_create_matrices', &
@@ -606,7 +600,7 @@ CONTAINS
 
    SUBROUTINE mao_release_matrices(ec_env, ksmat, smat, pmat)
 
-      TYPE(energy_correction_type), POINTER              :: ec_env
+      TYPE(ec_environment_type), POINTER                 :: ec_env
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: ksmat, smat, pmat
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'mao_release_matrices', &
@@ -763,7 +757,7 @@ CONTAINS
    SUBROUTINE ec_energy(qs_env, ec_env, unit_nr)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(energy_correction_type)                       :: ec_env
+      TYPE(ec_environment_type), POINTER                 :: ec_env
       INTEGER, INTENT(IN)                                :: unit_nr
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'ec_energy', routineP = moduleN//':'//routineN
@@ -781,7 +775,7 @@ CONTAINS
 !deb  ec_env%edispersion = ec_env%edispersion+energy
 
       SELECT CASE (ec_env%energy_functional)
-      CASE (kg_ec_functional_harris)
+      CASE (ec_functional_harris)
 
          nspins = SIZE(ec_env%matrix_ks, 1)
 
@@ -827,7 +821,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE ec_build_neighborlist(qs_env, ec_env)
       TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(energy_correction_type), POINTER              :: ec_env
+      TYPE(ec_environment_type), POINTER                 :: ec_env
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'ec_build_neighborlist', &
          routineP = moduleN//':'//routineN
@@ -955,4 +949,4 @@ CONTAINS
 
 ! **************************************************************************************************
 
-END MODULE kg_energy_corrections
+END MODULE ec_energy_corrections
