@@ -63,6 +63,7 @@ MODULE energy_corrections
    USE dm_ls_scf_methods,               ONLY: density_matrix_sign,&
                                               density_matrix_tc2,&
                                               density_matrix_trs4
+   USE ec_ao_res_solver,                ONLY: ec_ao_res
    USE ec_efield_local,                 ONLY: ec_efield_integrals,&
                                               ec_efield_local_operator
    USE ec_env_types,                    ONLY: energy_correction_type
@@ -333,7 +334,22 @@ CONTAINS
          CALL ec_build_core_hamiltonian_force(qs_env, ec_env)
          CALL ec_build_ks_matrix_force(qs_env, ec_env)
          !
+         ! fbelle
+         ! MO-solver
          CALL response_equation(qs_env, ec_env%p_env, ec_env%cpmos)
+         ! AO-solver
+         CALL ec_res_ao(qs_env, ec_env)
+         !-----------------------
+         ! this for later: 
+         !-----------------------
+         !IF (mo_solver) THEN
+         !   CALL response_equation(qs_env, ec_env%p_env, ec_env%cpmos)
+         !ELSE IF (ao_solver)
+         !   CALL ec_res_ao(qs_env, ec_env)
+         !ELSE
+         !   CPABORT("Unknown solver for response equation requested.")
+         !END IF
+         !-----------------------
          !
          CALL response_force(qs_env, ec_env%p_env, &
                              ec_env%vh_rspace, ec_env%vxc_rspace, ec_env%vtau_rspace, &
