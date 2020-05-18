@@ -235,7 +235,7 @@ CONTAINS
                     matrix_s_kp = matrix_s,&
                     para_env=para_env)
     nspins = dft_control%nspins
-    IF(para_env%mepos==0) WRITE(*,*) "build_preconditioner BEGINNING"
+    !IF(para_env%mepos==0) WRITE(*,*) "build_preconditioner BEGINNING"
 
     NULLIFY(matrix_b)
     CALL dbcsr_allocate_matrix_set(matrix_b, nspins, 1)
@@ -378,7 +378,9 @@ CONTAINS
                     para_env = para_env, &
                     sab_orb = sab_orb, &
                     rho = rho)
+    IF(para_env%mepos==0) WRITE(*,*) repeat("-",80)
     IF(para_env%mepos==0) WRITE(*,*) "ec_res_ao BEGINNING"
+    IF(para_env%mepos==0) WRITE(*,*) repeat("-",80)
     nspins = dft_control%nspins
     eps_filter = 1.0E-30_dp
     iounit = 6
@@ -517,13 +519,11 @@ CONTAINS
     ! Get righ-hand-side (RHS) operator
     !----------------------------------------
 
-!---------------
-! Test of hessian routine
-
-  CALL build_hessian_op_from_z(qs_env, matrix_ks, matrix_ps, matrix_Ax, &
-                               eps_filter)
-
-!--------------
+    !---------------
+    ! Debugging routine
+    ! Calculate hessian with Z-Matrix obtained from MO-solver
+    !CALL build_hessian_op_from_z(qs_env, matrix_ks, matrix_ps, matrix_Ax, eps_filter)
+    !--------------
 
     
 
@@ -791,9 +791,11 @@ CONTAINS
                   ps_trans = .TRUE.)
 
     ! Test Z matrix MO vs AO
+    ! Compare Frobenius norm of the two Z-Matrices 
 
     ! Z-Matrix from linres_solver (MO)
     norm_zmo = dbcsr_frobenius_norm(p_env%p1(1)%matrix)
+    ! Z-Matrix from AO-solver (AO)
     norm_zao = dbcsr_frobenius_norm(matrix_z(1, 1)%matrix)
     
     IF (para_env%mepos==0) WRITE(*,*) "|| Z (MO) ||_F :", norm_zmo
@@ -801,6 +803,7 @@ CONTAINS
     norm_res = norm_zmo - norm_zao
     IF (para_env%mepos==0) WRITE(*,*) "||Z(MO)||_F - ||Z(AO)||_F :", norm_res
 
+    ! How well does Z-Matrix solve the linear system AX=B?
     ! build Az
     CALL build_hessian_op(qs_env = qs_env, &
                           matrix_ks = matrix_ks, &   ! IN
@@ -815,12 +818,6 @@ CONTAINS
        CALL dbcsr_dot(matrix_Ax(ispin,1)%matrix, matrix_Ax(ispin,1)%matrix, norm_res)
     END DO
     IF (para_env%mepos==0) WRITE(*,*) "Tr[r_z * r_z]", norm_res
-
-    ! Z_MO - Z_AO
-    CALL dbcsr_desymmetrize(p_env%p1(1)%matrix, matrix_cg(1,1)%matrix)
-    CALL dbcsr_add(matrix_cg(1, 1)%matrix, matrix_z(1,1)%matrix, 1.0_dp, -1.0_dp)
-    norm_res = dbcsr_frobenius_norm(matrix_cg(1, 1)%matrix)
-    IF (para_env%mepos==0) WRITE(*,*) "|| Z_MO - Z_AO ||_F :", norm_res
 
     ! export z matrix
     DO ispin = 1, nspins
@@ -844,7 +841,9 @@ CONTAINS
 
     DEALLOCATE(alpha, beta, new_norm, norm_cA, norm_rr)
 
+    IF(para_env%mepos==0) WRITE(*,*) repeat("-",80)
     IF(para_env%mepos==0) WRITE(*,*) "ec_res_ao - END"
+    IF(para_env%mepos==0) WRITE(*,*) repeat("-",80)
 
     CALL timestop(handle)
 
@@ -886,7 +885,6 @@ CONTAINS
     TYPE(dft_control_type), POINTER                    :: dft_control
     REAL(KIND=dp)                                      :: chksum
     TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_bs
-    TYPE(dbcsr_type)                                   :: matrix_tmp
     TYPE(neighbor_list_set_p_type), DIMENSION(:), &
        POINTER                                         :: sab_orb
 
@@ -900,6 +898,7 @@ CONTAINS
                     sab_orb = sab_orb)
     nspins = dft_control%nspins
 
+    ! Response density B, symmetric matrix in no-symmetry type
     NULLIFY(matrix_b)
     CALL dbcsr_allocate_matrix_set(matrix_b, nspins, 1)
     DO ispin = 1, nspins
@@ -908,9 +907,9 @@ CONTAINS
                          template = matrix_s(1, 1)%matrix, &
                          matrix_type = dbcsr_type_no_symmetry)
        CALL cp_dbcsr_alloc_block_from_nbl(matrix_b(ispin, 1)%matrix, sab_orb)
-!       CALL dbcsr_copy(matrix_b(ispin,1)%matrix, matrix_ks(ispin, 1)%matrix)
        CALL dbcsr_set(matrix_b(ispin,1)%matrix, 0.0_dp)
     END DO
+    ! Matrix product B*S, non-smmetric matrix
     NULLIFY(matrix_bs)
     CALL dbcsr_allocate_matrix_set(matrix_bs, nspins, 1)
     DO ispin = 1, nspins
@@ -921,7 +920,6 @@ CONTAINS
        CALL cp_dbcsr_alloc_block_from_nbl(matrix_bs(ispin, 1)%matrix, sab_orb)
        CALL dbcsr_set(matrix_bs(ispin,1)%matrix, 0.0_dp)
     END DO
-    CALL dbcsr_create(matrix_tmp, template=matrix_s(1,1)%matrix, matrix_type=dbcsr_type_no_symmetry)
 
     ! Build intermediate density matrix
     ! B = [cg, P]_S = cg*S*P - P*S*cg
@@ -991,7 +989,6 @@ CONTAINS
        CALL qs_rho_release(rho_b)
     END IF
 
-    CALL dbcsr_release(matrix_tmp)
     CALL dbcsr_deallocate_matrix_set(matrix_b)
     CALL dbcsr_deallocate_matrix_set(matrix_bs)
 
@@ -1037,8 +1034,6 @@ CONTAINS
     TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho_g_b
     TYPE(neighbor_list_set_p_type), DIMENSION(:), &
        POINTER                                         :: sab_orb
-    REAL(KIND=dp)                                      :: exc, ehartree
-    TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho_r
 
     CALL timeset(routineN, handle)
 
@@ -1056,7 +1051,7 @@ CONTAINS
     CPASSERT(ASSOCIATED(pw_env))
 
     ! Get density matrix
-    CALL qs_rho_get(rho, rho_ao_kp = rho_ao, rho_r = rho_r)
+    CALL qs_rho_get(rho, rho_ao_kp = rho_ao)
 
     NULLIFY (auxbas_pw_pool, poisson_env, pw_pools)
     ! gets the tmp grids
@@ -1094,17 +1089,7 @@ CONTAINS
                        xc_section = xc_section)
     DO ispin = 1,nspins
        CALL pw_scale(v_xc(ispin)%pw,v_xc(ispin)%pw%pw_grid%dvol)
-       ! factor 2 here
-       !IF (nspins == 1) v_xc(1)%pw%cr3d = 2.0_dp*v_xc(1)%pw%cr3d 
     END DO
-
-    exc = pw_integrate_function(rho_r(1)%pw)
-    WRITE(*,*) "Erhor (int rho_r)", exc
-    exc = pw_integral_ab(rho_r(1)%pw, v_xc(1)%pw)
-    WRITE(*,*) "Exc (P*vxc)", exc
-    exc = pw_integrate_function(v_xc(1)%pw)
-    WRITE(*,*) "Exc (int v)", exc
-
 
 ! Hartree contribution to Hessian
 
@@ -1116,25 +1101,15 @@ CONTAINS
     END DO
     
     ! get Hartree potential from rho_tot_gspace
-    CALL pw_poisson_solve(poisson_env, rho_tot_gspace%pw, ehartree, &
+    CALL pw_poisson_solve(poisson_env, rho_tot_gspace%pw, &
                            vhartree = v_hartree_gspace%pw)
     CALL pw_transfer(v_hartree_gspace%pw, v_hartree_rspace%pw)
     CALL pw_scale(v_hartree_rspace%pw, v_hartree_rspace%pw%pw_grid%dvol)
 
-    IF(para_env%mepos==0) WRITE(*,*) "hessian_op2_non_ortho - Ehartree", ehartree
-
-    exc = pw_integrate_function(rho_r(1)%pw)
-    WRITE(*,*) "Erhor (int rho_r)", exc
-    exc = pw_integral_ab(rho_r(1)%pw, v_hartree_rspace%pw)
-    WRITE(*,*) "Eh (P*vh)", exc
-    exc = pw_integrate_function(v_hartree_rspace%pw)
-    WRITE(*,*) "Eh (int v)", exc
-
-
     ! Add v_xc + v_H
     DO ispin = 1,nspins
        CALL pw_axpy(v_hartree_rspace%pw,v_xc(ispin)%pw)
-       !CALL pw_scale(v_xc(ispin)%pw, 2.0_dp)
+       CALL pw_scale(v_xc(ispin)%pw, 2.0_dp)
     END DO
 
     NULLIFY (matrix_G)
@@ -1177,11 +1152,6 @@ CONTAINS
                      ps_trans = .FALSE.)
     END DO
 
-    !--------------
-    exc = dbcsr_frobenius_norm(matrix_G(1, 1)%matrix)
-    IF (para_env%mepos==0) WRITE(*,*) "|| GB (AO) ||_F :", exc
-    !--------------
-
     ! release pw grids
     CALL pw_pool_give_back_pw(auxbas_pw_pool, v_hartree_gspace%pw)
     CALL pw_pool_give_back_pw(auxbas_pw_pool, v_hartree_rspace%pw)
@@ -1198,12 +1168,8 @@ CONTAINS
   END SUBROUTINE hessian_op2
 
 ! ***************************************************************************************************
-!> \brief  calculate linear transformation of Hessian matrix on a trial vector (matrix) matrix_cg
-!>         Ax = [F, S]_B + [G(B), S]_Pin
-!>         Here, task is calculation of kernel G(B)
-!>         and second commutator
-!>
-!>         !!!!!!!!!!!! CALCULATE HESSIAN WITH MATRIX B GIVEN (AKA MATRIX Z)
+!> \brief  !!! same structure as subroutine build_hessian_op 
+!>             BUT takes Z-Matrix from MO calculation as response density B to calculate Hessian  
 !>
 !> \param qs_env ...
 !> \date    12.2019
@@ -1232,20 +1198,13 @@ CONTAINS
        POINTER                                         :: sab_orb
     TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_nsc, matrix_rhs
     REAL(KIND=dp)                                      :: norm_b, norm_ax, norm_res
-    ! RHS testing
-!    TYPE(cp_fm_p_type), DIMENSION(:), POINTER          :: psi_ao, psi_mo
-!    TYPE(cp_fm_struct_type), POINTER                   :: tmp_fm_struct
-!    TYPE(cp_fm_type), POINTER                          :: mo_coeff
     TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
-!    INTEGER                                            :: nao, nmo
-!    REAL(KIND=dp)                                      :: norm_ao, norm_mo
 
 !---------------------------------------------------------------------------------------
 !  Initial general setup
 !---------------------------------------------------------------------------------------
 
     CALL timeset(routineN, handle)
-    !NULLIFY (mo_coeff, mos)
     NULLIFY (mos)
 
     CALL get_qs_env(qs_env = qs_env, &
