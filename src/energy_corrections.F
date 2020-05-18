@@ -63,7 +63,7 @@ MODULE energy_corrections
    USE dm_ls_scf_methods,               ONLY: density_matrix_sign,&
                                               density_matrix_tc2,&
                                               density_matrix_trs4
-   USE ec_ao_res_solver,                ONLY: ec_ao_res
+   USE ec_ao_res_solver,                ONLY: ec_res_ao
    USE ec_efield_local,                 ONLY: ec_efield_integrals,&
                                               ec_efield_local_operator
    USE ec_env_types,                    ONLY: energy_correction_type
@@ -338,7 +338,7 @@ CONTAINS
          ! MO-solver
          CALL response_equation(qs_env, ec_env%p_env, ec_env%cpmos)
          ! AO-solver
-         CALL ec_res_ao(qs_env, ec_env)
+         CALL ec_res_ao(qs_env, ec_env, ec_env%p_env)
          !-----------------------
          ! this for later: 
          !-----------------------
@@ -987,6 +987,17 @@ CONTAINS
          CALL cp_dbcsr_sm_fm_multiply(ec_env%matrix_hz(ispin)%matrix, mo_coeff, vmos(ispin)%matrix, &
                                       norb, alpha=focc, beta=0.0_dp)
       END DO
+      !MK The Intel compiler has trouble with that pointer assignment
+      !MK ec_env%matrix_hz => matrix_v(:, 1)
+      !MK Begin explicit copy
+      CALL dbcsr_allocate_matrix_set(ec_env%matrix_hz, nspins)
+      DO ispin = 1, nspins
+         ALLOCATE (ec_env%matrix_hz(ispin)%matrix)
+         CALL dbcsr_create(ec_env%matrix_hz(ispin)%matrix, template=matrix_v(ispin, 1)%matrix)
+         CALL dbcsr_copy(ec_env%matrix_hz(ispin)%matrix, matrix_v(ispin, 1)%matrix)
+      END DO
+      CALL dbcsr_deallocate_matrix_set(matrix_v)
+      !MK End
       IF (ASSOCIATED(ec_env%cpmos)) THEN
          DO i = 1, SIZE(ec_env%cpmos)
             CALL cp_fm_release(ec_env%cpmos(i)%matrix)
