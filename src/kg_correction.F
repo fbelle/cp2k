@@ -78,6 +78,7 @@ MODULE kg_correction
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'kg_correction'
 
    PUBLIC :: kg_ekin_subset
+   PUBLIC :: create_kernel
 
 CONTAINS
 
