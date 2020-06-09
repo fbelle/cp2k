@@ -929,7 +929,7 @@ CONTAINS
                   matrix_ps = matrix_ps, &
                   matrix_out = matrix_b, &
                   eps_filter = eps_filter, &
-                  alpha = 1.0_dp, &
+                  alpha = 2.0_dp, &
                   beta = 0.0_dp,&
                   ps_trans = .TRUE.)
 
