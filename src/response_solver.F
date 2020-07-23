@@ -136,7 +136,7 @@ MODULE response_solver
                                               xc_rho_set_update
    ! fbelle
    USE ec_ao_solver,                   ONLY: ec_res_ao
-   USE ec_ao_orth_solver,              ONLY: ec_response_ao
+   USE ec_orth_solver,                 ONLY: ec_response_ao
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE

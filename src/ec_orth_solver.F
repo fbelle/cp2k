@@ -1528,4 +1528,4 @@ CONTAINS
 
    END SUBROUTINE
 
-END MODULE ec_3ao_solver
+END MODULE ec_orth_solver
