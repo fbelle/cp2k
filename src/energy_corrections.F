@@ -57,7 +57,7 @@ MODULE energy_corrections
         dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_desymmetrize, dbcsr_distribution_type, &
         dbcsr_dot, dbcsr_filter, dbcsr_get_info, dbcsr_init_p, dbcsr_multiply, dbcsr_p_type, &
         dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_type, dbcsr_type_no_symmetry, &
-        dbcsr_type_symmetric
+        dbcsr_type_symmetric, dbcsr_print
    USE distribution_1d_types,           ONLY: distribution_1d_type
    USE distribution_2d_types,           ONLY: distribution_2d_type
    USE dm_ls_scf_methods,               ONLY: density_matrix_sign,&
@@ -147,7 +147,7 @@ MODULE energy_corrections
                                               qs_rho_type
    USE qs_vxc,                          ONLY: qs_vxc_create
    USE response_solver,                 ONLY: ks_ref_potential,&
-                                              response_equation,&
+                                              response_calculation,&
                                               response_force
    USE task_list_methods,               ONLY: generate_qs_task_list
    USE task_list_types,                 ONLY: allocate_task_list,&
@@ -162,7 +162,7 @@ MODULE energy_corrections
    USE xc_rho_set_types,                ONLY: xc_rho_set_create,&
                                               xc_rho_set_release,&
                                               xc_rho_set_type,&
-                                              xc_rho_set_update
+                                              xc_rho_set_update 
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -328,29 +328,16 @@ CONTAINS
          ! dispersion through pairpotentials
          CALL ec_disp(qs_env, ec_env, calculate_forces=.FALSE.)
          CALL ec_energy(ec_env, unit_nr)
+
       END IF
       IF (calculate_forces) THEN
+
          CALL ec_disp(qs_env, ec_env, calculate_forces=.TRUE.)
          CALL ec_build_core_hamiltonian_force(qs_env, ec_env)
          CALL ec_build_ks_matrix_force(qs_env, ec_env)
-         !
-         ! fbelle
-         ! MO-solver
-         CALL response_equation(qs_env, ec_env%p_env, ec_env%cpmos)
-         ! AO-solver
-         CALL ec_res_ao(qs_env, ec_env, ec_env%p_env)
-         !-----------------------
-         ! this for later: 
-         !-----------------------
-         !IF (mo_solver) THEN
-         !   CALL response_equation(qs_env, ec_env%p_env, ec_env%cpmos)
-         !ELSE IF (ao_solver)
-         !   CALL ec_res_ao(qs_env, ec_env)
-         !ELSE
-         !   CPABORT("Unknown solver for response equation requested.")
-         !END IF
-         !-----------------------
-         !
+
+         CALL response_calculation(qs_env, ec_env, ec_env%p_env)
+
          CALL response_force(qs_env, ec_env%p_env, &
                              ec_env%vh_rspace, ec_env%vxc_rspace, ec_env%vtau_rspace, &
                              ec_env%matrix_hz)
@@ -792,24 +779,28 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'ec_build_ks_matrix_force'
 
-      INTEGER                                            :: handle, i, iounit, ispin, nao, natom, &
-                                                            norb, nspins
+      INTEGER                                            :: handle, iounit, ispin, natom, &
+                                                            nspins
+      !INTEGER                                            :: i, nao, norb
       INTEGER, DIMENSION(2, 3)                           :: bo
       LOGICAL                                            :: lsd, use_virial
-      REAL(dp)                                           :: dehartree, eexc, eovrl, focc, &
+      REAL(dp)                                           :: dehartree, eexc, eovrl, &
                                                             total_rhoout
+      !REAL(dp)                                           :: focc
       REAL(dp), ALLOCATABLE, DIMENSION(:, :)             :: ftot
       REAL(dp), DIMENSION(3)                             :: fodeb
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
-      TYPE(cp_fm_p_type), DIMENSION(:), POINTER          :: vmos
-      TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
-      TYPE(cp_fm_type), POINTER                          :: mo_coeff
+      !TYPE(cp_fm_p_type), DIMENSION(:), POINTER          :: vmos
+      !TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
+      !TYPE(cp_fm_type), POINTER                          :: mo_coeff
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(cp_para_env_type), POINTER                    :: para_env
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_p, matrix_s, matrix_v, scrm
       TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+      !TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
+       POINTER                                           :: sab_orb
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_p_type)                                    :: dv_hartree_rspace, rho_tot_gspace, &
                                                             v_hartree_gspace, v_hartree_rspace, &
@@ -826,6 +817,8 @@ CONTAINS
       TYPE(xc_derivative_set_type), POINTER              :: deriv_set
       TYPE(xc_rho_cflags_type)                           :: needs
       TYPE(xc_rho_set_type), POINTER                     :: rho1_set, rho_set
+      ! fbelle
+!      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_ps, matrix_rhs
 
       CALL timeset(routineN, handle)
 
@@ -835,7 +828,7 @@ CONTAINS
       ! get all information on the electronic density
       NULLIFY (rho, ks_env)
       CALL get_qs_env(qs_env=qs_env, rho=rho, virial=virial, dft_control=dft_control, &
-                      para_env=para_env, blacs_env=blacs_env, ks_env=ks_env)
+                      para_env=para_env, blacs_env=blacs_env, ks_env=ks_env, sab_orb=sab_orb)
 
       nspins = dft_control%nspins
       use_virial = virial%pv_availability .AND. (.NOT. virial%pv_numer)
@@ -947,6 +940,9 @@ CONTAINS
       CALL xc_rho_set_release(rho_set)
       CALL xc_rho_set_release(rho1_set)
       !
+!----------------------------------------------------------------------------------
+! Original!
+!----------------------------------------------------------------------------------
       CALL get_qs_env(qs_env=qs_env, rho=rho, matrix_s_kp=matrix_s)
       NULLIFY (matrix_v)
       CALL dbcsr_allocate_matrix_set(matrix_v, nspins, 1)
@@ -959,6 +955,7 @@ CONTAINS
       CALL qs_rho_get(rho, rho_ao_kp=matrix_p)
       ! vtot = v_xc(ispin) + dv_hartree
       IF (debug_forces) fodeb(1:3) = force(1)%rho_elec(1:3, 1)
+
       DO ispin = 1, nspins
          CALL pw_scale(v_xc(ispin)%pw, v_xc(ispin)%pw%pw_grid%dvol)
          CALL pw_axpy(dv_hartree_rspace%pw, v_xc(ispin)%pw)
@@ -972,25 +969,48 @@ CONTAINS
          CALL mp_sum(fodeb, para_env%group)
          IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Pin*dKdrho", fodeb
       END IF
-      ! CPKS vector
-      !
-      ! sign is changed in linres_solver!
-      ! Projector Q applied in linres_solver!
-      focc = 2.0_dp
-      IF (nspins == 1) focc = 4.0_dp
-      CALL get_qs_env(qs_env=qs_env, mos=mos)
-      ALLOCATE (vmos(nspins))
-      DO ispin = 1, nspins
-         CALL get_mo_set(mo_set=mos(ispin)%mo_set, mo_coeff=mo_coeff)
-         CALL cp_fm_get_info(mo_coeff, matrix_struct=fm_struct, nrow_global=nao, ncol_global=norb)
-         NULLIFY (vmos(ispin)%matrix)
-         CALL cp_fm_create(vmos(ispin)%matrix, fm_struct)
-         CALL cp_dbcsr_sm_fm_multiply(matrix_v(ispin, 1)%matrix, mo_coeff, vmos(ispin)%matrix, &
-                                      norb, alpha=focc, beta=0.0_dp)
-      END DO
-      !MK The Intel compiler has trouble with that pointer assignment
-      !MK ec_env%matrix_hz => matrix_v(:, 1)
-      !MK Begin explicit copy
+!---------------------------------------
+! original
+!---------------------------------------
+!      ! CPKS vector
+!      !
+!      ! sign is changed in linres_solver!
+!      ! Projector Q applied in linres_solver!
+!      focc = 2.0_dp
+!      IF (nspins == 1) focc = 4.0_dp
+!      CALL get_qs_env(qs_env=qs_env, mos=mos)
+!      ALLOCATE (vmos(nspins))
+!      DO ispin = 1, nspins
+!         CALL get_mo_set(mo_set=mos(ispin)%mo_set, mo_coeff=mo_coeff)
+!         CALL cp_fm_get_info(mo_coeff, matrix_struct=fm_struct, nrow_global=nao, ncol_global=norb)
+!         NULLIFY (vmos(ispin)%matrix)
+!         CALL cp_fm_create(vmos(ispin)%matrix, fm_struct)
+!         CALL cp_dbcsr_sm_fm_multiply(matrix_v(ispin, 1)%matrix, mo_coeff, vmos(ispin)%matrix, &
+!                                      norb, alpha=focc, beta=0.0_dp)
+!      END DO
+!      !MK The Intel compiler has trouble with that pointer assignment
+!      !MK ec_env%matrix_hz => matrix_v(:, 1)
+!      !MK Begin explicit copy
+!      CALL dbcsr_allocate_matrix_set(ec_env%matrix_hz, nspins)
+!      DO ispin = 1, nspins
+!         ALLOCATE (ec_env%matrix_hz(ispin)%matrix)
+!         CALL dbcsr_create(ec_env%matrix_hz(ispin)%matrix, template=matrix_v(ispin, 1)%matrix)
+!         CALL dbcsr_copy(ec_env%matrix_hz(ispin)%matrix, matrix_v(ispin, 1)%matrix)
+!      END DO
+!      CALL dbcsr_deallocate_matrix_set(matrix_v)
+!      !MK End
+!      IF (ASSOCIATED(ec_env%cpmos)) THEN
+!         DO i = 1, SIZE(ec_env%cpmos)
+!            CALL cp_fm_release(ec_env%cpmos(i)%matrix)
+!         END DO
+!         DEALLOCATE (ec_env%cpmos)
+!         NULLIFY (ec_env%cpmos)
+!      END IF
+!      ec_env%cpmos => vmos
+!---------------------------------------
+! modified
+!---------------------------------------
+      ! RHS
       CALL dbcsr_allocate_matrix_set(ec_env%matrix_hz, nspins)
       DO ispin = 1, nspins
          ALLOCATE (ec_env%matrix_hz(ispin)%matrix)
@@ -998,15 +1018,7 @@ CONTAINS
          CALL dbcsr_copy(ec_env%matrix_hz(ispin)%matrix, matrix_v(ispin, 1)%matrix)
       END DO
       CALL dbcsr_deallocate_matrix_set(matrix_v)
-      !MK End
-      IF (ASSOCIATED(ec_env%cpmos)) THEN
-         DO i = 1, SIZE(ec_env%cpmos)
-            CALL cp_fm_release(ec_env%cpmos(i)%matrix)
-         END DO
-         DEALLOCATE (ec_env%cpmos)
-         NULLIFY (ec_env%cpmos)
-      END IF
-      ec_env%cpmos => vmos
+!---------------------------------------
       !
       CALL pw_pool_give_back_pw(auxbas_pw_pool, dv_hartree_rspace%pw)
       CALL pw_pool_give_back_pw(auxbas_pw_pool, vtot_rspace%pw)
@@ -1463,7 +1475,7 @@ CONTAINS
                                                             dynamic_threshold, fixed_mu, &
                                                             non_monotonic, report_all_sparsities, &
                                                             single_precision
-      REAL(KIND=dp)                                      :: eps_filter, eps_lanczos, mu
+      REAL(KIND=dp)                                      :: eps_filter, eps_lanczos, mu, threshold
       REAL(KIND=dp), DIMENSION(2)                        :: e_homo, e_lumo, mu_spin
       TYPE(dbcsr_type)                                   :: matrix_s_inv, matrix_s_sqrt, &
                                                             matrix_s_sqrt_inv, matrix_tmp
@@ -1515,7 +1527,8 @@ CONTAINS
       CASE (ec_matrix_sign)
          CALL dbcsr_create(matrix_s_inv, template=matrix_s(1, 1)%matrix, &
                            matrix_type=dbcsr_type_no_symmetry)
-         CALL invert_Hotelling(matrix_s_inv, matrix_s(1, 1)%matrix, eps_filter)
+         threshold = MAX(eps_filter, 1.0e-12_dp)
+         CALL invert_Hotelling(matrix_s_inv, matrix_s(1, 1)%matrix, threshold)
       CASE (ec_matrix_trs4, ec_matrix_tc2)
          CALL dbcsr_create(matrix_s_sqrt, template=matrix_s(1, 1)%matrix, &
                            matrix_type=dbcsr_type_no_symmetry)
@@ -1602,7 +1615,6 @@ CONTAINS
 !> \author Creation (03.2014,JGH)
 ! **************************************************************************************************
    SUBROUTINE ec_energy(ec_env, unit_nr)
-
       TYPE(energy_correction_type)                       :: ec_env
       INTEGER, INTENT(IN)                                :: unit_nr
 
