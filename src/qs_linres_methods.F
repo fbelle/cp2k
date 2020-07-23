@@ -164,6 +164,7 @@ MODULE qs_linres_methods
    PUBLIC :: linres_localize, linres_solver
    PUBLIC :: linres_write_restart, linres_read_restart
    PUBLIC :: build_dm_response
+   PUBLIC :: p_env_check_i_alloc
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_linres_methods'
 
@@ -869,7 +870,6 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: k1mat, rho1_ao, rho_ao
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: ksmat, psmat
       TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(kg_environment_type), POINTER                 :: kg_env
       TYPE(linres_control_type), POINTER                 :: linres_control
       TYPE(lri_density_type), POINTER                    :: lri_density
       TYPE(lri_environment_type), POINTER                :: lri_env
@@ -1326,7 +1326,6 @@ CONTAINS
       IF (dft_control%qs_control%do_kg .AND. .NOT. (lr_triplet .OR. gapw .OR. gapw_xc)) THEN
          IF (qs_env%kg_env%tnadd_method == kg_tnadd_embed) THEN
 
-            CALL qs_rho_get(rho1, rho_ao=rho1_ao)
             IF (nspins == 2) THEN
                alpha = 1.0_dp
             ELSE
@@ -1334,7 +1333,7 @@ CONTAINS
             END IF
 
             ekin_mol = 0.0_dp
-            CALL get_qs_env(qs_env, kg_env=kg_env)
+            CALL qs_rho_get(rho1, rho_ao=rho1_ao)
             CALL kg_ekin_subset(qs_env=qs_env, &
                                 ks_matrix=p_env%kpp1, &
                                 ekin_mol=ekin_mol, &
