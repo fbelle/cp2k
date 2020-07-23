@@ -19,7 +19,8 @@ MODULE input_cp2k_ec
         ec_matrix_trs4, kg_cholesky, ls_cluster_atomic, ls_cluster_molecular, &
         ls_s_inversion_hotelling, ls_s_inversion_sign_sqrt, ls_s_preconditioner_atomic, &
         ls_s_preconditioner_molecular, ls_s_preconditioner_none, ls_s_sqrt_ns, ls_s_sqrt_proot, &
-        ls_scf_sign_ns, ls_scf_sign_proot
+        ls_scf_sign_ns, ls_scf_sign_proot, ot_precond_full_all, ot_precond_full_kinetic,&
+        ot_precond_full_single,  ot_precond_full_single_inverse, ot_precond_none, ot_precond_s_inverse
    USE input_cp2k_xc,                   ONLY: create_xc_section
    USE input_keyword_types,             ONLY: keyword_create,&
                                               keyword_release,&
@@ -151,6 +152,7 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
+
    END SUBROUTINE create_ec_section
 
 ! **************************************************************************************************
@@ -170,6 +172,13 @@ CONTAINS
                           citations=(/VandeVondele2012/))
 
       NULLIFY (keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="EPS", &
+                          description="Target accuracy for the convergence of the conjugate gradient.", &
+                          usage="EPS 1.e-12", default_r_val=1.e-12_dp)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
       CALL keyword_create(keyword, __LOCATION__, name="EPS_FILTER", &
                           description="Threshold used for filtering matrix operations.", &
                           usage="EPS_FILTER 1.0E-7", default_r_val=1.0E-6_dp)
@@ -179,6 +188,12 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="EPS_LANCZOS", &
                           description="Threshold used for lanczos estimates.", &
                           usage="EPS_LANCZOS 1.0E-4", default_r_val=1.0E-3_dp)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="MAX_ITER", &
+                          description="Maximum number of conjugate gradient iteration to be performed for one optimization.", &
+                          usage="MAX_ITER 200", default_i_val=50)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -208,6 +223,32 @@ CONTAINS
                           "low (1-2) will result in a drift of the constant of motion during MD. "// &
                           "high (>5) might be somewhat unstable, leading to more SCF iterations.", &
                           usage="EXTRAPOLATION_ORDER 3", default_i_val=4)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create( &
+         keyword, __LOCATION__, name="PRECONDITIONER", &
+         description="Type of preconditioner to be used with MO conjugate gradient solver. "// &
+         "They differ in effectiveness, cost of construction, cost of application. "// &
+         "Properly preconditioned minimization can be orders of magnitude faster than doing nothing.", &
+         usage="PRECONDITIONER FULL_ALL", &
+         default_i_val=ot_precond_none, &
+         enum_c_vals=s2a("FULL_ALL", "FULL_SINGLE_INVERSE", "FULL_SINGLE", "FULL_KINETIC", "FULL_S_INVERSE", &
+                         "NONE"), &
+         enum_desc=s2a("Most effective state selective preconditioner based on diagonalization, "// &
+                       "requires the ENERGY_GAP parameter to be an underestimate of the HOMO-LUMO gap. "// &
+                       "This preconditioner is recommended for almost all systems, except very large systems where "// &
+                       "make_preconditioner would dominate the total computational cost.", &
+                       "Based on H-eS cholesky inversion, similar to FULL_SINGLE in preconditioning efficiency "// &
+                       "but cheaper to construct, "// &
+                       "might be somewhat less robust. Recommended for large systems.", &
+                       "Based on H-eS diagonalisation, not as good as FULL_ALL, but somewhat cheaper to apply. ", &
+                       "Cholesky inversion of S and T, fast construction, robust, and relatively good, "// &
+                       "use for very large systems.", &
+                       "Cholesky inversion of S, not as good as FULL_KINETIC, yet equally expensive.", &
+                       "skip preconditioning"), &
+         enum_i_vals=(/ot_precond_full_all, ot_precond_full_single_inverse, ot_precond_full_single, &
+                       ot_precond_full_kinetic, ot_precond_s_inverse, ot_precond_none/))
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -301,6 +342,19 @@ CONTAINS
                           enum_desc=s2a("Using the inverse sqrt as obtained from sign function iterations.", &
                                         "Using the Hotellign iteration."), &
                           enum_i_vals=(/ls_s_inversion_sign_sqrt, ls_s_inversion_hotelling/))
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="RESTART", &
+                          description="Restart the response calculation if the restart file exists", &
+                          usage="RESTART", &
+                          default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="RESTART_EVERY", &
+                          description="Restart the conjugate gradient after the specified number of iterations.", &
+                          usage="RESTART_EVERY 200", default_i_val=50)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
