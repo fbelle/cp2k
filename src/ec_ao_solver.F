@@ -411,7 +411,7 @@ CONTAINS
 
         t2 = m_walltime()
         IF (iounit > 0) THEN
-           IF(iounit > 0) WRITE(*,*) i, linres_control%flag, MAXVAL(alpha), norm_res, t2-t1
+           IF(iounit > 0) WRITE(iounit,*) i, linres_control%flag, MAXVAL(alpha), norm_res, t2-t1
            CALL m_flush(iounit)
         ENDIF
 
@@ -447,7 +447,7 @@ CONTAINS
 
            ! tr(Ap_j * p_j)
            CALL dbcsr_dot(matrix_cg(ispin)%matrix, matrix_Ax(ispin)%matrix, norm_cA(ispin))
-           IF(iounit > 0) WRITE(*,*) "norm_cA", norm_cA(ispin)
+           IF(iounit > 0) WRITE(iounit,*) "norm_cA", norm_cA(ispin)
 
 
            IF (norm_cA(ispin) .LT. 0.0_dp) THEN
@@ -626,7 +626,7 @@ CONTAINS
      IF (iounit > 0) WRITE(iounit,*) "||Z(MO)||_F - ||Z(AO)||_F :", norm_res
 
      CALL dbcsr_dot(p_env%p1(1)%matrix, matrix_s(1)%matrix, norm_res)
-     IF(iounit > 0) WRITE(*,*) "Tr[PzS]", norm_res
+     IF(iounit > 0) WRITE(iounit,*) "Tr[PzS]", norm_res
 
      !----------------------------------------------------------
      ! Calculate energy-weighted response density matrix
