@@ -1024,34 +1024,35 @@ CONTAINS
       matrix_wz => p_env%w1
 
       ! DEBUG - IF ground-state density matrix solved by diagonalization, then use this
-!       IF(.NOT. dft_control%qs_control%do_ls_scf) THEN
-!            focc = 1.0_dp
-!            IF (nspins == 1) focc = 2.0_dp
-            CALL get_qs_env(qs_env, mos=mos)
-!            DO ispin = 1, nspins
-!               CALL calculate_whz_matrix(mos(ispin)%mo_set, matrix_hz(ispin)%matrix, &
-!                                         matrix_wz(ispin)%matrix, focc)
-!            END DO
-!            IF (nspins == 2) THEN
-!               CALL dbcsr_add(matrix_wz(1)%matrix, matrix_wz(2)%matrix, &
-!                              alpha_scalar=1.0_dp, beta_scalar=1.0_dp)
-!            END IF
+       IF(.NOT. dft_control%qs_control%do_ls_scf) THEN
+          focc = 1.0_dp
+          IF (nspins == 1) focc = 2.0_dp
+          CALL get_qs_env(qs_env, mos=mos)
+          DO ispin = 1, nspins
+             CALL calculate_whz_matrix(mos(ispin)%mo_set, matrix_hz(ispin)%matrix, &
+                                       matrix_wz(ispin)%matrix, focc)
+          END DO
+          IF (nspins == 2) THEN
+             CALL dbcsr_add(matrix_wz(1)%matrix, matrix_wz(2)%matrix, &
+                            alpha_scalar=1.0_dp, beta_scalar=1.0_dp)
+          END IF
 
-            norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
-            IF (para_env%mepos==0) WRITE(*,*) "||Whz||", norm_res
+          norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
+          IF (iounit > 0) WRITE(iounit,*) "||Whz||", norm_res
 
       ! Gund-state density has been calculated by LS
-!      ELSE 
+      ELSE 
       
-            focc = 1.0_dp
-            IF (nspins == 1) focc = 2.0_dp
-            eps_filter = dft_control%qs_control%eps_filter_matrix
+          focc = 1.0_dp
+          IF (nspins == 1) focc = 2.0_dp
+          eps_filter = dft_control%qs_control%eps_filter_matrix
       
-           CALL calculate_whz_ao_matrix(qs_env, matrix_hz, matrix_wz, focc, eps_filter)
+          CALL calculate_whz_ao_matrix(qs_env, matrix_hz, matrix_wz, focc, eps_filter)
 
-!           norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
-!           IF (para_env%mepos==0) WRITE(*,*) "||Whz||", norm_res
-!      END IF
+          norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
+          IF (iounit > 0) WRITE(iounit,*) "||Whz||", norm_res
+
+      END IF
       ! DEBUG ------------ 
 
       IF (debug_forces) fodeb(1:3) = force(1)%overlap(1:3, 1)
@@ -1461,22 +1462,22 @@ CONTAINS
 
        INTEGER                                            :: handle, ispin, nspins
        REAL(KIND=dp)                                      :: falpha, scaling
-       TYPE(dbcsr_type)                                   :: matrix_tmp
-       TYPE(dft_control_type), POINTER                    :: dft_control
        TYPE(cp_para_env_type), POINTER                    :: para_env
-       TYPE(qs_rho_type), POINTER                         :: rho
+       TYPE(dbcsr_type)                                   :: matrix_tmp
        TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_ao
+       TYPE(dft_control_type), POINTER                    :: dft_control
+       TYPE(qs_rho_type), POINTER                         :: rho
 
        CALL timeset(routineN, handle)
 
        CALL get_qs_env(qs_env = qs_env, &
-                       dft_control = dft_control, &
+                       dft_control = dft_control,&
                        rho = rho,&
                        para_env=para_env)
        nspins = dft_control%nspins
        CALL qs_rho_get(rho, rho_ao = rho_ao)
 
-       !IF (para_env%mepos==0) WRITE(*,*) "calculate_2whz_ao_matrix - BEGINNING"
+       !IF (para_env%mepos==0) WRITE(*,*) "calculate_whz_ao_matrix - BEGINNING"
 !       IF(para_env%mepos==0) WRITE(*,*) "Whz = CC^T*Hz*CC^T AO"
 
        ! init temp matrix
@@ -1494,7 +1495,7 @@ CONTAINS
        ! Scaling for closed shell-case on Hz
        falpha = focc*scaling
 
-       DO ispin = 1, nspins
+       DO ispin = 1, nspins 
 
           ! tmp1 = H*CC^T
           CALL dbcsr_multiply("N", "N", scaling, matrix_hz(ispin)%matrix, rho_ao(ispin)%matrix, &
