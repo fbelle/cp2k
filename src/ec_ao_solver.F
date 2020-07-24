@@ -203,9 +203,9 @@ CONTAINS
      t1 = m_walltime()
 
      CALL get_qs_env(qs_env,para_env=para_env)
-     IF(para_env%mepos==0) WRITE(*,*) repeat("-",80)
-     IF(para_env%mepos==0) WRITE(*,*) "ec_res_ao BEGINNING"
-     IF(para_env%mepos==0) WRITE(*,*) repeat("-",80)
+     IF(iounit > 0) WRITE(iounit,*) repeat("-",80)
+     IF(iounit > 0) WRITE(iounit,*) "ec_res_ao BEGINNING"
+     IF(iounit > 0) WRITE(iounit,*) repeat("-",80)
 
      CALL get_qs_env(qs_env = qs_env, &
                      dft_control = dft_control, &
@@ -219,9 +219,9 @@ CONTAINS
      ! Gerneral setup 
      do_precond = .TRUE.
 
-     IF(para_env%mepos==0) WRITE(*,*) "ec_res_ao - eps", linres_control%eps
+     IF(iounit > 0) WRITE(iounit,*) "ec_res_ao - eps", linres_control%eps
      eps_filter = linres_control%eps_filter
-     IF(para_env%mepos==0) WRITE(*,*) "ec_res_ao - eps_filter", eps_filter
+     IF(iounit > 0) WRITE(iounit,*) "ec_res_ao - eps_filter", eps_filter
 
      ALLOCATE(alpha(nspins),beta(nspins), new_norm(nspins), norm_cA(nspins), norm_rr(nspins))
      ALLOCATE(tr_rz00(nspins))
@@ -261,7 +261,6 @@ CONTAINS
      END DO
 
      ! Matrix PS and Projector Q
-     IF(para_env%mepos==0) WRITE(*,*) "ec_res_ao - build projector P and Q"
      NULLIFY(matrix_ps, matrix_q)
      CALL projector_p_and_q(qs_env, matrix_ps, matrix_q, eps_filter)
 
@@ -304,7 +303,7 @@ CONTAINS
 !     !---------------
 !     ! Test of hessian routine
 !     ! Calculate hessian with Z-Matrix obtained from MO-solver
-!     IF(para_env%mepos==0) WRITE(*,*) "ec_res_ao - CALL build_hessian_op_from_z"
+!     IF(iounit > 0) WRITE(*,*) "ec_res_ao - CALL build_hessian_op_from_z"
 !     CALL build_hessian_op_from_z(qs_env, matrix_ps, matrix_q, matrix_Ax, eps_filter)
 !     !--------------
 
@@ -319,7 +318,6 @@ CONTAINS
      ! E^[1]_Harris = G(\delta P)P*S - S*P*G(\delta P)
      ! ABC-CBA
      ! RES ANTISYM
-     IF(para_env%mepos==0) WRITE(*,*) "ec_res_ao - build RHS"
      CALL ec_scomm(qs_env = qs_env, &
                    matrix_a = ec_env%matrix_hz, & 
                    matrix_ps = matrix_ps, &
@@ -332,14 +330,13 @@ CONTAINS
      ! Frist trial matrix 
      DO ispin = 1, nspins
         ! Set first trial matrix to RHS
-        IF(para_env%mepos==0) WRITE(*,*) "ec_res_ao - Initital guess cg_z0 = b"
         CALL dbcsr_copy(matrix_cg_z(ispin)%matrix, matrix_res(ispin)%matrix)
         ! Set first trial matrix to 0
-!        IF(para_env%mepos==0) WRITE(*,*) "ec_res_ao - Initital guess cg_z0 = 0"
+!        IF(iounit > 0) WRITE(*,*) "ec_res_ao - Initital guess cg_z0 = 0"
 !        CALL dbcsr_set(matrix_cg_z(ispin)%matrix, 0.0_dp)
      END DO
 
-     !IF(para_env%mepos==0) WRITE(*,*) "ec_res_ao - PROJ(cg_z0)"
+     !IF(iounit > 0) WRITE(*,*) "ec_res_ao - PROJ(cg_z0)"
      CALL projector(qs_env, matrix_ps, matrix_q, matrix_cg_z, eps_filter, .FALSE.)
 
      ! Ax
@@ -356,14 +353,14 @@ CONTAINS
      END DO
 
      ! Apply P(r) = P^T*r*Q + Q^T*r*P 
-     !IF(para_env%mepos==0) WRITE(*,*) "ec_res_ao - Proj_T(r_0)"
+     !IF(iounit > 0) WRITE(*,*) "ec_res_ao - Proj_T(r_0)"
      CALL projector(qs_env, matrix_ps, matrix_q, matrix_res, eps_filter, .TRUE.)
 
      ! Preconditioner
      IF (do_precond) THEN
 
         ! z_0 = S^-1/2 * res * S^-1/2
-        IF(para_env%mepos==0) WRITE(*,*) "ec_ao_res - PRECONDITIONER z_0 = S^-1/2 * M * S^-1/2"
+        !IF(iounit > 0) WRITE(iounit,*) "ec_ao_res - PRECONDITIONER z_0 = S^-1/2 * M * S^-1/2"
         DO ispin = 1, nspins
             CALL dbcsr_copy(matrix_z0(ispin)%matrix, matrix_res(ispin)%matrix)
             CALL apply_matrix_preconditioner(matrix_z0(ispin)%matrix, "forward", &
@@ -385,18 +382,18 @@ CONTAINS
 
         ! Tr(r_0 * z_0)
         CALL dbcsr_dot(matrix_res(ispin)%matrix, matrix_cg(ispin)%matrix, norm_rr(ispin))
-        IF(para_env%mepos==0) WRITE(*,*) "Tr(r_0 * z_0) (norm_rr)", norm_rr(1)
+        IF(iounit > 0) WRITE(*,*) "Tr(r_0 * z_0) (norm_rr)", norm_rr(1)
 
         IF (norm_rr(ispin) .LT. 0.0_dp) CPABORT("norm_rr < 0")
         norm_res = MAX(norm_res, norm_rr(ispin)/REAL(nao, dp))
-        IF(para_env%mepos==0) WRITE(*,*) "norm_res", norm_res
+        IF(iounit > 0) WRITE(*,*) "norm_res", norm_res
      END DO
 
      alpha(:) = 0.0_dp
 
      ! header
      IF (iounit > 0) THEN
-        IF(para_env%mepos==0) WRITE (iounit, "(/,T3,A,T16,A,T25,A,T38,A,/,T3,A)") &
+        IF(iounit > 0) WRITE (iounit, "(/,T3,A,T16,A,T25,A,T38,A,/,T3,A)") &
            "Iteration", "Stepsize", "Convergence", "Time", &
            REPEAT("-", 80)
      ENDIF
@@ -404,8 +401,6 @@ CONTAINS
      ! start iteration
      restart = .FALSE.
      iteration: DO i = 1, linres_control%max_iter
-
-        IF(para_env%mepos==0) WRITE(*,*) "START ITERATION", i
 
         ! Convergence criteria
         linres_control%converged = .FALSE.
@@ -416,7 +411,7 @@ CONTAINS
 
         t2 = m_walltime()
         IF (iounit > 0) THEN
-           IF(para_env%mepos==0) WRITE(*,*) i, linres_control%flag, MAXVAL(alpha), norm_res, t2-t1
+           IF(iounit > 0) WRITE(*,*) i, linres_control%flag, MAXVAL(alpha), norm_res, t2-t1
            CALL m_flush(iounit)
         ENDIF
 
@@ -443,7 +438,7 @@ CONTAINS
                               eps_filter = eps_filter)
 
         ! Apply projector on Ax
-        !IF(para_env%mepos==0) WRITE(*,*) "ec_ao_res - Proj_T(Ax)"
+        !IF(iounit > 0) WRITE(*,*) "ec_ao_res - Proj_T(Ax)"
         CALL projector(qs_env, matrix_ps, matrix_q, matrix_Ax, eps_filter, .TRUE.)
 
         DO ispin = 1, nspins
@@ -452,13 +447,10 @@ CONTAINS
 
            ! tr(Ap_j * p_j)
            CALL dbcsr_dot(matrix_cg(ispin)%matrix, matrix_Ax(ispin)%matrix, norm_cA(ispin))
-           IF(para_env%mepos==0) WRITE(*,*) "norm_cA", norm_cA(ispin)
+           IF(iounit > 0) WRITE(*,*) "norm_cA", norm_cA(ispin)
 
-        END DO 
 
-        IF (norm_cA(ispin) .LT. 0.0_dp) THEN
-
-           DO ispin = 1, nspins
+           IF (norm_cA(ispin) .LT. 0.0_dp) THEN
 
               ! Recalculate w/o preconditioner
               IF (i > 1) THEN
@@ -473,27 +465,22 @@ CONTAINS
                  CALL dbcsr_dot(matrix_res(ispin)%matrix, matrix_res(ispin)%matrix, norm_rr(ispin))
               END IF
         
-           END DO 
+              CALL build_hessian_op(qs_env = qs_env, &
+                                    p_env = p_env, &
+                                    matrix_ps = matrix_ps, &
+                                    matrix_cg = matrix_cg, & ! cg
+                                    matrix_Ax = matrix_Ax, &
+                                    eps_filter = eps_filter)
 
-           CALL build_hessian_op(qs_env = qs_env, &
-                                 p_env = p_env, &
-                                 matrix_ps = matrix_ps, &
-                                 matrix_cg = matrix_cg, & ! cg
-                                 matrix_Ax = matrix_Ax, &
-                                 eps_filter = eps_filter)
+              ! Matrix projector T
+              CALL projector(qs_env, matrix_ps, matrix_q, matrix_Ax, eps_filter, .TRUE.)
 
-           ! Matrix projector T
-           CALL projector(qs_env, matrix_ps, matrix_q, matrix_Ax, eps_filter, .TRUE.)
-
-           DO ispin = 1, nspins
               CALL dbcsr_dot(matrix_cg(ispin)%matrix, matrix_Ax(ispin)%matrix, norm_cA(ispin))
-           END DO 
 
-           CPABORT("tr(Ap_j*p_j) < 0")
+              CPABORT("tr(Ap_j*p_j) < 0")
 
-        END IF
+           END IF
 
-        DO ispin = 1, nspins
            ! Determine step-size
            ! alpha = norm_rr/norm_cA
            IF (norm_cA(ispin) .LT. linres_control%eps) THEN
@@ -501,13 +488,15 @@ CONTAINS
            ELSE
               alpha(ispin) = norm_rr(ispin)/norm_cA(ispin)
            END IF
-           IF(para_env%mepos==0) WRITE(*,*) "alpha", alpha(ispin)
+           IF(iounit > 0) WRITE(iounit,*) "alpha", alpha(ispin)
 
            ! x_j+1 = x_j + alpha*p_j
            ! save response-denisty of this iteration
            CALL dbcsr_add(matrix_cg_z(ispin)%matrix, matrix_cg(ispin)%matrix, 1.0_dp, alpha(ispin))
+
            ! r_j+1 = r_j - alpha * Ap_j
 !           CALL dbcsr_add(matrix_res(ispin)%matrix, matrix_Ax(ispin)%matrix, 1.0_dp, -alpha(ispin))
+
         END DO
 
         ! need to recompute the residue
@@ -563,14 +552,14 @@ CONTAINS
                       beta = 0.0_dp,&
                       ps_trans = .TRUE.)
         norm_zao = dbcsr_frobenius_norm(p_env%p1(1)%matrix)
-        IF (para_env%mepos==0) WRITE(*,*) "|| Z (MO) ||_F :", norm_zmo
-        IF (para_env%mepos==0) WRITE(*,*) "|| Z (AO) ||_F :", norm_zao
-        IF (para_env%mepos==0) WRITE(*,*) "It, conv, ||Z(AO)||_F :", i, norm_res, norm_zao
+        IF (iounit > 0) WRITE(iounit,*) "|| Z (MO) ||_F :", norm_zmo
+        IF (iounit > 0) WRITE(iounit,*) "|| Z (AO) ||_F :", norm_zao
+        IF (iounit > 0) WRITE(iounit,*) "It, conv, ||Z(AO)||_F :", i, norm_res, norm_zao
         !------------------------------------
 
         IF (do_precond) THEN
            ! z_0 = S^-1/2 * M * S^-1/2
-           !IF(para_env%mepos==0) WRITE(*,*) "ec_ao_res - PRECONDITIONER z_0 = S^-1/2 * M * S^-1/2"
+           !IF(iounit > 0) WRITE(*,*) "ec_ao_res - PRECONDITIONER z_0 = S^-1/2 * M * S^-1/2"
            ! M*res = S^-1/2*res*S^-1/2
            DO ispin = 1, nspins
               CALL dbcsr_copy(matrix_z0(ispin)%matrix, matrix_res(ispin)%matrix)
@@ -591,9 +580,9 @@ CONTAINS
            CALL dbcsr_dot(matrix_res(ispin)%matrix, matrix_z0(ispin)%matrix, new_norm(ispin))
            IF (new_norm(ispin) .LT. 0.0_dp) CPABORT("tr(r_j+1*z_j+1) < 0")
            norm_res = MAX(norm_res, new_norm(ispin)/REAL(nao,dp))
-           IF (para_env%mepos==0) WRITE(*,*) "norm_res", norm_res
-           !IF (para_env%mepos==0) WRITE(*,*) "norm_rr", norm_rr(1)
-           !IF (para_env%mepos==0) WRITE(*,*) "new_norm", new_norm(1)
+           IF (iounit > 0) WRITE(iounit,*) "norm_res", norm_res
+           !IF (iounit > 0) WRITE(*,*) "norm_rr", norm_rr(1)
+           !IF (iounit > 0) WRITE(*,*) "new_norm", new_norm(1)
 
            IF (norm_rr(ispin) .LT. linres_control%eps .OR. new_norm(ispin) .LT. linres_control%eps) THEN
               beta(ispin) = 0.0_dp
@@ -601,7 +590,7 @@ CONTAINS
            ELSE
               beta(ispin) = new_norm(ispin)/norm_rr(ispin)
            END IF
-           IF (para_env%mepos==0) Write(*,*) "beta", beta(1)
+           IF (iounit > 0) Write(iounit,*) "beta", beta(1)
 
            ! update new search vector (matrix)
            ! p_j+1 = z_j+1 + beta*p_j
@@ -614,13 +603,13 @@ CONTAINS
         END DO
      END DO iteration 
 
-     !IF (para_env%mepos==0) WRITE(*,*) "ec_res_ao - Proj(cg_z)"
+     !IF (iounit > 0) WRITE(*,*) "ec_res_ao - Proj(cg_z)"
      CALL projector(qs_env, matrix_ps, matrix_q, matrix_cg_z, eps_filter, .FALSE.)
 
      ! Build final Z-Matrix 
      ! Z = [cg_z, P]_S = cg_z*S*P - P*S*cg_z
      !                 = cg_z*(P*S)^T + (cg_z*(PS)^T)^T actual calculation
-     IF (para_env%mepos==0) WRITE(*,*) "ec_res_ao - FINAL Z AO"
+     IF (iounit > 0) WRITE(iounit,*) "ec_res_ao - FINAL Z AO"
      CALL ec_scomm(qs_env = qs_env, &
                    matrix_a = matrix_cg_z , &
                    matrix_ps = matrix_ps, &
@@ -631,13 +620,13 @@ CONTAINS
                    ps_trans = .TRUE.)
 
      norm_zao = dbcsr_frobenius_norm(p_env%p1(1)%matrix)
-     IF (para_env%mepos==0) WRITE(*,*) "|| Z (MO) ||_F :", norm_zmo
-     IF (para_env%mepos==0) WRITE(*,*) "|| Z (AO) ||_F :", norm_zao
+     IF (iounit > 0) WRITE(iounit,*) "|| Z (MO) ||_F :", norm_zmo
+     IF (iounit > 0) WRITE(iounit,*) "|| Z (AO) ||_F :", norm_zao
      norm_res = norm_zmo - norm_zao
-     IF (para_env%mepos==0) WRITE(*,*) "||Z(MO)||_F - ||Z(AO)||_F :", norm_res
+     IF (iounit > 0) WRITE(iounit,*) "||Z(MO)||_F - ||Z(AO)||_F :", norm_res
 
      CALL dbcsr_dot(p_env%p1(1)%matrix, matrix_s(1)%matrix, norm_res)
-     IF(para_env%mepos==0) WRITE(*,*) "Tr[PzS]", norm_res
+     IF(iounit > 0) WRITE(*,*) "Tr[PzS]", norm_res
 
      !----------------------------------------------------------
      ! Calculate energy-weighted response density matrix
@@ -664,11 +653,9 @@ CONTAINS
         CALL dbcsr_release(matrix_s_sqrt_inv)
      END IF
 
-     !CALL linres_control_release(linres_control)
+     DEALLOCATE(alpha, beta, new_norm, norm_cA, norm_rr, tr_rz00)
 
-     DEALLOCATE(alpha, beta, new_norm, norm_cA, norm_rr)
-
-     IF(para_env%mepos==0) WRITE(*,*) "ec_res_ao - END"
+     ! IF(iounit > 0) WRITE(iounit,*) "ec_res_ao - END"
 
      CALL timestop(handle)
 
@@ -696,11 +683,12 @@ CONTAINS
      CHARACTER(len=*), PARAMETER :: routineN = 'ec_wz_matrix', &
         routineP = moduleN//':'//routineN
 
-     INTEGER                                            :: handle, ispin, nspins
+     INTEGER                                            :: handle, iounit, ispin, nspins
      REAL(KIND=dp)                                      :: scaling
      TYPE(dbcsr_type)                                   :: matrix_tmp, matrix_tmp2
      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks, matrix_s, matrix_p
      TYPE(dft_control_type), POINTER                    :: dft_control
+     TYPE(cp_logger_type), POINTER                      :: logger
      TYPE(cp_para_env_type), POINTER                    :: para_env
      TYPE(qs_rho_type), POINTER                         :: rho
      REAL(KIND=dp)                                      :: norm_res
@@ -714,6 +702,8 @@ CONTAINS
                      rho=rho,&
                      para_env = para_env)
      nspins = dft_control%nspins
+     logger => cp_get_default_logger()
+     iounit = cp_logger_get_default_unit_nr(logger)
 
      CALL qs_rho_get(rho, rho_ao = matrix_p)
 
@@ -752,14 +742,14 @@ CONTAINS
 
      ENDDO
 
-     IF(para_env%mepos==0) WRITE(*,*) "Wz = 0.25*(Z*KS*P + P*KS*Z)"
+     IF(iounit > 0) WRITE(iounit,*) "Wz = 0.25*(Z*KS*P + P*KS*Z)"
      norm_res = 0.0_dp
      norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
-     IF(para_env%mepos==0) WRITE(*,*) "||Wz||_F", norm_res
+     IF(iounit > 0) WRITE(iounit,*) "||Wz||_F", norm_res
      CALL dbcsr_dot(matrix_s(1)%matrix, matrix_wz(1)%matrix, norm_res)
-     IF(para_env%mepos==0) WRITE(*,*) "ec_res_ao - Tr[WinSin]", norm_res
+     IF(iounit > 0) WRITE(iounit,*) "ec_res_ao - Tr[WinSin]", norm_res
      CALL dbcsr_dot(matrix_p(1)%matrix, matrix_wz(1)%matrix, norm_res)
-     IF(para_env%mepos==0) WRITE(*,*) "ec_res_ao - Tr[WinPin]", norm_res
+     IF(iounit > 0) WRITE(iounit,*) "ec_res_ao - Tr[WinPin]", norm_res
 
      CALL dbcsr_release(matrix_tmp)
      CALL dbcsr_release(matrix_tmp2)
@@ -792,7 +782,8 @@ CONTAINS
 
      CHARACTER(len=*), PARAMETER :: routineN = 'build_hessian_op', routineP = moduleN//':'//routineN
      
-     INTEGER                                            :: handle, ispin, nspins
+     INTEGER                                            :: handle, iounit, ispin, nspins
+     TYPE(cp_logger_type), POINTER                      :: logger
      TYPE(cp_para_env_type), POINTER                    :: para_env
      TYPE(qs_rho_type), POINTER                         :: rho
      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_bs, matrix_ks, &
@@ -809,7 +800,9 @@ CONTAINS
                      para_env=para_env,&
                      rho = rho)
      nspins = dft_control%nspins
-     IF(para_env%mepos==0) WRITE(*,*) "build_hessian_op BEGINNING", ASSOCIATED(p_env)
+     logger => cp_get_default_logger()
+     iounit = cp_logger_get_default_unit_nr(logger)
+     !IF(iounit > 0) WRITE(iounit,*) "build_hessian_op BEGINNING", ASSOCIATED(p_env)
 
      NULLIFY(matrix_bs)
      CALL dbcsr_allocate_matrix_set(matrix_bs, nspins)
@@ -820,7 +813,7 @@ CONTAINS
                           matrix_type = dbcsr_type_no_symmetry)
      END DO
 
-     !IF(para_env%mepos==0) WRITE(*,*) "build_hessian_op - calculate B"
+     !IF(iounit > 0) WRITE(iounit*,*) "build_hessian_op - calculate B"
      CALL ec_scomm(qs_env, &
                    matrix_a = matrix_cg, &
                    matrix_ps = matrix_ps, &
@@ -833,7 +826,7 @@ CONTAINS
      ! matrix_bs 
      ! Analogous to other S-commutators, we precompute the matrix product B*S
      ! to use same efficient routine to calculate S-commutator
-     !IF(para_env%mepos==0) WRITE(*,*) "build_hessian_op - calculate BS"
+     !IF(iounit > 0) WRITE(iounit,*) "build_hessian_op - calculate BS"
      DO ispin = 1, nspins
         CALL dbcsr_multiply("N","N", 1.0_dp, p_env%p1(ispin)%matrix, matrix_s(ispin)%matrix, &
                             0.0_dp, matrix_bs(ispin)%matrix, filter_eps = eps_filter)
@@ -841,7 +834,7 @@ CONTAINS
 
      ! Ax1 = [F,S]_B = FBS - SBF
      !               = F*BS - (F*BS)^T
-     !IF(para_env%mepos==0) WRITE(*,*) "build_hessian_op - calculate Ax1"
+     !IF(iounit > 0) WRITE(iounit,*) "build_hessian_op - calculate Ax1"
      CALL ec_scomm(qs_env, &
                    matrix_a = matrix_ks, &
                    matrix_ps = matrix_bs, &
@@ -857,11 +850,11 @@ CONTAINS
         chksum = chksum+dbcsr_checksum(p_env%p1(ispin)%matrix)
      ENDDO
 
-     IF (para_env%mepos==0) WRITE(*,*) "chksum:", chksum
+     IF (iounit > 0) WRITE(iounit,*) "chksum:", chksum
 
      ! skip the kernel if the DM is very small
      IF (chksum .GT. 1.0E-14_dp) THEN
-        !IF(para_env%mepos==0) WRITE(*,*) "continue with hessian_op2", chksum
+        !IF(iounit > 0) WRITE(*,*) "continue with hessian_op2", chksum
 
         CALL p_env_check_i_alloc(p_env, qs_env)
 
@@ -880,7 +873,6 @@ CONTAINS
         ! Ax = Ax1           + Ax2
         ! Ax = F*B*S - S*B*F + G(B)*P*S - S*P*G(B)
         CALL hessian_op2(qs_env, matrix_Ax, matrix_ps, p_env%rho1, eps_filter)
-
 
      END IF
 
@@ -909,8 +901,9 @@ CONTAINS
 
      CHARACTER(len=*), PARAMETER :: routineN = 'hessian_op2', routineP = moduleN//':'//routineN
      
-     INTEGER                                            :: handle, ispin, nspins
+     INTEGER                                            :: handle, iounit, ispin, nspins
      REAL(KIND=dp)                                      :: alpha, ekin_mol
+     TYPE(cp_logger_type), POINTER                      :: logger
      TYPE(cp_para_env_type), POINTER                    :: para_env
      TYPE(qs_rho_type), POINTER                         :: rho
      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_ao, rho1_ao
@@ -938,8 +931,10 @@ CONTAINS
                      pw_env = pw_env,&
                      rho = rho)
      nspins = dft_control%nspins
+     logger => cp_get_default_logger()
+     iounit = cp_logger_get_default_unit_nr(logger)
      CPASSERT(ASSOCIATED(pw_env))
-     !IF(para_env%mepos==0) WRITE(*,*) "hessian_op2 BEGINNING"
+     !IF(iounit > 0) WRITE(*,*) "hessian_op2 BEGINNING"
 
      ! Get density matrix
      CALL qs_rho_get(rho, rho_ao = rho_ao)
@@ -1050,7 +1045,7 @@ CONTAINS
      ! Now adding 
      ! Ax = Ax1 + G(B)P*S - S*P*G(B)
      !    = Ax1 + G(B)*PS - (G(B)*PS)^T
-     !IF(para_env%mepos==0) WRITE(*,*) "hessian_op2 - ec_scomm for Ax2"
+     !IF(iounit > 0) WRITE(*,*) "hessian_op2 - ec_scomm for Ax2"
      DO ispin = 1, nspins
         CALL ec_scomm(qs_env = qs_env, &
                       matrix_a = matrix_G, &
@@ -1073,7 +1068,7 @@ CONTAINS
 
      CALL dbcsr_deallocate_matrix_set(matrix_G)
 
-!     IF(para_env%mepos==0) WRITE(*,*) "hessian_op2 END"
+!     IF(iounit > 0) WRITE(*,*) "hessian_op2 END"
      
      CALL timestop(handle)
 
@@ -1102,7 +1097,8 @@ CONTAINS
 
      CHARACTER(len=*), PARAMETER :: routineN = 'build_hessian_op_from_z', routineP = moduleN//':'//routineN
      
-     INTEGER                                            :: handle, ispin, nspins
+     INTEGER                                            :: handle, iounit, ispin, nspins
+     TYPE(cp_logger_type), POINTER                      :: logger
      TYPE(cp_para_env_type), POINTER                    :: para_env
      TYPE(qs_rho_type), POINTER                         :: rho, rho_b
      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_b, matrix_bs, matrix_ks, &
@@ -1114,8 +1110,6 @@ CONTAINS
      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
         POINTER                                         :: sab_orb
      REAL(KIND=dp)                                      :: norm_b, norm_ax, norm_res
-!     TYPE(dbcsr_type)                                   :: matrix_tmp1
-!     REAL(KIND=dp)                                      :: frob_norm
 
      CALL timeset(routineN, handle)
      CALL get_qs_env(qs_env = qs_env, &
@@ -1127,12 +1121,16 @@ CONTAINS
                      rho = rho,&
                      sab_orb = sab_orb)
      nspins = dft_control%nspins
-     IF(para_env%mepos==0) WRITE(*,*) repeat("-",80)
-     IF(para_env%mepos==0) WRITE(*,*) "build_hessian_op_from_z BEGINNING"
-     IF(para_env%mepos==0) WRITE(*,*) repeat("-",80)
+     logger => cp_get_default_logger()
+     iounit = cp_logger_get_default_unit_nr(logger)
+
+
+     IF(iounit > 0) WRITE(iounit,*) repeat("-",80)
+     IF(iounit > 0) WRITE(iounit,*) "build_hessian_op_from_z BEGINNING"
+     IF(iounit > 0) WRITE(iounit,*) repeat("-",80)
 
      norm_res  = dbcsr_frobenius_norm(ec_env%p_env%p1(1)%matrix)
-     IF(para_env%mepos==0) WRITE(*,*) "build_hessian_op_from_z - ||Z(MO)||_F", norm_res
+     IF(iounit > 0) WRITE(iounit,*) "build_hessian_op_from_z - ||Z(MO)||_F", norm_res
 
      NULLIFY(matrix_b)
      CALL dbcsr_allocate_matrix_set(matrix_b, nspins)
@@ -1142,10 +1140,6 @@ CONTAINS
                           template = matrix_s(1)%matrix)
         CALL cp_dbcsr_alloc_block_from_nbl(matrix_b(ispin)%matrix, sab_orb)
         CALL dbcsr_copy(matrix_b(ispin)%matrix, ec_env%p_env%p1(ispin)%matrix)
-
-        norm_res  = dbcsr_frobenius_norm(matrix_b(1)%matrix)
-        IF(para_env%mepos==0) WRITE(*,*) "build_hessian_op_from_z - ||B||_F", norm_res
-
         ! Z matrix stored in ec_env was scaled with 0.5 in closed shell case
         CALL dbcsr_scale(matrix_b(ispin)%matrix, 2.0_dp)
      END DO
@@ -1183,7 +1177,7 @@ CONTAINS
      ! E^[1]_Harris = G(\delta P)P*S - S*P*G(\delta P)
      ! ABC-CBA
      ! RES ANTISYM
-     IF(para_env%mepos==0) WRITE(*,*) "build_hessian_op_from_z - calculate RHS"
+     IF(iounit > 0) WRITE(iounit,*) "build_hessian_op_from_z - calculate RHS"
      CALL ec_scomm(qs_env = qs_env, &
                    !matrix_a = matrix_nsc, &
                    matrix_a = ec_env%matrix_hz, &
@@ -1195,12 +1189,12 @@ CONTAINS
                    ps_trans = .FALSE.)
 
      norm_res  = dbcsr_frobenius_norm(matrix_rhs(1)%matrix)
-     IF(para_env%mepos==0) WRITE(*,*) "build_hessian_op_from_z - ||RHS||_F", norm_res
+     IF(iounit > 0) WRITE(iounit,*) "build_hessian_op_from_z - ||RHS||_F", norm_res
 
      ! matrix_bs 
      ! Analogous to other S-commutators, we precompute the matrix product B*S
      ! to use same efficient routine to calculate S-commutator
-     IF(para_env%mepos==0) WRITE(*,*) "build_hessian_op_from_z - calculate BS"
+     IF(iounit > 0) WRITE(iounit,*) "build_hessian_op_from_z - calculate BS"
      DO ispin = 1, nspins
         CALL dbcsr_multiply("N","N", 1.0_dp, matrix_b(ispin)%matrix, matrix_s(ispin)%matrix, &
                             0.0_dp, matrix_bs(ispin)%matrix, filter_eps = eps_filter, &
@@ -1208,11 +1202,11 @@ CONTAINS
      END DO
 
      norm_res  = dbcsr_frobenius_norm(matrix_bs(1)%matrix)
-     IF(para_env%mepos==0) WRITE(*,*) "build_hessian_op_from_z - ||BS||_F", norm_res
+     IF(iounit > 0) WRITE(iounit,*) "build_hessian_op_from_z - ||BS||_F", norm_res
 
      ! Ax1 = [F,S]_B = FBS - SBF
      !               = F*BS - (F*BS)^T
-     IF(para_env%mepos==0) WRITE(*,*) "build_hessian_op_from_z - calculate Az1"
+     IF(iounit > 0) WRITE(iounit,*) "build_hessian_op_from_z - calculate Az1"
      CALL ec_scomm(qs_env, &
                    matrix_a = matrix_ks, &
                    matrix_ps = matrix_bs, &
@@ -1223,7 +1217,7 @@ CONTAINS
                    ps_trans = .FALSE.)
 
      norm_res  = dbcsr_frobenius_norm(matrix_Ax(1)%matrix)
-     IF(para_env%mepos==0) WRITE(*,*) "build_hessian_op_from_z - ||Az1||_F", norm_res
+     IF(iounit > 0) WRITE(iounit,*) "build_hessian_op_from_z - ||Az1||_F", norm_res
 
      ! Check 2nd part
      chksum = 0.0_dp
@@ -1231,11 +1225,11 @@ CONTAINS
         chksum = chksum+dbcsr_checksum(ec_env%p_env%p1(ispin)%matrix)
      ENDDO
 
-     IF (para_env%mepos==0) WRITE(*,*) "chksum:", chksum
+     IF (iounit > 0) WRITE(iounit,*) "chksum:", chksum
 
      ! skip the kernel if the DM is very small
      IF (chksum .GT. 1.0E-14_dp) THEN
-        !IF(para_env%mepos==0) WRITE(*,*) "continue with hessian_op2", chksum
+        !IF(iounit > 0) WRITE(*,*) "continue with hessian_op2", chksum
 
         ! Bring B as density on grid
         NULLIFY(rho_b)
@@ -1257,7 +1251,7 @@ CONTAINS
         ! Same basis as reference calculation
         CALL qs_rho_update_rho(rho_b, qs_env)
 
-        !IF (para_env%mepos==0) WRITE(*,*) "build_hessian_op_from_z - Ax2" 
+        !IF (iounit > 0) WRITE(iounit,*) "build_hessian_op_from_z - Ax2" 
         ! Calculate kernel
         ! Ax = Ax1           + Ax2
         ! Ax = F*B*S - S*B*F + G(B)*P*S - S*P*G(B)
@@ -1296,37 +1290,37 @@ CONTAINS
      ! Ax1+2 - b = 0
      norm_res = 0.0_dp 
 
-     IF (para_env%mepos==0) WRITE(*,*) "BEFORE PROJECTED :"
+     IF (iounit > 0) WRITE(iounit,*) "BEFORE PROJECTED :"
      norm_b  = dbcsr_frobenius_norm(matrix_rhs(1)%matrix)
      norm_ax = dbcsr_frobenius_norm(matrix_Ax(1)%matrix)
-     IF (para_env%mepos==0) WRITE(*,*) "|| b_ao  ||_F :", norm_b
-     IF (para_env%mepos==0) WRITE(*,*) "|| Az_ao ||_F :", norm_ax
+     IF (iounit > 0) WRITE(iounit,*) "|| b_ao  ||_F :", norm_b
+     IF (iounit > 0) WRITE(iounit,*) "|| Az_ao ||_F :", norm_ax
      norm_res = norm_b - norm_ax
-     IF (para_env%mepos==0) WRITE(*,*) "||b_ao||_F - ||Ax_ao||_F :", norm_res
+     IF (iounit > 0) WRITE(iounit,*) "||b_ao||_F - ||Ax_ao||_F :", norm_res
 
-     IF (para_env%mepos==0) WRITE(*,*) "PROJECTED :"
+     IF (iounit > 0) WRITE(iounit ,*) "PROJECTED :"
      CALL projector(qs_env, matrix_ps, matrix_q, matrix_rhs, eps_filter, .TRUE.)
      CALL projector(qs_env, matrix_ps, matrix_q, matrix_Ax, eps_filter, .TRUE.)
 
      norm_b  = dbcsr_frobenius_norm(matrix_rhs(1)%matrix)
      norm_ax = dbcsr_frobenius_norm(matrix_Ax(1)%matrix)
-     IF (para_env%mepos==0) WRITE(*,*) "|| b_ao  ||_F :", norm_b
-     IF (para_env%mepos==0) WRITE(*,*) "|| Az_ao ||_F :", norm_ax
+     IF (iounit > 0) WRITE(iounit,*) "|| b_ao  ||_F :", norm_b
+     IF (iounit > 0) WRITE(iounit,*) "|| Az_ao ||_F :", norm_ax
      norm_res = norm_b - norm_ax
-     IF (para_env%mepos==0) WRITE(*,*) "||P(b_ao)||_F - ||P(Ax_ao)||_F :", norm_res
+     IF (iounit > 0) WRITE(iounit,*) "||P(b_ao)||_F - ||P(Ax_ao)||_F :", norm_res
 
      CALL dbcsr_add(matrix_rhs(1)%matrix, matrix_Ax(1)%matrix, 1.0_dp, -1.0_dp)
      norm_res = dbcsr_frobenius_norm(matrix_rhs(1)%matrix)
-     IF (para_env%mepos==0) WRITE(*,*) "no projection:"
-     IF (para_env%mepos==0) WRITE(*,*) "|| b_ao - Az_ao ||_F :", norm_res
+     IF (iounit > 0) WRITE(iounit,*) "no projection:"
+     IF (iounit > 0) WRITE(iounit,*) "|| b_ao - Az_ao ||_F :", norm_res
      CALL dbcsr_dot(matrix_rhs(1)%matrix, matrix_rhs(1)%matrix, norm_res)
-     IF (para_env%mepos==0) WRITE(*,*) "tr(r*r) :", norm_res
+     IF (iounit > 0) WRITE(iounit,*) "tr(r*r) :", norm_res
      
-     IF (para_env%mepos==0) WRITE(*,*) "Apply projection P(r):"
+     IF (iounit > 0) WRITE(iounit,*) "Apply projection P(r):"
      CALL projector(qs_env, matrix_ps, matrix_q, matrix_rhs, eps_filter, .TRUE.)
-     IF (para_env%mepos==0) WRITE(*,*) "after projection:"
+     IF (iounit > 0) WRITE(iounit,*) "after projection:"
      CALL dbcsr_dot(matrix_rhs(1)%matrix, matrix_rhs(1)%matrix, norm_res)
-     IF (para_env%mepos==0) WRITE(*,*) "tr[r*r] :", norm_res
+     IF (iounit > 0) WRITE(iounit,*) "tr[r*r] :", norm_res
      !--------------
 
      CALL dbcsr_deallocate_matrix_set(matrix_b)
@@ -1334,9 +1328,9 @@ CONTAINS
      CALL dbcsr_deallocate_matrix_set(matrix_nsc)
      CALL dbcsr_deallocate_matrix_set(matrix_rhs)
 
-     IF(para_env%mepos==0) WRITE(*,*) repeat("-",80)
-     IF(para_env%mepos==0) WRITE(*,*) "build_hessian_op_from_z END"
-     IF(para_env%mepos==0) WRITE(*,*) repeat("-",80)
+     IF(iounit > 0) WRITE(iounit,*) repeat("-",80)
+     IF(iounit > 0) WRITE(iounit,*) "build_hessian_op_from_z END"
+     IF(iounit > 0) WRITE(iounit,*) repeat("-",80)
 
      CALL timestop(handle)
 
@@ -1381,7 +1375,7 @@ CONTAINS
 !                     dft_control = dft_control, &
 !                     para_env=para_env)
 !     nspins = dft_control%nspins
-!!     IF(para_env%mepos==0) WRITE(*,*) "projector BEGINNING"
+!!     IF(iounit > 0) WRITE(*,*) "projector BEGINNING"
 !
 !     ! Decides which projector to apply 
 !     ! FALSE : Projector onto space of non-redudnant elements
@@ -1485,7 +1479,7 @@ CONTAINS
                      dft_control = dft_control, &
                      para_env=para_env)
      nspins = dft_control%nspins
-     !IF(para_env%mepos==0) WRITE(*,*) "projector BEGINNING"
+     !IF(iounit > 0) WRITE(*,*) "projector BEGINNING"
 
      ! Decides which projector to apply 
      ! FALSE : Projector onto space of non-redudnant elements
@@ -1578,7 +1572,7 @@ CONTAINS
                      rho = rho)
      nspins = dft_control%nspins
      CALL qs_rho_get(rho, rho_ao = rho_ao)
-!     IF(para_env%mepos==0) WRITE(*,*) "projector_p_and_q BEGINNING"
+!     IF(iounit > 0) WRITE(*,*) "projector_p_and_q BEGINNING"
  
      ! Allocate projectors P and Q
      CALL dbcsr_allocate_matrix_set(matrix_ps, nspins)
@@ -1774,7 +1768,7 @@ CONTAINS
        nspins = dft_control%nspins
        CALL qs_rho_get(rho, rho_ao = rho_ao)
 
-       !IF (para_env%mepos==0) WRITE(*,*) "calculate_2whz_ao_matrix - BEGINNING"
+       !IF (iounit > 0) WRITE(*,*) "calculate_2whz_ao_matrix - BEGINNING"
 
        ! init temp matrix
        CALL dbcsr_create(matrix_tmp, template=matrix_hz(1)%matrix, matrix_type=dbcsr_type_no_symmetry)
@@ -1804,10 +1798,10 @@ CONTAINS
 
        END DO
 
-!       IF(para_env%mepos==0) WRITE(*,*) "Whz = CC^T*Hz*CC^T AO"
+!       IF(iounit > 0) WRITE(*,*) "Whz = CC^T*Hz*CC^T AO"
 !       trace = 0.0_dp
 !       trace = dbcsr_frobenius_norm(matrix_whz(1)%matrix)
-!       IF (para_env%mepos==0) WRITE(*,*) "calculate_2whz_ao_matrix - ||Whz|||_f", trace
+!       IF (iounit > 0) WRITE(*,*) "calculate_2whz_ao_matrix - ||Whz|||_f", trace
 
        CALL dbcsr_release(matrix_tmp)
 
