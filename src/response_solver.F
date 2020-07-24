@@ -225,8 +225,8 @@ CONTAINS
 !         linres_control%energy_gap = 0.02_dp
 !      END IF
 
-      SELECT CASE (ec_env%ks_solver)
-      CASE (ec_diagonalization)
+!      SELECT CASE (ec_env%ks_solver)
+!      CASE (ec_diagonalization)
          ! For MO solver
          linres_control%energy_gap = 0.02_dp
          CALL section_vals_val_get(solver_section, "EPS_FILTER", r_val=linres_control%eps_filter)
@@ -236,14 +236,14 @@ CONTAINS
          CALL section_vals_val_get(solver_section, "RESTART", l_val=linres_control%linres_restart)
          CALL section_vals_val_get(solver_section, "RESTART_EVERY", i_val=linres_control%restart_every)
 
-      CASE (ec_matrix_sign, ec_matrix_trs4, ec_matrix_tc2)
+!      CASE (ec_matrix_sign, ec_matrix_trs4, ec_matrix_tc2)
         ! For AO solver
         CALL section_vals_val_get(solver_section, "EPS", r_val=linres_control%eps)
         CALL section_vals_val_get(solver_section, "EPS_FILTER", r_val=linres_control%eps_filter)
         CALL section_vals_val_get(solver_section, "MAX_ITER", i_val=linres_control%max_iter)
-      CASE DEFAULT
-         CPABORT("Requested solver NYI")
-      END SELECT
+!      CASE DEFAULT
+!         CPABORT("Requested solver NYI")
+!      END SELECT
 
       ! initialized p_env
       CALL p_env_release(p_env)
@@ -279,20 +279,25 @@ CONTAINS
       SELECT CASE (ec_env%ks_solver)
       CASE (ec_diagonalization)
          ! For MO solver
-         IF(para_env%mepos==0) WRITE(*,*) repeat("-",80)
-         IF(para_env%mepos==0) WRITE(*,*) "ec_forces - linres CG-MO"
-         IF(para_env%mepos==0) WRITE(*,*) repeat("-",80)
+         IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
+         IF(output_unit > 0) WRITE(output_unit,*) "response - linres CG-MO"
+         IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
          CALL response_equation(qs_env, ec_env, p_env, output_unit, should_stop)
 
       CASE (ec_matrix_sign, ec_matrix_trs4, ec_matrix_tc2)
+         ! For MO solver
+         IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
+         IF(output_unit > 0) WRITE(output_unit,*) "response - linres CG-MO"
+         IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
+         CALL response_equation(qs_env, ec_env, p_env, output_unit, should_stop)
          ! For AO solver
-         IF(para_env%mepos==0) WRITE(*,*) repeat("-",80)
-         IF(para_env%mepos==0) WRITE(*,*) "ec_forces - linres CG-AO-NON-ORTHO"
-         IF(para_env%mepos==0) WRITE(*,*) repeat("-",80)
-   !      CALL ec_res_ao(qs_env, ec_env, p_env)
-         IF(para_env%mepos==0) WRITE(*,*) repeat("-",80)
-         IF(para_env%mepos==0) WRITE(*,*) "ec_forces - linres CG-AO-ORTHO"
-         IF(para_env%mepos==0) WRITE(*,*) repeat("-",80)
+         IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
+         IF(output_unit > 0) WRITE(output_unit,*) "response - linres CG-AO-NON-ORTHO"
+         IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
+         CALL ec_res_ao(qs_env, ec_env, p_env, output_unit, should_stop)
+         IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
+         IF(output_unit > 0) WRITE(output_unit,*) "response - linres CG-AO-ORTHO"
+         IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
          CALL ec_response_ao(qs_env, ec_env, p_env, output_unit, should_stop)
 !         ! Non-ortho basis
 !         CALL ec_2res_ao(qs_env, ec_env, p_env)
