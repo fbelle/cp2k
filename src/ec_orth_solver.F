@@ -422,7 +422,7 @@ CONTAINS
        ENDIF
 
        t2 = m_walltime()
-       IF (iter .EQ. 1 .OR. MOD(iter, 1) .EQ. 0 .OR. linres_control%converged &
+       IF (i .EQ. 1 .OR. MOD(i, 1) .EQ. 0 .OR. linres_control%converged &
            .OR. restart .OR. should_stop) THEN
           IF (iounit > 0) THEN
              WRITE (iounit, "(T5,I5,T18,A3,T28,L1,T38,1E8.2,T48,F16.10,T68,F8.2)") &
