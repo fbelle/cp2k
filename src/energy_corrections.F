@@ -63,7 +63,6 @@ MODULE energy_corrections
    USE dm_ls_scf_methods,               ONLY: density_matrix_sign,&
                                               density_matrix_tc2,&
                                               density_matrix_trs4
-   USE ec_ao_res_solver,                ONLY: ec_res_ao
    USE ec_efield_local,                 ONLY: ec_efield_integrals,&
                                               ec_efield_local_operator
    USE ec_env_types,                    ONLY: energy_correction_type
