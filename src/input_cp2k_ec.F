@@ -15,7 +15,8 @@ MODULE input_cp2k_ec
    USE bibliography,                    ONLY: Niklasson2003,&
                                               VandeVondele2012
    USE input_constants,                 ONLY: &
-        ec_curvy_steps, ec_diagonalization, ec_functional_harris, ec_matrix_sign, ec_matrix_tc2, &
+        ec_curvy_steps, ec_diagonalization, ec_functional_harris, ec_mo_solver, ec_ls_solver, ec_ls_ortho,&
+        ec_matrix_sign, ec_matrix_tc2, &
         ec_matrix_trs4, kg_cholesky, ls_cluster_atomic, ls_cluster_molecular, &
         ls_s_inversion_hotelling, ls_s_inversion_sign_sqrt, ls_s_preconditioner_atomic, &
         ls_s_preconditioner_molecular, ls_s_preconditioner_none, ls_s_sqrt_ns, ls_s_sqrt_proot, &
@@ -200,6 +201,19 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="MAX_ITER_LANCZOS", &
                           description="Maximum number of lanczos iterations.", &
                           usage="MAX_ITER_LANCZOS ", default_i_val=128)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="METHOD", &
+                          description="Algorithm used to solve response equation", &
+                          usage="ALGORITHM SOLVING", &
+                          default_i_val=ec_mo_solver, &
+                          enum_c_vals=s2a("MO_SOLVER", "AO_SOLVER", &
+                                          "AO_ORTHO"), &
+                          enum_desc=s2a("Use MO-solver.", &
+                                        "AO-solver", &
+                                        "AO-ortho solver"), &
+                          enum_i_vals=(/ec_mo_solver, ec_ls_solver, ec_ls_ortho/))
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
