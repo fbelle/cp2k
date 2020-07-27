@@ -1048,6 +1048,12 @@ MODULE input_constants
                                                ec_matrix_tc2 = 1005
    INTEGER, PARAMETER, PUBLIC               :: ec_functional_harris = 2001
 
+   ! Response solver for energy correction
+   INTEGER, PARAMETER, PUBLIC               :: ec_mo_solver = 1, &
+                                               ec_ls_solver = 2, &
+                                               ec_ls_ortho = 3
+
+
    ! swarm parameters
    INTEGER, PARAMETER, PUBLIC               :: swarm_do_glbopt = 1
 
