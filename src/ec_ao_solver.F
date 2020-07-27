@@ -389,8 +389,6 @@ CONTAINS
         IF(iounit > 0) WRITE(*,*) "norm_res", norm_res
      END DO
 
-     alpha(:) = 0.0_dp
-
      ! header
      IF (iounit > 0) THEN
         IF(iounit > 0) WRITE (iounit, "(/,T3,A,T16,A,T25,A,T38,A,/,T3,A)") &
@@ -399,7 +397,9 @@ CONTAINS
      ENDIF
 
      ! start iteration
+     alpha(:) = 0.0_dp
      restart = .FALSE.
+     should_stop = .FALSE.
      iteration: DO i = 1, linres_control%max_iter
 
         ! Convergence criteria
@@ -410,11 +410,14 @@ CONTAINS
         ENDIF
 
         t2 = m_walltime()
+        IF (i .EQ. 1 .OR. MOD(i, 1) .EQ. 0 .OR. linres_control%converged &
+         .OR. restart .OR. should_stop) THEN
         IF (iounit > 0) THEN
-           IF(iounit > 0) WRITE(iounit,*) i, linres_control%flag, MAXVAL(alpha), norm_res, t2-t1
+           WRITE (iounit, "(T5,I5,T18,A3,T28,L1,T38,1E8.2,T48,F16.10,T68,F8.2)") &
+              i, linres_control%flag, restart, MAXVAL(alpha), norm_res, t2 - t1
            CALL m_flush(iounit)
         ENDIF
-
+        ENDIF
         IF (linres_control%converged) THEN
            IF (iounit > 0) THEN
               WRITE (iounit, "(/,T2,A,I4,A,/)") "The linear solver converged in ", i, " iterations."
@@ -427,6 +430,16 @@ CONTAINS
               CALL m_flush(iounit)
            END IF
            EXIT iteration
+        ENDIF
+
+        ! Max number of iteration reached
+        IF (i == linres_control%max_iter) THEN
+           IF (iounit > 0) THEN
+              WRITE (iounit, "(/,T2,A/)") &
+                 "The linear solver didnt converge! Maximum number of iterations reached."
+              CALL m_flush(iounit)
+           ENDIF
+           linres_control%converged = .FALSE.
         ENDIF
 
         ! Ax = [F,S]_B + [G(B),S]_P and B = [X,P]_S
