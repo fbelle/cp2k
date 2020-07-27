@@ -53,6 +53,9 @@ MODULE response_solver
    USE hfx_types,                       ONLY: hfx_type
    USE input_constants,                 ONLY: do_admm_aux_exch_func_none,&
                                               ec_diagonalization,&
+                                              ec_mo_solver,&
+                                              ec_ls_solver,&
+                                              ec_ls_ortho,&
                                               ec_matrix_sign,&
                                               ec_matrix_tc2,&
                                               ec_matrix_trs4,&
@@ -179,6 +182,7 @@ CONTAINS
          POINTER                                         :: sab_orb
       TYPE(section_vals_type), POINTER                   :: solver_section
       TYPE(cp_para_env_type), POINTER                    :: para_env
+      INTEGER                                            :: solver_method
 
       CALL timeset(routineN, handle)
 
@@ -275,26 +279,26 @@ CONTAINS
       END IF
 
       linres_control%converged = .FALSE.
-      ! Choose between MO-solver and AO-solver
-      SELECT CASE (ec_env%ks_solver)
-      CASE (ec_diagonalization)
-         ! For MO solver
-         IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
-         IF(output_unit > 0) WRITE(output_unit,*) "response - linres CG-MO"
-         IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
-         CALL response_equation(qs_env, ec_env, p_env, output_unit, should_stop)
 
-      CASE (ec_matrix_sign, ec_matrix_trs4, ec_matrix_tc2)
+      ! Get solver method
+      CALL section_vals_val_get(solver_section, "METHOD", i_val=solver_method)
+
+      ! Choose between MO-solver and AO-solver
+      SELECT CASE (solver_method)
+      CASE (ec_mo_solver)
          ! For MO solver
          IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
          IF(output_unit > 0) WRITE(output_unit,*) "response - linres CG-MO"
          IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
          CALL response_equation(qs_env, ec_env, p_env, output_unit, should_stop)
+      CASE (ec_ls_solver)
          ! For AO solver
          IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
          IF(output_unit > 0) WRITE(output_unit,*) "response - linres CG-AO-NON-ORTHO"
          IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
          CALL ec_res_ao(qs_env, ec_env, p_env, output_unit, should_stop)
+      CASE (ec_ls_ortho)
+         ! AO ortho solver
          IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
          IF(output_unit > 0) WRITE(output_unit,*) "response - linres CG-AO-ORTHO"
          IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
