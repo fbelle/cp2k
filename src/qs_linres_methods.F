@@ -624,6 +624,11 @@ CONTAINS
       ! proj psi1
       CALL preortho(psi1, mo_coeff_array, Sc)
       !
+      ! Second order energy
+      CALL apply_op(qs_env, p_env, psi0_order, psi1, Ap, chc, last = .TRUE.)
+      CALL cp_fm_trace(psi1(1)%matrix, Ap(1)%matrix, norm_res)
+      WRITE(iounit,*) "linres_solver - Tr[xAx]", norm_res
+      !
       ! clean up
       DO ispin = 1, nspins
          CALL cp_fm_release(r(ispin)%matrix)

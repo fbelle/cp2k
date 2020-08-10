@@ -45,7 +45,7 @@ MODULE response_solver
    USE cp_para_types,                   ONLY: cp_para_env_type
    USE dbcsr_api,                       ONLY: &
         dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_distribution_type, &
-        dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_type, &
+        dbcsr_dot, dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_type, &
         dbcsr_type_no_symmetry, dbcsr_frobenius_norm, dbcsr_print
    USE ec_env_types,                    ONLY: energy_correction_type
    USE hfx_derivatives,                 ONLY: derivatives_four_center
@@ -365,6 +365,7 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks, matrix_s
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+      REAL(KIND=dp)                                      :: norm_zao
 
       CALL timeset(routineN, handle)
 
@@ -447,6 +448,14 @@ CONTAINS
          CALL cp_fm_release(cpmos(ispin)%matrix)
       ENDDO
       DEALLOCATE (cpmos, psi0, psi1)
+
+      norm_zao= dbcsr_frobenius_norm(p_env%p1(1)%matrix)
+      !IF (iounit > 0) WRITE (iounit,*) "|| Z (MO) ||_F :", norm_zmo
+      IF (iounit > 0) WRITE (iounit,*) "|| Z (AO) ||_F :", norm_zao
+      !norm_res = norm_zmo - norm_zao
+      !IF (iounit > 0) WRITE (iounit,*) "||Z(MO)||_F - ||Z(AO)||_F :", norm_res
+      CALL dbcsr_dot(p_env%p1(1)%matrix, matrix_s(1)%matrix, norm_zao)
+      IF (iounit > 0) WRITE (iounit,*) "Tr[PzS]", norm_zao
 
       CALL timestop(handle)
 
