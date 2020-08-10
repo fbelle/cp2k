@@ -1520,13 +1520,15 @@ CONTAINS
       e_homo = -0.1_dp
       e_lumo = 0.1_dp
 
+
+      threshold = MAX(eps_filter, 1.0e-12_dp)
+
       SELECT CASE (ls_method)
       CASE (ec_curvy_steps)
          CPABORT("Curvy Step Method not available")
       CASE (ec_matrix_sign)
          CALL dbcsr_create(matrix_s_inv, template=matrix_s(1, 1)%matrix, &
                            matrix_type=dbcsr_type_no_symmetry)
-         threshold = MAX(eps_filter, 1.0e-12_dp)
          CALL invert_Hotelling(matrix_s_inv, matrix_s(1, 1)%matrix, threshold)
       CASE (ec_matrix_trs4, ec_matrix_tc2)
          CALL dbcsr_create(matrix_s_sqrt, template=matrix_s(1, 1)%matrix, &
@@ -1536,11 +1538,11 @@ CONTAINS
          SELECT CASE (s_sqrt_method)
          CASE (ls_s_sqrt_proot)
             CALL matrix_sqrt_proot(matrix_s_sqrt, matrix_s_sqrt_inv, &
-                                   matrix_s(1, 1)%matrix, eps_filter, &
+                                   matrix_s(1, 1)%matrix, threshold, &
                                    s_sqrt_order, eps_lanczos, max_iter_lanczos, symmetrize=.TRUE.)
          CASE (ls_s_sqrt_ns)
             CALL matrix_sqrt_Newton_Schulz(matrix_s_sqrt, matrix_s_sqrt_inv, &
-                                           matrix_s(1, 1)%matrix, eps_filter, &
+                                           matrix_s(1, 1)%matrix, threshold, &
                                            s_sqrt_order, eps_lanczos, max_iter_lanczos)
          CASE DEFAULT
             CPABORT("Unknown sqrt method.")
