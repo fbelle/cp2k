@@ -677,14 +677,17 @@ CONTAINS
     CALL dbcsr_dot(p_env%p1(1)%matrix, matrix_s(1)%matrix, norm_res)
     IF (iounit > 0) WRITE (iounit,*) "Tr[PzS]", norm_res
 
-    ! Z*A*Z
+    ! x*A*x
     CALL build_hessian_op(qs_env = qs_env, &
+                          p_env = p_env, &
                           matrix_ks = matrix_ks, &
                           matrix_p = matrix_p, &
                           matrix_s_sqrt_inv = matrix_s_sqrt_inv, &
-                          matrix_cg = matrix_cg_z, &
-                          matrix_Ax = matrix_Ax,&
-                          eps_filter = eps_filter)
+                          matrix_cg = matrix_cg_z, & ! cg
+                          matrix_Ax = matrix_Ax, &
+                          eps_filter = eps_filter,&
+                          iounit= iounit)
+
     CALL dbcsr_dot(matrix_cg_z(1,1)%matrix, matrix_Ax(1,1)%matrix, norm_res)
     IF(iounit > 0) WRITE(iounit,*) "Tr[xAx]", norm_res
 
