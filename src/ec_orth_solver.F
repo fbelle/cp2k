@@ -688,7 +688,7 @@ CONTAINS
                           eps_filter = eps_filter,&
                           iounit= iounit)
 
-    CALL dbcsr_dot(matrix_cg_z(1,1)%matrix, matrix_Ax(1,1)%matrix, norm_res)
+    CALL dbcsr_dot(matrix_cg_z(1)%matrix, matrix_Ax(1)%matrix, norm_res)
     IF(iounit > 0) WRITE(iounit,*) "Tr[xAx]", norm_res
 
     !----------------------------------------------------------
