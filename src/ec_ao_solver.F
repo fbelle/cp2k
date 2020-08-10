@@ -56,11 +56,18 @@ MODULE ec_ao_solver
                                               dbcsr_distribution_type,&
                                               dbcsr_dot,&
                                               dbcsr_filter,&
+                                              dbcsr_finalize,&
                                               dbcsr_frobenius_norm,&
                                               dbcsr_get_info,&
+                                              dbcsr_iterator_blocks_left,&
+                                              dbcsr_iterator_next_block,&
+                                              dbcsr_iterator_start,&
+                                              dbcsr_iterator_stop,&
+                                              dbcsr_iterator_type,&
                                               dbcsr_multiply,&
                                               dbcsr_norm,&
                                               dbcsr_p_type,&
+                                              dbcsr_put_block,&
                                               dbcsr_set,&
                                               dbcsr_print,&
                                               dbcsr_scale,&
@@ -157,6 +164,94 @@ MODULE ec_ao_solver
 CONTAINS
 
 ! **************************************************************************************************
+!> \brief compute for a block positive definite matrix s (bs)
+!>        the sqrt(bs) and inv(sqrt(bs))
+!> \param matrix_s ...
+!> \param matrix_bs_sqrt ...
+!> \param matrix_bs_sqrt_inv ...
+!> \param threshold ...
+!> \param order ...
+!> \param eps_lanczos ...
+!> \param max_iter_lanczos ...
+!> \par History
+!>       2010.10 created [Joost VandeVondele]
+!> \author Joost VandeVondele
+! **************************************************************************************************
+   SUBROUTINE compute_matrix_preconditioner(matrix_s, matrix_bs_sqrt, matrix_bs_sqrt_inv, &
+                                            threshold, method, order, eps_lanczos, max_iter_lanczos)
+
+      TYPE(dbcsr_type), INTENT(INOUT)                    :: matrix_s
+      TYPE(dbcsr_type), INTENT(INOUT)                    :: matrix_bs_sqrt, matrix_bs_sqrt_inv
+      REAL(KIND=dp)                                      :: threshold
+      INTEGER                                            :: method, order
+      REAL(KIND=dp)                                      :: eps_lanczos
+      INTEGER                                            :: max_iter_lanczos
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'compute_matrix_preconditioner', &
+         routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: handle, iblock_col, iblock_row
+      LOGICAL                                            :: block_needed
+      REAL(dp), DIMENSION(:, :), POINTER                 :: block_dp
+      TYPE(dbcsr_iterator_type)                          :: iter
+      TYPE(dbcsr_type)                                   :: matrix_bs
+
+      CALL timeset(routineN, handle)
+
+      ! first generate a block diagonal copy of s
+      CALL dbcsr_create(matrix_bs, template=matrix_s)
+
+      CALL dbcsr_iterator_start(iter, matrix_s)
+      DO WHILE (dbcsr_iterator_blocks_left(iter))
+         CALL dbcsr_iterator_next_block(iter, iblock_row, iblock_col, block_dp)
+
+         ! do we need the block ?
+         ! this depends on the preconditioner, but also the matrix clustering method employed
+         ! for a clustered matrix, right now, we assume that atomic and molecular preconditioners
+         ! are actually the same, and only require that the diagonal blocks (clustered) are present
+
+         block_needed = .FALSE.
+
+         IF (iblock_row == iblock_col) block_needed = .TRUE.
+
+         ! add it
+         IF (block_needed) THEN
+            CALL dbcsr_put_block(matrix=matrix_bs, row=iblock_row, col=iblock_col, block=block_dp)
+         ENDIF
+
+      ENDDO
+      CALL dbcsr_iterator_stop(iter)
+
+      CALL dbcsr_finalize(matrix_bs)
+
+
+      WRITE(*,*) "compute_matrix_preconditioner - matrix_bs"
+      CALL dbcsr_print(matrix_bs)
+
+      CALL dbcsr_copy(matrix_bs_sqrt, matrix_bs)
+      CALL dbcsr_copy(matrix_bs_sqrt_inv, matrix_bs)
+
+      SELECT CASE (method)
+      CASE (ls_s_sqrt_proot)
+          CALL matrix_sqrt_proot(matrix_bs_sqrt, matrix_bs_sqrt_inv, &
+                                 matrix_bs, threshold, order, &
+                                 eps_lanczos, max_iter_lanczos, symmetrize=.TRUE.)
+      CASE (ls_s_sqrt_ns)
+         CALL matrix_sqrt_Newton_Schulz(matrix_bs_sqrt, matrix_bs_sqrt_inv, &
+                                        matrix_bs, threshold, order, &
+                                        eps_lanczos, max_iter_lanczos)
+      CASE DEFAULT
+         CPABORT("Unknown sqrt method.")
+      END SELECT
+
+      CALL dbcsr_release(matrix_bs)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE compute_matrix_preconditioner
+
+
+! **************************************************************************************************
 !> \brief   
 !>          
 !>  without passing to orthonormal basis         
@@ -218,6 +313,7 @@ CONTAINS
 
      ! Gerneral setup 
      do_precond = .TRUE.
+!     do_precond = .FALSE.
 
      IF(iounit > 0) WRITE(iounit,*) "ec_res_ao - eps", linres_control%eps
      eps_filter = linres_control%eps_filter
@@ -285,18 +381,37 @@ CONTAINS
         CALL dbcsr_create(matrix_s_sqrt_inv, template=matrix_s(1)%matrix, &
                                matrix_type=dbcsr_type_no_symmetry)
 
+        CALL compute_matrix_preconditioner(matrix_s(1)%matrix, matrix_s_sqrt, matrix_s_sqrt_inv, &
+                                           threshold, s_sqrt_method, s_sqrt_order, &
+                                           eps_lanczos, max_iter_lanczos)
+
+        IF(iounit > 0) WRITE(*,*)"compute_matrix_preconditioner" 
+        norm_res = dbcsr_frobenius_norm(matrix_s_sqrt)
+        IF(iounit > 0) WRITE(*,*) "||S^1/2||", norm_res
+        norm_res = dbcsr_frobenius_norm(matrix_s_sqrt_inv)
+        IF(iounit > 0) WRITE(*,*) "||S^-1/2||", norm_res
+
         SELECT CASE (s_sqrt_method)
         CASE (ls_s_sqrt_proot)
             CALL matrix_sqrt_proot(matrix_s_sqrt, matrix_s_sqrt_inv, &
-                                   matrix_s(1)%matrix, threshold, &
-                                   s_sqrt_order, eps_lanczos, max_iter_lanczos, symmetrize=.TRUE.)
+                                   matrix_s(1)%matrix, threshold, s_sqrt_order, &
+                                   eps_lanczos, max_iter_lanczos, symmetrize=.TRUE.)
         CASE (ls_s_sqrt_ns)
            CALL matrix_sqrt_Newton_Schulz(matrix_s_sqrt, matrix_s_sqrt_inv, &
-                                          matrix_s(1)%matrix, threshold, &
-                                          s_sqrt_order, eps_lanczos, max_iter_lanczos)
+                                          matrix_s(1)%matrix, threshold, s_sqrt_order, &
+                                          eps_lanczos, max_iter_lanczos)
         CASE DEFAULT
            CPABORT("Unknown sqrt method.")
         END SELECT
+
+        IF(iounit > 0) WRITE(*,*) "preconditioner" 
+        norm_res = dbcsr_frobenius_norm(matrix_s_sqrt)
+        IF(iounit > 0) WRITE(*,*) "||S^1/2||", norm_res
+        norm_res = dbcsr_frobenius_norm(matrix_s_sqrt_inv)
+        IF(iounit > 0) WRITE(*,*) "||S^-1/2||", norm_res
+
+        IF(iounit > 0) WRITE(*,*) " preconditioner - S^-1/2"
+        CALL dbcsr_print(matrix_s_sqrt_inv)
 
      END IF
 
@@ -306,6 +421,16 @@ CONTAINS
 !     IF(iounit > 0) WRITE(*,*) "ec_res_ao - CALL build_hessian_op_from_z"
 !     CALL build_hessian_op_from_z(qs_env, matrix_ps, matrix_q, matrix_Ax, eps_filter)
 !     !--------------
+
+
+!     ! preconditioner
+!     CALL make_preconditioner(p_env%preconditioner(ispin), &
+!                                           linres_control%preconditioner_type, i&
+!                                           ot_precond_solver_default, &
+!                                           matrix_ks(ispin)%matrix, matrix_s(1)%matrix, i&
+!                                           matrix_t(1)%matrix, &
+!                                           mos(ispin)%mo_set, linres_control%energy_gap)     
+
 
      !----------------------------------------
      ! Get righ-hand-side (RHS) operator
@@ -633,10 +758,10 @@ CONTAINS
                    ps_trans = .TRUE.)
 
      norm_zao = dbcsr_frobenius_norm(p_env%p1(1)%matrix)
-     IF (iounit > 0) WRITE(iounit,*) "|| Z (MO) ||_F :", norm_zmo
+!     IF (iounit > 0) WRITE(iounit,*) "|| Z (MO) ||_F :", norm_zmo
      IF (iounit > 0) WRITE(iounit,*) "|| Z (AO) ||_F :", norm_zao
-     norm_res = norm_zmo - norm_zao
-     IF (iounit > 0) WRITE(iounit,*) "||Z(MO)||_F - ||Z(AO)||_F :", norm_res
+!     norm_res = norm_zmo - norm_zao
+!     IF (iounit > 0) WRITE(iounit,*) "||Z(MO)||_F - ||Z(AO)||_F :", norm_res
 
      CALL dbcsr_dot(p_env%p1(1)%matrix, matrix_s(1)%matrix, norm_res)
      IF(iounit > 0) WRITE(iounit,*) "Tr[PzS]", norm_res
@@ -1823,3 +1948,5 @@ CONTAINS
    END SUBROUTINE
 
 END MODULE ec_ao_solver
+
+
