@@ -25,6 +25,7 @@ MODULE qs_linres_methods
    USE cp_files,                        ONLY: close_file,&
                                               open_file
    USE cp_fm_basic_linalg,              ONLY: cp_fm_scale_and_add,&
+                                              cp_fm_norm,&
                                               cp_fm_trace
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
                                               cp_fm_struct_release,&
@@ -53,7 +54,9 @@ MODULE qs_linres_methods
                                               dbcsr_create,&
                                               dbcsr_deallocate_matrix,&
                                               dbcsr_filter,&
+                                              dbcsr_frobenius_norm,&
                                               dbcsr_p_type,&
+                                              dbcsr_scale,&
                                               dbcsr_set,&
                                               dbcsr_type
    USE hartree_local_methods,           ONLY: Vh_1c_gg_integrals
@@ -308,6 +311,9 @@ CONTAINS
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(linres_control_type), POINTER                 :: linres_control
       TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+      ! DEBUG
+      TYPE(cp_fm_p_type), DIMENSION(:), POINTER          :: psi_dbg 
+      REAL(dp)                                           :: norm_elec, norm_rhs, norm_zmo
 
       CALL timeset(routineN, handle)
 
@@ -384,6 +390,18 @@ CONTAINS
          CALL cp_dbcsr_sm_fm_multiply(matrix_s(1)%matrix, mo_coeff, Sc(ispin)%matrix, ncol)
       ENDDO
       !
+      ! DEBUG
+      ! fm matrix to store ps1 and apply projector
+      ALLOCATE (psi_dbg(nspins))
+      DO ispin = 1, nspins
+         CALL get_mo_set(mo_set=mos(ispin)%mo_set, mo_coeff=mo_coeff)
+         CALL cp_fm_get_info(mo_coeff, matrix_struct=tmp_fm_struct)
+         NULLIFY (psi_dbg(ispin)%matrix)
+         CALL cp_fm_create(psi_dbg(ispin)%matrix, tmp_fm_struct)
+         !CALL cp_fm_set_all(psi_dbg(ispin)%matrix, 0.0_dp)
+      ENDDO
+      ! DEBUG
+      !
       !
       !
       ! header
@@ -426,6 +444,14 @@ CONTAINS
       !
       ! r_0 = b - Ax0
       DO ispin = 1, nspins
+
+         ! fbelle debug
+         norm_rhs = cp_fm_norm(h1_psi0(1)%matrix,"F")
+         IF(para_env%mepos==0) WRITE(*,*) "RHS, iteration 0", norm_rhs
+         ! END 
+
+
+
          CALL cp_fm_to_fm(h1_psi0(ispin)%matrix, r(ispin)%matrix)
          CALL cp_fm_scale_and_add(-1.0_dp, r(ispin)%matrix, -1.0_dp, Ap(ispin)%matrix)
       ENDDO
@@ -575,6 +601,31 @@ CONTAINS
             restart = .FALSE.
          ENDIF
          !
+         ! DEBUG ------------------------------ 
+         !
+         ! Projector on psi1
+         DO ispin = 1, nspins
+            CALL cp_fm_to_fm(psi1(ispin)%matrix, psi_dbg(ispin)%matrix)
+            CALL preortho(psi_dbg, mo_coeff_array, Sc)
+         END DO
+         !
+         ! Build intermediate Z-Matrix
+         DO ispin = 1, nspins
+            CALL dbcsr_copy(p_env%p1(ispin)%matrix, matrix_s(1)%matrix)
+         END DO
+         CALL build_dm_response(psi0_order, psi_dbg, p_env%p1)
+         DO ispin = 1, nspins
+            CALL dbcsr_scale(p_env%p1(ispin)%matrix, 0.5_dp)
+         ENDDO
+         norm_zmo =  dbcsr_frobenius_norm(p_env%p1(1)%matrix)
+         !
+         ! Second order energy
+         CALL cp_fm_trace(psi_dbg(1)%matrix, Ap(1)%matrix, norm_elec)
+         !IF(para_env%mepos==0) WRITE(6,*) "linres_solver - Tr[xAx]", norm_elec
+         IF (iounit > 0) WRITE (iounit, "(T2,A18,T20,I3,T25,1E16.10,T45,1E16.10,T68,1E16.10)") &
+                              "It,res,ao,elec", iter, norm_res, norm_zmo, norm_elec
+         ! DEBUG ------------------------------ 
+         !
          ! preconditioner
          linres_control%flag = ""
          IF (linres_control%preconditioner_type .EQ. ot_precond_none) THEN
@@ -624,10 +675,19 @@ CONTAINS
       ! proj psi1
       CALL preortho(psi1, mo_coeff_array, Sc)
       !
+      ! DEBUG 
       ! Second order energy
       CALL apply_op(qs_env, p_env, psi0_order, psi1, Ap, chc)
       CALL cp_fm_trace(psi1(1)%matrix, Ap(1)%matrix, norm_res)
-      WRITE(iounit,*) "linres_solver - Tr[xAx]", norm_res
+      IF(para_env%mepos==0) WRITE(6,*) "linres_solver - Tr[xAx]", norm_res
+      norm_res = norm_res/SQRT(REAL(nao*maxnmo_o, dp))
+      IF(para_env%mepos==0) WRITE(6,*) "linres_solver - scaled_xAx", norm_res
+
+      DO ispin = 1, nspins
+         CALL cp_fm_release(psi_dbg(ispin)%matrix)
+      ENDDO
+      DEALLOCATE (psi_dbg)
+      ! DEBUG 
       !
       ! clean up
       DO ispin = 1, nspins
