@@ -716,7 +716,7 @@ CONTAINS
       LOGICAL                                            :: lsd
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(pw_env_type), POINTER                         :: pw_env
-      TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho1_g, rho1_r, rho_r, tau_pw, vxc_rho
+      TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho1_g, rho1_r, rho_r, tau1_r, vxc_rho
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(section_vals_type), POINTER                   :: xc_fun_section
       TYPE(xc_derivative_set_type), POINTER              :: deriv_set
@@ -747,11 +747,11 @@ CONTAINS
       END DO
 
       ! Get grid based density
-      NULLIFY (rho_r, rho1_r, rho1_g)
+      NULLIFY (rho_r, rho1_r, rho1_g, tau1_r)
       CALL qs_rho_get(rho, rho_r=rho_r)
-      CALL qs_rho_get(rho1, rho_r=rho1_r, rho_g=rho1_g)
+      CALL qs_rho_get(rho1, rho_r=rho1_r, rho_g=rho1_g, tau_r = tau1_r)
 
-      NULLIFY (deriv_set, rho_set, rho1_set, tau_pw)
+      NULLIFY (deriv_set, rho_set, rho1_set)
       ! Init rho1_set, with which to fold second derivative
       bo = rho_r(1)%pw%pw_grid%bounds_local
       CALL xc_rho_set_create(rho1_set, bo, &
@@ -763,7 +763,7 @@ CONTAINS
       needs = xc_functionals_get_needs(xc_fun_section, lsd, .TRUE.)
 
       ! calculate the rho set used to fold with 2nd derivative
-      CALL xc_rho_set_update(rho1_set, rho1_r, rho1_g, tau_pw, needs, &
+      CALL xc_rho_set_update(rho1_set, rho1_r, rho1_g, tau1_r, needs, &
                              section_get_ival(xc_section, "XC_GRID%XC_DERIV"), &
                              section_get_ival(xc_section, "XC_GRID%XC_SMOOTH_RHO"), &
                              auxbas_pw_pool)
