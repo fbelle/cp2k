@@ -818,6 +818,7 @@ CONTAINS
       TYPE(xc_rho_set_type), POINTER                     :: rho1_set, rho_set
       ! fbelle
 !      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_ps, matrix_rhs
+      REAL(dp)                                           :: trace
 
       CALL timeset(routineN, handle)
 
@@ -887,11 +888,29 @@ CONTAINS
          CALL pw_axpy(rho_g(ispin)%pw, rhoout_g(ispin)%pw, -1.0_dp)
          CALL pw_axpy(rhoout_g(ispin)%pw, rho_tot_gspace%pw)
       END DO
+!fbelle debug --------------------
+
+      DO ispin = 1,nspins
+         trace = pw_integral_ab(rhoout_r(ispin)%pw, rhoout_r(ispin)%pw)
+         IF(para_env%mepos==0) WRITE(*,*) "ec_ks_forces - int(drho_r^2]", trace
+         trace = pw_integral_ab(rhoout_g(ispin)%pw, rhoout_g(ispin)%pw)
+         IF(para_env%mepos==0) WRITE(*,*) "ec_ks_forces - int(drho_g^2]", trace
+      END DO
+
+!--------------------------------
       ! calculate associated hartree potential
       CALL pw_poisson_solve(poisson_env, rho_tot_gspace%pw, dehartree, &
                             v_hartree_gspace%pw)
       CALL pw_transfer(v_hartree_gspace%pw, dv_hartree_rspace%pw)
       CALL pw_scale(dv_hartree_rspace%pw, dv_hartree_rspace%pw%pw_grid%dvol)
+! fbelle
+IF(para_env%mepos==0) WRITE(*,*) "ec_nsc_force - v_[\delta n] - ehartree", dehartree
+      DO ispin = 1,nspins
+         trace = pw_integral_ab(rho_r(ispin)%pw, dv_hartree_rspace%pw)
+         IF(para_env%mepos==0) WRITE(*,*) "ec_nsc_force - int(rho_r*v_h_[\delta n]", trace
+      END DO
+!---------------
+
       ! Getting nuclear force contribution from the core charge density
       ! Vh(rho_in + rho_c) + Vh(rho_out - rho_in)
       CALL pw_transfer(v_hartree_rspace%pw, vtot_rspace%pw)
@@ -957,6 +976,15 @@ CONTAINS
 
       DO ispin = 1, nspins
          CALL pw_scale(v_xc(ispin)%pw, v_xc(ispin)%pw%pw_grid%dvol)
+! fbelle debug
+
+         trace = pw_integral_ab(rho_r(ispin)%pw, v_xc(ispin)%pw)
+         IF(para_env%mepos==0) WRITE(*,*) "ec_nsc_force - int(rho_r*f_xc_[\delta n]", trace
+         trace = pw_integral_ab(rho_r(ispin)%pw, rho_r(ispin)%pw)
+         IF(para_env%mepos==0) WRITE(*,*) "ec_nsc_force - int(rho_in_r^2]", trace
+
+
+!-----------
          CALL pw_axpy(dv_hartree_rspace%pw, v_xc(ispin)%pw)
          CALL integrate_v_rspace(qs_env=qs_env, v_rspace=v_xc(ispin), &
                                  hmat=matrix_v(ispin, 1), &
