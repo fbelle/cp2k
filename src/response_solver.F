@@ -251,8 +251,10 @@ CONTAINS
 
       ! initialized p_env
       CALL p_env_release(p_env)
-      CALL p_env_create(p_env, qs_env, orthogonal_orbitals=.TRUE., &
-                        linres_control=linres_control)
+      ! XXX 
+      !CALL p_env_create(p_env, qs_env, orthogonal_orbitals=.TRUE., &
+      !                  linres_control=linres_control)
+      CALL p_env_create(p_env, qs_env, linres_control=linres_control)
       CALL set_qs_env(qs_env, linres_control=linres_control)
       CALL p_env_psi0_changed(p_env, qs_env)
       !
@@ -457,6 +459,9 @@ CONTAINS
       CALL dbcsr_dot(p_env%p1(1)%matrix, matrix_s(1)%matrix, norm_zao)
       IF (iounit > 0) WRITE (iounit,*) "Tr[PzS]", norm_zao
 
+      norm_zao= dbcsr_frobenius_norm(p_env%w1(1)%matrix)
+      IF (iounit > 0) WRITE (iounit,*) "|| Wz (AO) ||_F :", norm_zao
+
       CALL timestop(handle)
 
    END SUBROUTINE response_equation
@@ -527,6 +532,8 @@ CONTAINS
       REAL(KIND=dp)                                      :: norm_res
       !  needed as pointer: mhz mwhz
       !TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: mwhz
+!      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: my2_matrix
+!      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: my_matrix
 
       CALL timeset(routineN, handle)
 
@@ -547,6 +554,8 @@ CONTAINS
  
       matrix_pz => p_env%p1
       nspins = SIZE(matrix_pz, 1)
+      !     *** If LSD, then combine alpha density and beta density to
+      !     *** total density: alpha <- alpha + beta   and
       IF (nspins == 2) THEN
          CALL dbcsr_add(matrix_pz(1)%matrix, matrix_pz(2)%matrix, &
                         alpha_scalar=1.0_dp, beta_scalar=1.0_dp)
@@ -574,15 +583,38 @@ CONTAINS
       NULLIFY (cell_to_index, virial)
       use_virial = .FALSE.
       nimages = 1
-      ALLOCATE (matrix_p(nspins, 1), matrix_h(nspins, 1))
+
+      ! fbelle - Core Hamiltonian spin independent
+      ALLOCATE (matrix_p(nspins, 1), matrix_h(1, 1))
       DO ispin = 1, nspins
          matrix_p(ispin, 1)%matrix => matrix_pz(ispin)%matrix
-         matrix_h(ispin, 1)%matrix => scrm(ispin)%matrix
       END DO
+      matrix_h(1, 1)%matrix => scrm(1)%matrix
+!---------- 
+
+!      NULLIFY (matrix_p)
+!      CALL dbcsr_allocate_matrix_set(matrix_p, nspins,1)
+!      DO ispin = 1, nspins
+!         ALLOCATE (matrix_p(ispin,1)%matrix)
+!         CALL dbcsr_create(matrix_p(ispin,1)%matrix, template=matrix_pz(1)%matrix)
+!         CALL dbcsr_copy(matrix_p(ispin,1)%matrix, matrix_pz(ispin)%matrix)
+!      END DO
+!      CALL get_qs_env(qs_env, matrix_h_kp = matrix_h)
+!      ! Dummy KS matrix for integrate
+!      NULLIFY (my2_matrix)
+!      CALL dbcsr_allocate_matrix_set(my2_matrix, 1, 1)
+!      ALLOCATE (my2_matrix(1,1)%matrix)
+!      CALL dbcsr_create(my2_matrix(1,1)%matrix, template=matrix_pz(1)%matrix)
+!      ! Dummy KS matrix for integrate
+!      CALL dbcsr_copy(my2_matrix(1,1)%matrix, matrix_h(1,1)%matrix)
+
+!---------- 
+
       IF (ASSOCIATED(sac_ppl)) THEN
          nder = 1
          IF (debug_forces) fodeb(1:3) = force(1)%gth_ppl(1:3, 1)
          CALL build_core_ppl(matrix_h, matrix_p, force, &
+         !CALL build_core_ppl(my2_matrix, matrix_p, force, &
                              virial, .TRUE., use_virial, nder, &
                              qs_kind_set, atomic_kind_set, particle_set, sab_orb, sac_ppl, &
                              nimages, cell_to_index, "ORB")
@@ -597,6 +629,7 @@ CONTAINS
          nder = 1
          IF (debug_forces) fodeb(1:3) = force(1)%gth_ppnl(1:3, 1)
          CALL build_core_ppnl(matrix_h, matrix_p, force, &
+         !CALL build_core_ppnl(my2_matrix, matrix_p, force, &
                               virial, .TRUE., use_virial, nder, &
                               qs_kind_set, atomic_kind_set, particle_set, sab_orb, sap_ppnl, eps_ppnl, &
                               nimages, cell_to_index, "ORB")
@@ -623,7 +656,26 @@ CONTAINS
             END IF
          END IF
       END IF
+
+!-------------------
+! DEBUG
       DEALLOCATE (matrix_p, matrix_h)
+!-------------------
+
+!      CALL dbcsr_deallocate_matrix_set(matrix_p)
+!      CALL dbcsr_deallocate_matrix_set(my2_matrix)
+
+!      NULLIFY (my_matrix)
+!      CALL dbcsr_allocate_matrix_set(my_matrix, nspins)
+!      DO ispin = 1, nspins
+!         ALLOCATE (my_matrix(ispin)%matrix)
+!         CALL dbcsr_create(my_matrix(ispin)%matrix, template=matrix_pz(1)%matrix)
+!         CALL dbcsr_copy(my_matrix(ispin)%matrix, matrix_pz(ispin)%matrix)
+!         CALL dbcsr_set(my_matrix(ispin)%matrix, 0.0_dp)
+!      END DO
+
+!-------------------
+
       IF (debug_forces) THEN
          ALLOCATE (ftot2(3, natom))
          CALL total_qs_force(ftot2, force, atomic_kind_set)
@@ -644,10 +696,12 @@ CONTAINS
          CALL pw_axpy(vxc_rspace(ispin)%pw, vhxc_rspace%pw)
          CALL integrate_v_rspace(v_rspace=vhxc_rspace, &
                                  hmat=scrm(1), pmat=matrix_pz(ispin), &
+                                 !hmat=my_matrix(ispin), pmat=matrix_pz(ispin), &
                                  qs_env=qs_env, calculate_forces=.TRUE.)
          IF (ASSOCIATED(vtau_rspace)) THEN
             CALL integrate_v_rspace(v_rspace=vtau_rspace(ispin), &
                                     hmat=scrm(1), pmat=matrix_pz(ispin), &
+                                    !hmat=my_matrix(ispin), pmat=matrix_pz(ispin), &
                                     qs_env=qs_env, calculate_forces=.TRUE., compute_tau=.TRUE.)
          END IF
       END DO
@@ -667,6 +721,7 @@ CONTAINS
             IF (debug_forces) fodeb(1:3) = force(1)%rho_elec(1:3, 1)
             CALL kg_ekin_subset(qs_env=qs_env, &
                                 ks_matrix=scrm, &
+                                !ks_matrix=my_matrix, &
                                 ekin_mol=ekin_mol, &
                                 calc_force=.TRUE., &
                                 do_kernel=.FALSE., &
@@ -678,6 +733,13 @@ CONTAINS
             END IF
          END IF
       END IF
+
+!---------------
+! debugging
+
+!      CALL dbcsr_deallocate_matrix_set(my_matrix)
+
+!--------------
 
       ALLOCATE (rhoz_r(nspins), rhoz_g(nspins))
       DO ispin = 1, nspins
@@ -1037,36 +1099,37 @@ CONTAINS
       matrix_wz => p_env%w1
 
       ! DEBUG - IF ground-state density matrix solved by diagonalization, then use this
-       IF(.NOT. dft_control%qs_control%do_ls_scf) THEN
-          focc = 1.0_dp
-          IF (nspins == 1) focc = 2.0_dp
+      IF (.NOT. dft_control%qs_control%do_ls_scf) THEN
+
+         focc = 1.0_dp
+         IF (nspins == 1) focc = 2.0_dp
+
           CALL get_qs_env(qs_env, mos=mos)
           DO ispin = 1, nspins
              CALL calculate_whz_matrix(mos(ispin)%mo_set, matrix_hz(ispin)%matrix, &
                                        matrix_wz(ispin)%matrix, focc)
           END DO
-          IF (nspins == 2) THEN
-             CALL dbcsr_add(matrix_wz(1)%matrix, matrix_wz(2)%matrix, &
-                            alpha_scalar=1.0_dp, beta_scalar=1.0_dp)
-          END IF
 
           norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
           IF (iounit > 0) WRITE(iounit,*) "||Whz||", norm_res
 
-      ! Gund-state density has been calculated by LS
+      ! Ground-state density has been calculated by LS
       ELSE 
       
-          focc = 1.0_dp
-          IF (nspins == 1) focc = 2.0_dp
           eps_filter = dft_control%qs_control%eps_filter_matrix
-      
-          CALL calculate_whz_ao_matrix(qs_env, matrix_hz, matrix_wz, focc, eps_filter)
+          CALL calculate_whz_ao_matrix(qs_env, matrix_hz, matrix_wz, eps_filter)
 
+          ! fbelle
           norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
           IF (iounit > 0) WRITE(iounit,*) "||Whz||", norm_res
 
       END IF
       ! DEBUG ------------ 
+
+      IF (SIZE(matrix_wz, 1) == 2) THEN
+         CALL dbcsr_add(matrix_wz(1)%matrix, matrix_wz(2)%matrix, &
+                        alpha_scalar=1.0_dp, beta_scalar=1.0_dp)
+      END IF
 
       IF (debug_forces) fodeb(1:3) = force(1)%overlap(1:3, 1)
       NULLIFY (scrm)
@@ -1075,6 +1138,12 @@ CONTAINS
                                 basis_type_a="ORB", basis_type_b="ORB", &
                                 sab_nl=sab_orb, calculate_forces=.TRUE., &
                                 matrix_p=matrix_wz(1)%matrix)
+
+      IF (SIZE(matrix_wz, 1) == 2) THEN
+         CALL dbcsr_add(matrix_wz(1)%matrix, matrix_wz(2)%matrix, &
+                        alpha_scalar=1.0_dp, beta_scalar=-1.0_dp)
+      END IF
+
       IF (debug_forces) THEN
          fodeb(1:3) = force(1)%overlap(1:3, 1) - fodeb(1:3)
          CALL mp_sum(fodeb, para_env%group)
@@ -1461,20 +1530,22 @@ CONTAINS
 !>       2020.2 created [Fabian Belleflamme]
 !> \author Fabian Belleflamme
 ! **************************************************************************************************
-   SUBROUTINE calculate_whz_ao_matrix(qs_env, matrix_hz, matrix_whz, focc, eps_filter)
+   SUBROUTINE calculate_whz_ao_matrix(qs_env, matrix_hz, matrix_whz, eps_filter)
 
        TYPE(qs_environment_type), POINTER                  :: qs_env
        TYPE(dbcsr_p_type), DIMENSION(:), INTENT(IN), &
                                             POINTER        :: matrix_hz
        TYPE(dbcsr_p_type), DIMENSION(:), INTENT(OUT), &
                                             POINTER        :: matrix_whz
-       REAL(KIND=dp), INTENT(IN)                           :: focc, eps_filter
+       !REAL(KIND=dp), INTENT(IN)                           :: focc, eps_filter
+       REAL(KIND=dp), INTENT(IN)                           :: eps_filter
 
        CHARACTER(len=*), PARAMETER :: routineN = 'calculate_whz_ao_matrix', &
           routineP = moduleN//':'//routineN
 
        INTEGER                                            :: handle, ispin, nspins
-       REAL(KIND=dp)                                      :: falpha, scaling
+!       REAL(KIND=dp)                                      :: falpha, scaling
+       REAL(KIND=dp)                                      :: scaling
        TYPE(cp_para_env_type), POINTER                    :: para_env
        TYPE(dbcsr_type)                                   :: matrix_tmp
        TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_ao
@@ -1502,20 +1573,17 @@ CONTAINS
        ! Liear sclaing implies absence of explicit knowledge of molecular orbital coefficients
        !!! Scaling the density matrix at this stage, means dividing the final result by 4
        !!! as two multiplications with P are carried out.
-       scaling = 1.0_dp
-       IF (nspins == 1) scaling = 0.5_dp
-
-       ! Scaling for closed shell-case on Hz
-       falpha = focc*scaling
+       scaling = 0.5_dp
+       IF(nspins == 2) scaling = 1.0_dp
 
        DO ispin = 1, nspins 
 
           ! tmp1 = H*CC^T
-          CALL dbcsr_multiply("N", "N", scaling, matrix_hz(ispin)%matrix, rho_ao(ispin)%matrix, &
+          CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_hz(ispin)%matrix, rho_ao(ispin)%matrix, &
                               0.0_dp, matrix_tmp, filter_eps = eps_filter)
           ! tmp2 = CC^T*tmp1
           ! Whz = Wz + focc*(scaling*P)*Hz*(scaling*P)
-          CALL dbcsr_multiply("N", "N", falpha, rho_ao(ispin)%matrix, matrix_tmp, &
+          CALL dbcsr_multiply("N", "N", scaling, rho_ao(ispin)%matrix, matrix_tmp, &
                               1.0_dp, matrix_whz(ispin)%matrix, filter_eps = eps_filter, &
                               retain_sparsity = .TRUE.)
 
