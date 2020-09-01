@@ -491,7 +491,8 @@ MODULE input_constants
                                                ot_precond_full_kinetic = 2, &
                                                ot_precond_s_inverse = 3, &
                                                ot_precond_full_all = 5, &
-                                               ot_precond_full_single_inverse = 6
+                                               ot_precond_full_single_inverse = 6, &
+                                               precond_mlp = 7
    INTEGER, PARAMETER, PUBLIC               :: ot_precond_solver_default = 1, &
                                                ot_precond_solver_inv_chol = 2, &
                                                ot_precond_solver_direct = 3, &
@@ -1050,8 +1051,7 @@ MODULE input_constants
 
    ! Response solver for energy correction
    INTEGER, PARAMETER, PUBLIC               :: ec_mo_solver = 1, &
-                                               ec_ls_solver = 2, &
-                                               ec_ls_ortho = 3
+                                               ec_ls_solver = 2
 
 
    ! swarm parameters
