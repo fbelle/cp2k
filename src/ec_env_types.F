@@ -64,8 +64,6 @@ MODULE ec_env_types
       REAL(KIND=dp)                                    :: etotal
       REAL(KIND=dp)                                    :: eband, exc, ehartree, vhxc
       REAL(KIND=dp)                                    :: edispersion, efield_nuclear
-      ! forces
-      TYPE(qs_force_type), DIMENSION(:), POINTER       :: force => Null()
       ! full neighbor lists and corresponding task list
       TYPE(neighbor_list_set_p_type), &
          DIMENSION(:), POINTER                         :: sab_orb, sac_ppl, sap_ppnl
@@ -85,8 +83,10 @@ MODULE ec_env_types
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER        :: mao_coef
       ! CP equations
       TYPE(qs_p_env_type), POINTER                     :: p_env
-      TYPE(cp_fm_p_type), DIMENSION(:), POINTER        :: cpmos
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER        :: matrix_hz
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER        :: matrix_z
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER        :: matrix_wz
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER        :: z_admm
       ! potentials from input density
       TYPE(pw_p_type), POINTER                         :: vh_rspace
       TYPE(pw_p_type), DIMENSION(:), POINTER           :: vxc_rspace, vtau_rspace
@@ -114,8 +114,6 @@ CONTAINS
          CALL release_neighbor_list_sets(ec_env%sab_orb)
          CALL release_neighbor_list_sets(ec_env%sac_ppl)
          CALL release_neighbor_list_sets(ec_env%sap_ppnl)
-         ! forces
-         IF (ASSOCIATED(ec_env%force)) CALL deallocate_qs_force(ec_env%force)
          ! operator matrices
          IF (ASSOCIATED(ec_env%matrix_ks)) CALL dbcsr_deallocate_matrix_set(ec_env%matrix_ks)
          IF (ASSOCIATED(ec_env%matrix_h)) CALL dbcsr_deallocate_matrix_set(ec_env%matrix_h)
@@ -132,17 +130,13 @@ CONTAINS
          IF (ASSOCIATED(ec_env%dispersion_env)) THEN
             CALL qs_dispersion_release(ec_env%dispersion_env)
          END IF
-         ! CP env
-         IF (ASSOCIATED(ec_env%cpmos)) THEN
-            DO iab = 1, SIZE(ec_env%cpmos)
-               CALL cp_fm_release(ec_env%cpmos(iab)%matrix)
-            END DO
-            DEALLOCATE (ec_env%cpmos)
-            NULLIFY (ec_env%cpmos)
-         END IF
 
+         IF (ASSOCIATED(ec_env%matrix_z)) CALL dbcsr_deallocate_matrix_set(ec_env%matrix_z)
          IF (ASSOCIATED(ec_env%matrix_hz)) CALL dbcsr_deallocate_matrix_set(ec_env%matrix_hz)
-         NULLIFY (ec_env%matrix_hz)
+         IF (ASSOCIATED(ec_env%matrix_wz)) CALL dbcsr_deallocate_matrix_set(ec_env%matrix_wz)
+         IF (ASSOCIATED(ec_env%z_admm)) CALL dbcsr_deallocate_matrix_set(ec_env%z_admm)
+         NULLIFY (ec_env%matrix_z, ec_env%matrix_hz, ec_env%matrix_wz)
+         NULLIFY (ec_env%z_admm)
 
          IF (ASSOCIATED(ec_env%p_env)) THEN
             CALL p_env_release(ec_env%p_env)
