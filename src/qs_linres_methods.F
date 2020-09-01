@@ -608,6 +608,8 @@ CONTAINS
             CALL cp_fm_to_fm(psi1(ispin)%matrix, psi_dbg(ispin)%matrix)
             CALL preortho(psi_dbg, mo_coeff_array, Sc)
          END DO
+
+         CALL apply_op(qs_env, p_env, psi0_order, psi_dbg, Ap, chc)
          !
          ! Build intermediate Z-Matrix
          DO ispin = 1, nspins
@@ -623,7 +625,7 @@ CONTAINS
          CALL cp_fm_trace(psi_dbg(1)%matrix, Ap(1)%matrix, norm_elec)
          !IF(para_env%mepos==0) WRITE(6,*) "linres_solver - Tr[xAx]", norm_elec
          IF (iounit > 0) WRITE (iounit, "(T2,A18,T20,I3,T25,1E16.10,T45,1E16.10,T68,1E16.10)") &
-                              "It,res,ao,elec", iter, norm_res, norm_zmo, norm_elec
+                              "It,res,zao,elec", iter, norm_res, norm_zmo, norm_elec
          ! DEBUG ------------------------------ 
          !
          ! preconditioner
@@ -678,10 +680,22 @@ CONTAINS
       ! DEBUG 
       ! Second order energy
       CALL apply_op(qs_env, p_env, psi0_order, psi1, Ap, chc)
-      CALL cp_fm_trace(psi1(1)%matrix, Ap(1)%matrix, norm_res)
-      IF(para_env%mepos==0) WRITE(6,*) "linres_solver - Tr[xAx]", norm_res
-      norm_res = norm_res/SQRT(REAL(nao*maxnmo_o, dp))
-      IF(para_env%mepos==0) WRITE(6,*) "linres_solver - scaled_xAx", norm_res
+      CALL cp_fm_trace(psi1(1)%matrix, Ap(1)%matrix, norm_elec)
+      IF(para_env%mepos==0) WRITE(6,*) "linres_solver - Tr[xAx]", norm_elec
+
+      ! Build intermediate Z-Matrix
+      DO ispin = 1, nspins
+         CALL dbcsr_copy(p_env%p1(ispin)%matrix, matrix_s(1)%matrix)
+      END DO
+      CALL build_dm_response(psi0_order, psi1, p_env%p1)
+      DO ispin = 1, nspins
+         CALL dbcsr_scale(p_env%p1(ispin)%matrix, 0.5_dp)
+      ENDDO
+      norm_zmo =  dbcsr_frobenius_norm(p_env%p1(1)%matrix)
+
+      ! LAST print
+      IF (iounit > 0) WRITE (iounit, "(T2,A18,T20,A3,T25,1E16.10,T45,1E16.10,T68,1E16.10)") &
+                       "It,res,zao,elec", iter, norm_res, norm_zmo, norm_elec
 
       DO ispin = 1, nspins
          CALL cp_fm_release(psi_dbg(ispin)%matrix)
@@ -924,7 +938,7 @@ CONTAINS
       INTEGER, DIMENSION(2, 3)                           :: bo
       LOGICAL                                            :: deriv2_analytic, gapw, gapw_xc, &
                                                             lr_triplet, lrigpw, lsd
-      REAL(KIND=dp)                                      :: alpha, ekin_mol, energy_hartree, &
+      REAL(KIND=dp)                                      :: ekin_mol, energy_hartree, &
                                                             energy_hartree_1c, exc, fac
       REAL(KIND=dp), DIMENSION(3, 3)                     :: virial_xc
       REAL(kind=dp), DIMENSION(:, :, :), POINTER         :: rho3, rhoa, rhob
@@ -1391,12 +1405,6 @@ CONTAINS
       IF (dft_control%qs_control%do_kg .AND. .NOT. (lr_triplet .OR. gapw .OR. gapw_xc)) THEN
          IF (qs_env%kg_env%tnadd_method == kg_tnadd_embed) THEN
 
-            IF (nspins == 2) THEN
-               alpha = 1.0_dp
-            ELSE
-               alpha = 2.0_dp
-            END IF
-
             ekin_mol = 0.0_dp
             CALL qs_rho_get(rho1, rho_ao=rho1_ao)
             CALL kg_ekin_subset(qs_env=qs_env, &
@@ -1404,8 +1412,7 @@ CONTAINS
                                 ekin_mol=ekin_mol, &
                                 calc_force=.FALSE., &
                                 do_kernel=.TRUE., &
-                                pmat_ext=rho1_ao, &
-                                alpha=alpha)
+                                pmat_ext=rho1_ao)
          END IF
       END IF
 
