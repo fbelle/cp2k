@@ -15,13 +15,13 @@ MODULE input_cp2k_ec
    USE bibliography,                    ONLY: Niklasson2003,&
                                               VandeVondele2012
    USE input_constants,                 ONLY: &
-        ec_curvy_steps, ec_diagonalization, ec_functional_harris, ec_mo_solver, ec_ls_solver, ec_ls_ortho,&
-        ec_matrix_sign, ec_matrix_tc2, &
-        ec_matrix_trs4, kg_cholesky, ls_cluster_atomic, ls_cluster_molecular, &
-        ls_s_inversion_hotelling, ls_s_inversion_sign_sqrt, ls_s_preconditioner_atomic, &
-        ls_s_preconditioner_molecular, ls_s_preconditioner_none, ls_s_sqrt_ns, ls_s_sqrt_proot, &
-        ls_scf_sign_ns, ls_scf_sign_proot, ot_precond_full_all, ot_precond_full_kinetic,&
-        ot_precond_full_single,  ot_precond_full_single_inverse, ot_precond_none, ot_precond_s_inverse
+        ec_curvy_steps, ec_diagonalization, ec_functional_harris, ec_mo_solver, ec_ls_solver,&
+        ec_matrix_sign, ec_matrix_tc2, ec_matrix_trs4, kg_cholesky, ls_cluster_atomic, &
+        ls_cluster_molecular, ls_s_inversion_hotelling, ls_s_inversion_sign_sqrt, &
+        ls_s_preconditioner_atomic, ls_s_preconditioner_molecular, ls_s_preconditioner_none, &
+        ls_s_sqrt_ns, ls_s_sqrt_proot, ls_scf_sign_ns, ls_scf_sign_proot, ot_precond_full_all, &
+        ot_precond_full_kinetic, ot_precond_full_single,  ot_precond_full_single_inverse, &
+        ot_precond_none, ot_precond_s_inverse, precond_mlp
    USE input_cp2k_xc,                   ONLY: create_xc_section
    USE input_keyword_types,             ONLY: keyword_create,&
                                               keyword_release,&
@@ -61,7 +61,7 @@ CONTAINS
       NULLIFY (keyword)
       CALL section_create(section, __LOCATION__, name="ENERGY_CORRECTION", &
                           description="Sets the various options for the Energy Correction", &
-                          n_keywords=0, n_subsections=1, repeats=.FALSE.)
+                          n_keywords=0, n_subsections=2, repeats=.FALSE.)
 
       CALL keyword_create(keyword, __LOCATION__, name="_SECTION_PARAMETERS_", &
                           description="Controls the activation of the energy_correction", &
@@ -176,13 +176,13 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="EPS", &
                           description="Target accuracy for the convergence of the conjugate gradient.", &
-                          usage="EPS 1.e-12", default_r_val=1.e-12_dp)
+                          usage="EPS 1.e-10", default_r_val=1.e-12_dp)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="EPS_FILTER", &
                           description="Threshold used for filtering matrix operations.", &
-                          usage="EPS_FILTER 1.0E-7", default_r_val=1.0E-6_dp)
+                          usage="EPS_FILTER 1.0E-10", default_r_val=1.0E-10_dp)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -200,20 +200,20 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="MAX_ITER_LANCZOS", &
                           description="Maximum number of lanczos iterations.", &
-                          usage="MAX_ITER_LANCZOS ", default_i_val=128)
+                          usage="MAX_ITER_LANCZOS 128", default_i_val=128)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="METHOD", &
-                          description="Algorithm used to solve response equation", &
-                          usage="ALGORITHM SOLVING", &
-                          default_i_val=ec_mo_solver, &
-                          enum_c_vals=s2a("MO_SOLVER", "AO_SOLVER", &
-                                          "AO_ORTHO"), &
-                          enum_desc=s2a("Use MO-solver.", &
-                                        "AO-solver", &
-                                        "AO-ortho solver"), &
-                          enum_i_vals=(/ec_mo_solver, ec_ls_solver, ec_ls_ortho/))
+                          description="Algorithm used to solve response equation." //& 
+                          "Both solver are conjugate gradient based, but use either a vector (MO-coefficient)" //& 
+                          "or density matrix formalism in the orthonormal AO-basis to obtain response density", &
+                          usage="METHOD SOLVER", &
+                          default_i_val=ec_ls_solver, &
+                          enum_c_vals=s2a("MO_SOLVER", "AO_ORTHO"), &
+                          enum_desc=s2a("Solver based on MO (vector) formalism", &
+                                        "Solver based on density matrix formalism"), &
+                          enum_i_vals=(/ec_mo_solver, ec_ls_solver/))
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -244,11 +244,12 @@ CONTAINS
          keyword, __LOCATION__, name="PRECONDITIONER", &
          description="Type of preconditioner to be used with MO conjugate gradient solver. "// &
          "They differ in effectiveness, cost of construction, cost of application. "// &
-         "Properly preconditioned minimization can be orders of magnitude faster than doing nothing.", &
+         "Properly preconditioned minimization can be orders of magnitude faster than doing nothing." //&
+         "Only multi-level conjugate gradient preconditioner (MULTI_LEVEL) available for AO response solver (AO_ORTHO).", &
          usage="PRECONDITIONER FULL_ALL", &
-         default_i_val=ot_precond_none, &
+         default_i_val=precond_mlp, &
          enum_c_vals=s2a("FULL_ALL", "FULL_SINGLE_INVERSE", "FULL_SINGLE", "FULL_KINETIC", "FULL_S_INVERSE", &
-                         "NONE"), &
+                        "MULTI_LEVEL","NONE"), &
          enum_desc=s2a("Most effective state selective preconditioner based on diagonalization, "// &
                        "requires the ENERGY_GAP parameter to be an underestimate of the HOMO-LUMO gap. "// &
                        "This preconditioner is recommended for almost all systems, except very large systems where "// &
@@ -260,9 +261,10 @@ CONTAINS
                        "Cholesky inversion of S and T, fast construction, robust, and relatively good, "// &
                        "use for very large systems.", &
                        "Cholesky inversion of S, not as good as FULL_KINETIC, yet equally expensive.", &
+                       "Based on same CG as AO-solver itself, but uses cheaper linear transformation",&
                        "skip preconditioning"), &
          enum_i_vals=(/ot_precond_full_all, ot_precond_full_single_inverse, ot_precond_full_single, &
-                       ot_precond_full_kinetic, ot_precond_s_inverse, ot_precond_none/))
+                       ot_precond_full_kinetic, ot_precond_s_inverse, precond_mlp,  ot_precond_none/))
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
