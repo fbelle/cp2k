@@ -90,21 +90,19 @@ CONTAINS
 !> \param calc_force ...
 !> \param do_kernel Contribution of kinetic energy functional to kernel in response calculation
 !> \param pmat_ext Response density used to fold 2nd deriv or to integrate kinetic energy functional
-!> \param alpha Multiplicative factor required in linear response equations
 !> \par History
 !>       2012.06 created [Martin Haeufel]
 !>       2014.01 added atomic potential option [JGH]
 !>       2020.01 Added KG contribution to linear response [fbelle]
 !> \author Martin Haeufel and Florian Schiffmann
 ! **************************************************************************************************
-   SUBROUTINE kg_ekin_subset(qs_env, ks_matrix, ekin_mol, calc_force, do_kernel, pmat_ext, alpha)
+   SUBROUTINE kg_ekin_subset(qs_env, ks_matrix, ekin_mol, calc_force, do_kernel, pmat_ext)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: ks_matrix
       REAL(KIND=dp), INTENT(out)                         :: ekin_mol
       LOGICAL, INTENT(IN)                                :: calc_force, do_kernel
       TYPE(dbcsr_p_type), DIMENSION(:), OPTIONAL, &
          POINTER                                         :: pmat_ext
-      REAL(KIND=dp), INTENT(IN), OPTIONAL                :: alpha
 
       LOGICAL                                            :: lrigpw
       TYPE(dft_control_type), POINTER                    :: dft_control
@@ -118,7 +116,7 @@ CONTAINS
             CALL kg_ekin_embed_lri(qs_env, kg_env, ks_matrix, ekin_mol, calc_force)
          ELSE
             CALL kg_ekin_embed(qs_env, kg_env, ks_matrix, ekin_mol, calc_force, &
-                               do_kernel, pmat_ext, alpha)
+                               do_kernel, pmat_ext)
          END IF
       ELSE IF (kg_env%tnadd_method == kg_tnadd_embed_ri) THEN
          CALL kg_ekin_ri_embed(qs_env, kg_env, ks_matrix, ekin_mol, calc_force)
@@ -141,9 +139,8 @@ CONTAINS
 !> \param calc_force ...
 !> \param do_kernel Contribution of kinetic energy functional to kernel in response calculation
 !> \param pmat_ext Response density used to fold 2nd deriv or to integrate kinetic energy functional
-!> \param alpha Multiplicative factor required in linear response equations
 ! **************************************************************************************************
-   SUBROUTINE kg_ekin_embed(qs_env, kg_env, ks_matrix, ekin_mol, calc_force, do_kernel, pmat_ext, alpha)
+   SUBROUTINE kg_ekin_embed(qs_env, kg_env, ks_matrix, ekin_mol, calc_force, do_kernel, pmat_ext)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(kg_environment_type), POINTER                 :: kg_env
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: ks_matrix
@@ -151,22 +148,24 @@ CONTAINS
       LOGICAL, INTENT(IN)                                :: calc_force, do_kernel
       TYPE(dbcsr_p_type), DIMENSION(:), OPTIONAL, &
          POINTER                                         :: pmat_ext
-      REAL(KIND=dp), INTENT(IN), OPTIONAL                :: alpha
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'kg_ekin_embed'
 
-      INTEGER                                            :: handle, ispin, isub, natom, nspins
+      INTEGER                                            :: handle, ispin, isub, nspins
       LOGICAL                                            :: use_virial
-      REAL(KIND=dp)                                      :: ekin_imol, my_alpha
+      REAL(KIND=dp)                                      :: alpha, ekin_imol
       REAL(KIND=dp), DIMENSION(3, 3)                     :: xcvirial
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: density_matrix
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(pw_env_type), POINTER                         :: pw_env
-      TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho1_g, rho1_r, rho_r, vxc_rho, vxc_tau
+      TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho_r, vxc_rho, vxc_tau
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
       TYPE(qs_rho_type), POINTER                         :: old_rho, rho1, rho_struct
+      TYPE(section_vals_type), POINTER                   :: xc_section
       TYPE(virial_type), POINTER                         :: virial
+      !
+      TYPE(cp_para_env_type), POINTER                    :: para_env
 
       CALL timeset(routineN, handle)
 
@@ -175,13 +174,20 @@ CONTAINS
       CALL get_qs_env(qs_env, &
                       ks_env=ks_env, &
                       rho=old_rho, &
-                      natom=natom, &
                       dft_control=dft_control, &
                       virial=virial, &
+                      para_env=para_env, &
                       pw_env=pw_env)
       nspins = dft_control%nspins
       use_virial = virial%pv_availability .AND. (.NOT. virial%pv_numer)
       use_virial = use_virial .AND. calc_force
+
+      ! Kernel potential in response calculation (no forces calculated at this point)
+      ! requires spin-factor
+      ! alpha = 2 closed-shell
+      ! alpha = 1 open-shell
+      alpha = 1.0_dp
+      IF (do_kernel .AND. .NOT. calc_force .AND. nspins == 1) alpha = 2.0_dp
 
       CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
 
@@ -200,20 +206,17 @@ CONTAINS
       ! If external density associated then it is needed either for
       ! 1) folding of second derivative while partially integrating, or
       ! 2) integration of response forces
-      NULLIFY (rho1, rho1_r, rho1_g)
+      NULLIFY (rho1)
       IF (PRESENT(pmat_ext)) THEN
          CALL qs_rho_create(rho1)
          CALL qs_rho_set(rho1, rho_ao=pmat_ext)
          CALL qs_rho_rebuild(rho1, qs_env, rebuild_ao=.FALSE., rebuild_grids=.TRUE.)
          CALL qs_rho_update_rho(rho1, qs_env)
-         CALL qs_rho_get(rho1, rho_r=rho1_r, rho_g=rho1_g)
       END IF
 
-      ! Response solver requires factor (spin) for kernel matrix
-      ! alpha = 2 closed-shell
-      ! alpha = 1 open-shell
-      my_alpha = 1.0_dp
-      IF (PRESENT(alpha)) my_alpha = alpha
+      ! XC-section pointing to kinetic energy functional in KG environment
+      NULLIFY(xc_section)
+      xc_section => kg_env%xc_section_kg
 
       ekin_imol = 0.0_dp
 
@@ -224,9 +227,9 @@ CONTAINS
                             vxc=vxc_rho, &
                             rho=rho_struct, &
                             rho1=rho1, &
-                            xc_section=kg_env%xc_section_kg)
+                            xc_section=xc_section)
       ELSE
-         CALL qs_vxc_create(ks_env=ks_env, rho_struct=rho_struct, xc_section=kg_env%xc_section_kg, &
+         CALL qs_vxc_create(ks_env=ks_env, rho_struct=rho_struct, xc_section=xc_section, &
                             vxc_rho=vxc_rho, vxc_tau=vxc_tau, exc=ekin_imol)
          IF (ASSOCIATED(vxc_tau)) THEN
             CPABORT(" KG with meta-kinetic energy functionals not implemented")
@@ -234,11 +237,13 @@ CONTAINS
       END IF
 
       DO ispin = 1, nspins
-         vxc_rho(ispin)%pw%cr3d = my_alpha*vxc_rho(ispin)%pw%cr3d*vxc_rho(ispin)%pw%pw_grid%dvol
-         ! Integrate xc-potential with external density for outer response forces
-         IF (PRESENT(pmat_ext) .AND. .NOT. do_kernel) THEN
-            CALL qs_rho_get(rho1, rho_ao=density_matrix)
-         END IF
+         vxc_rho(ispin)%pw%cr3d = alpha*vxc_rho(ispin)%pw%cr3d*vxc_rho(ispin)%pw%pw_grid%dvol
+      END DO
+      ! Integrate xc-potential with external density for outer response forces
+      IF (PRESENT(pmat_ext) .AND. .NOT. do_kernel) THEN
+         CALL qs_rho_get(rho1, rho_ao=density_matrix)
+      END IF
+      DO ispin = 1, nspins
          CALL integrate_v_rspace(v_rspace=vxc_rho(ispin), &
                                  pmat=density_matrix(ispin), hmat=ks_matrix(ispin), &
                                  qs_env=qs_env, calculate_forces=calc_force)
@@ -261,6 +266,7 @@ CONTAINS
          END IF
 
          ekin_imol = 0.0_dp
+         NULLIFY (vxc_rho)
          ! calc Hohenberg-Kohn kin. energy of the density corresp. to the remaining molecular block(s)
          ! info per block in rho_struct now
 
@@ -270,11 +276,11 @@ CONTAINS
                                vxc=vxc_rho, &
                                rho=rho_struct, &
                                rho1=rho1, &
-                               xc_section=kg_env%xc_section_kg)
+                               xc_section=xc_section)
          ELSE
             CALL qs_vxc_create(ks_env=ks_env, &
                                rho_struct=rho_struct, &
-                               xc_section=kg_env%xc_section_kg, &
+                               xc_section=xc_section, &
                                vxc_rho=vxc_rho, &
                                vxc_tau=vxc_tau, &
                                exc=ekin_imol)
@@ -283,11 +289,14 @@ CONTAINS
          ekin_mol = ekin_mol + ekin_imol
 
          DO ispin = 1, nspins
-            vxc_rho(ispin)%pw%cr3d = -my_alpha*vxc_rho(ispin)%pw%cr3d*vxc_rho(ispin)%pw%pw_grid%dvol
-            ! Integrate with response density for outer response forces
-            IF (PRESENT(pmat_ext) .AND. .NOT. do_kernel) THEN
-               CALL qs_rho_get(rho1, rho_ao=density_matrix)
-            END IF
+            vxc_rho(ispin)%pw%cr3d = -alpha*vxc_rho(ispin)%pw%cr3d*vxc_rho(ispin)%pw%pw_grid%dvol
+         END DO
+
+         ! Integrate with response density for outer response forces
+         IF (PRESENT(pmat_ext) .AND. .NOT. do_kernel) THEN
+            CALL qs_rho_get(rho1, rho_ao=density_matrix)
+         END IF
+         DO ispin = 1, nspins
             CALL integrate_v_rspace(v_rspace=vxc_rho(ispin), &
                                     pmat=density_matrix(ispin), &
                                     hmat=ks_matrix(ispin), &
