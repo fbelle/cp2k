@@ -11,6 +11,7 @@
 !>       03.2014 created
 !>       09.2019 Moved from KG to Kohn-Sham
 !>       11.2019 Moved from energy_correction
+!>       08.2020 AO linear response solver [fbelle] 
 !> \author JGH
 ! **************************************************************************************************
 MODULE response_solver
@@ -55,7 +56,6 @@ MODULE response_solver
                                               ec_diagonalization,&
                                               ec_mo_solver,&
                                               ec_ls_solver,&
-                                              ec_ls_ortho,&
                                               ec_matrix_sign,&
                                               ec_matrix_tc2,&
                                               ec_matrix_trs4,&
@@ -117,12 +117,12 @@ MODULE response_solver
                                               mo_set_p_type,&
                                               mo_set_type
    USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type
-   USE qs_overlap,                      ONLY: build_overlap_force,&
-                                              build_overlap_matrix
    USE qs_p_env_methods,                ONLY: p_env_create,&
                                               p_env_psi0_changed
    USE qs_p_env_types,                  ONLY: p_env_release,&
                                               qs_p_env_type
+   USE qs_overlap,                      ONLY: build_overlap_force,&
+                                              build_overlap_matrix
    USE qs_rho_types,                    ONLY: qs_rho_get,&
                                               qs_rho_type
    USE qs_vxc,                          ONLY: qs_vxc_create
@@ -157,16 +157,14 @@ MODULE response_solver
 CONTAINS
 
 ! **************************************************************************************************
-!> \brief ...
+!> \brief Initializes solver of linear response equation 
+!>     
 !> \param qs_env ...
-!> \param p_env ...
-!> \param cpmos RHS of equation as Ax + b = 0 (sign of b)
-!> \param lr_section ...
+!> \param ec_env Environemnt of Harris energy correction 
 ! **************************************************************************************************
-   SUBROUTINE response_calculation(qs_env, ec_env, p_env)
+   SUBROUTINE response_calculation(qs_env, ec_env)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(energy_correction_type), POINTER              :: ec_env
-      TYPE(qs_p_env_type), POINTER                       :: p_env
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'response_calculation', &
 
@@ -183,6 +181,7 @@ CONTAINS
       TYPE(section_vals_type), POINTER                   :: solver_section
       TYPE(cp_para_env_type), POINTER                    :: para_env
       INTEGER                                            :: solver_method
+      TYPE(qs_p_env_type), POINTER                       :: p_env
 
       CALL timeset(routineN, handle)
 
@@ -203,7 +202,11 @@ CONTAINS
 
       solver_section => section_vals_get_subs_vals(qs_env%input, "DFT%ENERGY_CORRECTION%LS_SOLVER")
 
-      CALL get_qs_env(qs_env, dft_control=dft_control, para_env=para_env)
+      CALL get_qs_env(qs_env, &
+                      dft_control=dft_control, &
+                      matrix_s=matrix_s, &
+                      para_env=para_env,&
+                      sab_orb = sab_orb)
       nspins = dft_control%nspins
 
       ! initialized linres_control
@@ -229,54 +232,43 @@ CONTAINS
 !         linres_control%energy_gap = 0.02_dp
 !      END IF
 
-!      SELECT CASE (ec_env%ks_solver)
-!      CASE (ec_diagonalization)
-         ! For MO solver
-         linres_control%energy_gap = 0.02_dp
-         CALL section_vals_val_get(solver_section, "EPS_FILTER", r_val=linres_control%eps_filter)
-         CALL section_vals_val_get(solver_section, "EPS", r_val=linres_control%eps)
-         CALL section_vals_val_get(solver_section, "MAX_ITER", i_val=linres_control%max_iter)
-         CALL section_vals_val_get(solver_section, "PRECONDITIONER", i_val=linres_control%preconditioner_type)
-         CALL section_vals_val_get(solver_section, "RESTART", l_val=linres_control%linres_restart)
-         CALL section_vals_val_get(solver_section, "RESTART_EVERY", i_val=linres_control%restart_every)
-
-!      CASE (ec_matrix_sign, ec_matrix_trs4, ec_matrix_tc2)
-        ! For AO solver
-        CALL section_vals_val_get(solver_section, "EPS", r_val=linres_control%eps)
-        CALL section_vals_val_get(solver_section, "EPS_FILTER", r_val=linres_control%eps_filter)
-        CALL section_vals_val_get(solver_section, "MAX_ITER", i_val=linres_control%max_iter)
-!      CASE DEFAULT
-!         CPABORT("Requested solver NYI")
-!      END SELECT
-
-      ! initialized p_env
-      CALL p_env_release(p_env)
-      ! XXX 
-      !CALL p_env_create(p_env, qs_env, orthogonal_orbitals=.TRUE., &
-      !                  linres_control=linres_control)
-      CALL p_env_create(p_env, qs_env, linres_control=linres_control)
+      linres_control%energy_gap = 0.02_dp
+      CALL section_vals_val_get(solver_section, "EPS_FILTER", r_val=linres_control%eps_filter)
+      CALL section_vals_val_get(solver_section, "EPS", r_val=linres_control%eps)
+      CALL section_vals_val_get(solver_section, "MAX_ITER", i_val=linres_control%max_iter)
+      CALL section_vals_val_get(solver_section, "PRECONDITIONER", i_val=linres_control%preconditioner_type)
+      CALL section_vals_val_get(solver_section, "RESTART", l_val=linres_control%linres_restart)
+      CALL section_vals_val_get(solver_section, "RESTART_EVERY", i_val=linres_control%restart_every)
+      CALL section_vals_val_get(solver_section, "EPS", r_val=linres_control%eps)
+      CALL section_vals_val_get(solver_section, "EPS_FILTER", r_val=linres_control%eps_filter)
+      CALL section_vals_val_get(solver_section, "MAX_ITER", i_val=linres_control%max_iter)
       CALL set_qs_env(qs_env, linres_control=linres_control)
-      CALL p_env_psi0_changed(p_env, qs_env)
-      !
-      CALL get_qs_env(qs_env, matrix_s=matrix_s, sab_orb=sab_orb)
-      CALL dbcsr_allocate_matrix_set(p_env%p1, nspins)
-      CALL dbcsr_allocate_matrix_set(p_env%w1, nspins)
+
+      ! Allocate and initialize Z matrix, and energy weighted z-matrix
+      ! Template is ground-state overlap matrix
+      CALL dbcsr_allocate_matrix_set(ec_env%matrix_wz, nspins)
+      CALL dbcsr_allocate_matrix_set(ec_env%matrix_z, nspins)
       DO ispin = 1, nspins
-         ALLOCATE (p_env%p1(ispin)%matrix, p_env%w1(ispin)%matrix)
-         CALL dbcsr_create(matrix=p_env%p1(ispin)%matrix, template=matrix_s(1)%matrix)
-         CALL dbcsr_create(matrix=p_env%w1(ispin)%matrix, template=matrix_s(1)%matrix)
-         CALL cp_dbcsr_alloc_block_from_nbl(p_env%p1(ispin)%matrix, sab_orb)
-         CALL cp_dbcsr_alloc_block_from_nbl(p_env%w1(ispin)%matrix, sab_orb)
+         ALLOCATE (ec_env%matrix_wz(ispin)%matrix)
+         ALLOCATE (ec_env%matrix_z(ispin)%matrix)
+         CALL dbcsr_create(ec_env%matrix_wz(ispin)%matrix, name = "Wz MATRIX", &
+                          template = matrix_s(1)%matrix)
+         CALL dbcsr_create(ec_env%matrix_z(ispin)%matrix, name = "Z MATRIX", &
+                           template = matrix_s(1)%matrix)
+         CALL cp_dbcsr_alloc_block_from_nbl(ec_env%matrix_wz(ispin)%matrix, sab_orb)
+         CALL cp_dbcsr_alloc_block_from_nbl(ec_env%matrix_z(ispin)%matrix, sab_orb)
+         CALL dbcsr_set(ec_env%matrix_wz(ispin)%matrix, 0.0_dp)
+         CALL dbcsr_set(ec_env%matrix_z(ispin)%matrix, 0.0_dp)
       END DO
       IF (dft_control%do_admm) THEN
          CALL get_qs_env(qs_env, matrix_s_aux_fit=matrix_s_aux)
-         CALL dbcsr_allocate_matrix_set(p_env%p1_admm, nspins)
+         CALL dbcsr_allocate_matrix_set(ec_env%z_admm, nspins)
          DO ispin = 1, nspins
-            ALLOCATE (p_env%p1_admm(ispin)%matrix)
-            CALL dbcsr_create(p_env%p1_admm(ispin)%matrix, &
+            ALLOCATE (ec_env%z_admm(ispin)%matrix)
+            CALL dbcsr_create(ec_env%z_admm(ispin)%matrix, &
                               template=matrix_s_aux(1)%matrix)
-            CALL dbcsr_copy(p_env%p1_admm(ispin)%matrix, matrix_s_aux(1)%matrix)
-            CALL dbcsr_set(p_env%p1_admm(ispin)%matrix, 0.0_dp)
+            CALL dbcsr_copy(ec_env%z_admm(ispin)%matrix, matrix_s_aux(1)%matrix)
+            CALL dbcsr_set(ec_env%z_admm(ispin)%matrix, 0.0_dp)
          END DO
       END IF
 
@@ -289,26 +281,48 @@ CONTAINS
       SELECT CASE (solver_method)
       CASE (ec_mo_solver)
          ! For MO solver
+
+         ! initialized p_env
+         CALL p_env_release(ec_env%p_env)
+         CALL p_env_create(ec_env%p_env, qs_env, orthogonal_orbitals=.TRUE., &
+                           linres_control=linres_control)
+         CALL set_qs_env(qs_env, linres_control=linres_control)
+         CALL p_env_psi0_changed(ec_env%p_env, qs_env)
+         !
+         p_env => ec_env%p_env
+         !
+         CALL get_qs_env(qs_env, matrix_s=matrix_s, sab_orb=sab_orb)
+         CALL dbcsr_allocate_matrix_set(p_env%p1, nspins)
+         CALL dbcsr_allocate_matrix_set(p_env%w1, nspins)
+         DO ispin = 1, nspins
+            ALLOCATE (p_env%p1(ispin)%matrix, p_env%w1(ispin)%matrix)
+            CALL dbcsr_create(matrix=p_env%p1(ispin)%matrix, template=matrix_s(1)%matrix)
+            CALL dbcsr_create(matrix=p_env%w1(ispin)%matrix, template=matrix_s(1)%matrix)
+            CALL cp_dbcsr_alloc_block_from_nbl(p_env%p1(ispin)%matrix, sab_orb)
+            CALL cp_dbcsr_alloc_block_from_nbl(p_env%w1(ispin)%matrix, sab_orb)
+         END DO
+         IF (dft_control%do_admm) THEN
+            CALL get_qs_env(qs_env, matrix_s_aux_fit=matrix_s_aux)
+            CALL dbcsr_allocate_matrix_set(p_env%p1_admm, nspins)
+            DO ispin = 1, nspins
+               ALLOCATE (p_env%p1_admm(ispin)%matrix)
+               CALL dbcsr_create(p_env%p1_admm(ispin)%matrix, &
+                                 template=matrix_s_aux(1)%matrix)
+               CALL dbcsr_copy(p_env%p1_admm(ispin)%matrix, matrix_s_aux(1)%matrix)
+               CALL dbcsr_set(p_env%p1_admm(ispin)%matrix, 0.0_dp)
+            END DO
+         END IF
+
          IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
          IF(output_unit > 0) WRITE(output_unit,*) "response - linres CG-MO"
          IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
          CALL response_equation(qs_env, ec_env, p_env, output_unit, should_stop)
       CASE (ec_ls_solver)
-         ! For AO solver
-         IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
-         IF(output_unit > 0) WRITE(output_unit,*) "response - linres CG-AO-NON-ORTHO"
-         IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
-         CALL ec_res_ao(qs_env, ec_env, p_env, output_unit, should_stop)
-      CASE (ec_ls_ortho)
          ! AO ortho solver
          IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
          IF(output_unit > 0) WRITE(output_unit,*) "response - linres CG-AO-ORTHO"
          IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
-         CALL ec_response_ao(qs_env, ec_env, p_env, output_unit, should_stop)
-!         ! Non-ortho basis
-!         CALL ec_2res_ao(qs_env, ec_env, p_env)
-!         ! Ortho basis
-         !CALL ec3_res_ao(qs_env, ec_env)
+         CALL ec_response_ao(qs_env, ec_env, output_unit, should_stop)
 
       CASE DEFAULT
          CPABORT("Unknown solver for response equation requested")
@@ -322,14 +336,14 @@ CONTAINS
          nao = admm_env%nao_orb
          nao_aux = admm_env%nao_aux_fit
          DO ispin = 1, nspins
-            CALL copy_dbcsr_to_fm(p_env%p1(ispin)%matrix, admm_env%work_orb_orb)
+            CALL copy_dbcsr_to_fm(ec_env%matrix_z(ispin)%matrix, admm_env%work_orb_orb)
             CALL cp_gemm('N', 'N', nao_aux, nao, nao, &
                          1.0_dp, admm_env%A, admm_env%work_orb_orb, 0.0_dp, &
                          admm_env%work_aux_orb)
             CALL cp_gemm('N', 'T', nao_aux, nao_aux, nao, &
                          1.0_dp, admm_env%work_aux_orb, admm_env%A, 0.0_dp, &
                          admm_env%work_aux_aux)
-            CALL copy_fm_to_dbcsr(admm_env%work_aux_aux, p_env%p1_admm(ispin)%matrix, &
+            CALL copy_fm_to_dbcsr(admm_env%work_aux_aux, ec_env%z_admm(ispin)%matrix, &
                                   keep_sparsity=.TRUE.)
          END DO
       END IF
@@ -343,11 +357,14 @@ CONTAINS
    END SUBROUTINE response_calculation
 
 ! **************************************************************************************************
-!> \brief ...
+!> \brief Initializes vectors for MO-coefficient based linear response solver 
+!>        and calculates response density, and energy-weighted response density matrix
+!> 
 !> \param qs_env ...
+!> \param ec_env ...
 !> \param p_env ...
-!> \param cpmos RHS of equation as Ax + b = 0 (sign of b)
-!> \param lr_section ...
+!> \param iounit ...
+!> \param should_stop ... 
 ! **************************************************************************************************
    SUBROUTINE response_equation(qs_env, ec_env, p_env, iounit, should_stop)
       TYPE(qs_environment_type), POINTER                 :: qs_env
@@ -367,42 +384,20 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks, matrix_s
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
-      REAL(KIND=dp)                                      :: norm_zao
+      REAL(KIND=dp)                                      :: norm_zmo
 
       CALL timeset(routineN, handle)
 
       NULLIFY (cpmos, dft_control, matrix_ks, matrix_s, mo_coeff, mos, psi0, psi1)
-
-!      ! initialized linres_control
-!      NULLIFY (linres_control)
-!      CALL linres_control_create(linres_control)
-!      linres_control%do_kernel = .TRUE.
-!      linres_control%lr_triplet = .FALSE.
-!      IF (PRESENT(lr_section)) THEN
-!         CALL section_vals_val_get(lr_section, "RESTART", l_val=linres_control%linres_restart)
-!         CALL section_vals_val_get(lr_section, "MAX_ITER", i_val=linres_control%max_iter)
-!         CALL section_vals_val_get(lr_section, "EPS", r_val=linres_control%eps)
-!         CALL section_vals_val_get(lr_section, "EPS_FILTER", r_val=linres_control%eps_filter)
-!         CALL section_vals_val_get(lr_section, "RESTART_EVERY", i_val=linres_control%restart_every)
-!         CALL section_vals_val_get(lr_section, "PRECONDITIONER", i_val=linres_control%preconditioner_type)
-!         CALL section_vals_val_get(lr_section, "ENERGY_GAP", r_val=linres_control%energy_gap)
-!      ELSE
-!         linres_control%linres_restart = .FALSE.
-!         linres_control%max_iter = 100
-!         !linres_control%eps = 1.0e-10_dp
-!         linres_control%eps = 1.0e-12_dp
-!         !linres_control%eps = 1.0e-15_dp
-!         linres_control%eps_filter = 1.0e-15_dp
-!         linres_control%restart_every = 50
-!         linres_control%preconditioner_type = ot_precond_full_single_inverse
-!         linres_control%energy_gap = 0.02_dp
-!      END IF
-
       !
       CALL get_qs_env(qs_env, dft_control=dft_control, matrix_ks = matrix_ks, &
                       matrix_s = matrix_s, mos=mos)
       nspins = dft_control%nspins
 
+      ! Initialize vectors: 
+      ! psi0 : The ground-state MO-coefficients
+      ! psi1 : The "perturbed" linear response orbitals
+      ! cpmos : RHS of response equation 
       ALLOCATE (psi0(nspins), psi1(nspins), cpmos(nspins))
       DO ispin = 1, nspins
          CALL get_mo_set(mo_set=mos(ispin)%mo_set, mo_coeff=mo_coeff)
@@ -419,7 +414,7 @@ CONTAINS
 
       ! CPKS vector - RHS of equation as Ax + b = 0 (sign of b)
       !
-      ! sign is changed in linres_solver!
+      ! Sign is changed in linres_solver!
       ! Projector Q applied in linres_solver!
       focc = 2.0_dp
       IF (nspins == 1) focc = 4.0_dp
@@ -433,34 +428,33 @@ CONTAINS
       END DO
 
       should_stop = .FALSE.
+      ! The response solver
       CALL linres_solver(p_env, qs_env, psi1, cpmos, psi0, iounit, should_stop)
 
+      ! Building the response density matrix
       DO ispin = 1, nspins
-         CALL dbcsr_copy(p_env%p1(ispin)%matrix, matrix_s(1)%matrix)
+         CALL dbcsr_copy(ec_env%matrix_z(ispin)%matrix, matrix_s(1)%matrix)
       END DO
-      CALL build_dm_response(psi0, psi1, p_env%p1)
+      CALL build_dm_response(psi0, psi1, ec_env%matrix_z)
       DO ispin = 1, nspins
-         CALL dbcsr_scale(p_env%p1(ispin)%matrix, 0.5_dp)
+         CALL dbcsr_scale(ec_env%matrix_z(ispin)%matrix, 0.5_dp)
          ! Calculate Wz = 0.5*(psi1*eps*psi0^T + psi0*eps*psi1^T)
          CALL calculate_wz_matrix(mos(ispin)%mo_set, psi1(ispin)%matrix, matrix_ks(ispin)%matrix, &
-                                  p_env%w1(ispin)%matrix)
+                                  ec_env%matrix_wz(ispin)%matrix)
       ENDDO
       DO ispin = 1, nspins
-         CALL cp_fm_release(psi1(ispin)%matrix)
          CALL cp_fm_release(cpmos(ispin)%matrix)
+         CALL cp_fm_release(psi1(ispin)%matrix)
       ENDDO
       DEALLOCATE (cpmos, psi0, psi1)
 
-      norm_zao= dbcsr_frobenius_norm(p_env%p1(1)%matrix)
-      !IF (iounit > 0) WRITE (iounit,*) "|| Z (MO) ||_F :", norm_zmo
-      IF (iounit > 0) WRITE (iounit,*) "|| Z (AO) ||_F :", norm_zao
-      !norm_res = norm_zmo - norm_zao
-      !IF (iounit > 0) WRITE (iounit,*) "||Z(MO)||_F - ||Z(AO)||_F :", norm_res
-      CALL dbcsr_dot(p_env%p1(1)%matrix, matrix_s(1)%matrix, norm_zao)
-      IF (iounit > 0) WRITE (iounit,*) "Tr[PzS]", norm_zao
+      norm_zmo= dbcsr_frobenius_norm(ec_env%matrix_z(1)%matrix)
+      IF (iounit > 0) WRITE (iounit,*) "|| Z (MO) ||_F :", norm_zmo
+      CALL dbcsr_dot(ec_env%matrix_z(1)%matrix, matrix_s(1)%matrix, norm_zmo)
+      IF (iounit > 0) WRITE (iounit,*) "Tr[PzS]", norm_zmo
 
-      norm_zao= dbcsr_frobenius_norm(p_env%w1(1)%matrix)
-      IF (iounit > 0) WRITE (iounit,*) "|| Wz (AO) ||_F :", norm_zao
+      norm_zmo= dbcsr_frobenius_norm(ec_env%matrix_wz(1)%matrix)
+      IF (iounit > 0) WRITE (iounit,*) "|| Wz (AO) ||_F :", norm_zmo
 
       CALL timestop(handle)
 
@@ -469,15 +463,15 @@ CONTAINS
 ! **************************************************************************************************
 !> \brief ...
 !> \param qs_env ...
-!> \param p_env ...
+!> \param ec_env ...
 !> \param vh_rspace ...
 !> \param vxc_rspace ...
 !> \param vtau_rspace ...
 !> \param matrix_hz ...
 ! **************************************************************************************************
-   SUBROUTINE response_force(qs_env, p_env, vh_rspace, vxc_rspace, vtau_rspace, matrix_hz)
+   SUBROUTINE response_force(qs_env, ec_env, vh_rspace, vxc_rspace, vtau_rspace, matrix_hz)
       TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(qs_p_env_type), POINTER                       :: p_env
+      TYPE(energy_correction_type), POINTER              :: ec_env
       TYPE(pw_p_type), POINTER                           :: vh_rspace
       TYPE(pw_p_type), DIMENSION(:), POINTER             :: vxc_rspace, vtau_rspace
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_hz
@@ -533,7 +527,8 @@ CONTAINS
       !  needed as pointer: mhz mwhz
       !TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: mwhz
 !      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: my2_matrix
-!      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: my_matrix
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: my_matrix
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_ao, matrix_s
 
       CALL timeset(routineN, handle)
 
@@ -552,7 +547,7 @@ CONTAINS
          CALL total_qs_force(ftot1, force, atomic_kind_set)
       END IF
  
-      matrix_pz => p_env%p1
+      matrix_pz => ec_env%matrix_z
       nspins = SIZE(matrix_pz, 1)
       !     *** If LSD, then combine alpha density and beta density to
       !     *** total density: alpha <- alpha + beta   and
@@ -658,21 +653,21 @@ CONTAINS
       END IF
 
 !-------------------
-! DEBUG
+! ORIGINAL
       DEALLOCATE (matrix_p, matrix_h)
 !-------------------
 
 !      CALL dbcsr_deallocate_matrix_set(matrix_p)
 !      CALL dbcsr_deallocate_matrix_set(my2_matrix)
 
-!      NULLIFY (my_matrix)
-!      CALL dbcsr_allocate_matrix_set(my_matrix, nspins)
-!      DO ispin = 1, nspins
-!         ALLOCATE (my_matrix(ispin)%matrix)
-!         CALL dbcsr_create(my_matrix(ispin)%matrix, template=matrix_pz(1)%matrix)
-!         CALL dbcsr_copy(my_matrix(ispin)%matrix, matrix_pz(ispin)%matrix)
-!         CALL dbcsr_set(my_matrix(ispin)%matrix, 0.0_dp)
-!      END DO
+      NULLIFY (my_matrix)
+      CALL dbcsr_allocate_matrix_set(my_matrix, nspins)
+      DO ispin = 1, nspins
+         ALLOCATE (my_matrix(ispin)%matrix)
+         CALL dbcsr_create(my_matrix(ispin)%matrix, template=matrix_pz(1)%matrix)
+         CALL dbcsr_copy(my_matrix(ispin)%matrix, matrix_pz(ispin)%matrix)
+         CALL dbcsr_set(my_matrix(ispin)%matrix, 0.0_dp)
+      END DO
 
 !-------------------
 
@@ -695,13 +690,13 @@ CONTAINS
          CALL pw_transfer(vh_rspace%pw, vhxc_rspace%pw)
          CALL pw_axpy(vxc_rspace(ispin)%pw, vhxc_rspace%pw)
          CALL integrate_v_rspace(v_rspace=vhxc_rspace, &
-                                 hmat=scrm(1), pmat=matrix_pz(ispin), &
-                                 !hmat=my_matrix(ispin), pmat=matrix_pz(ispin), &
+                                 !hmat=scrm(1), pmat=matrix_pz(ispin), &
+                                 hmat=my_matrix(ispin), pmat=matrix_pz(ispin), &
                                  qs_env=qs_env, calculate_forces=.TRUE.)
          IF (ASSOCIATED(vtau_rspace)) THEN
             CALL integrate_v_rspace(v_rspace=vtau_rspace(ispin), &
-                                    hmat=scrm(1), pmat=matrix_pz(ispin), &
-                                    !hmat=my_matrix(ispin), pmat=matrix_pz(ispin), &
+                                    !hmat=scrm(1), pmat=matrix_pz(ispin), &
+                                    hmat=my_matrix(ispin), pmat=matrix_pz(ispin), &
                                     qs_env=qs_env, calculate_forces=.TRUE., compute_tau=.TRUE.)
          END IF
       END DO
@@ -716,12 +711,11 @@ CONTAINS
       ! calculate kinetic energy potential and integrate with response density
       IF (dft_control%qs_control%do_kg) THEN
          IF (qs_env%kg_env%tnadd_method == kg_tnadd_embed) THEN
-            CALL get_qs_env(qs_env, kg_env=kg_env)
             ekin_mol = 0.0_dp
             IF (debug_forces) fodeb(1:3) = force(1)%rho_elec(1:3, 1)
             CALL kg_ekin_subset(qs_env=qs_env, &
-                                ks_matrix=scrm, &
-                                !ks_matrix=my_matrix, &
+                                !ks_matrix=scrm, &
+                                ks_matrix=my_matrix, &
                                 ekin_mol=ekin_mol, &
                                 calc_force=.TRUE., &
                                 do_kernel=.FALSE., &
@@ -737,7 +731,7 @@ CONTAINS
 !---------------
 ! debugging
 
-!      CALL dbcsr_deallocate_matrix_set(my_matrix)
+      CALL dbcsr_deallocate_matrix_set(my_matrix)
 
 !--------------
 
@@ -815,7 +809,6 @@ CONTAINS
       CALL xc_rho_set_release(rho_set)
       CALL xc_rho_set_release(rho1_set)
       !
-      !
       CALL qs_rho_get(rho, rho_ao_kp=matrix_p)
       IF (debug_forces) fodeb(1:3) = force(1)%rho_elec(1:3, 1)
       DO ispin = 1, nspins
@@ -826,6 +819,7 @@ CONTAINS
                                  pmat=matrix_p(ispin, 1), &
                                  calculate_forces=.TRUE.)
       END DO
+
       IF (debug_forces) THEN
          fodeb(1:3) = force(1)%rho_elec(1:3, 1) - fodeb(1:3)
          CALL mp_sum(fodeb, para_env%group)
@@ -836,7 +830,6 @@ CONTAINS
       ! calculate kinetic energy kernel, folded with response density for partial integration0
       IF (dft_control%qs_control%do_kg) THEN
          IF (qs_env%kg_env%tnadd_method == kg_tnadd_embed) THEN
-            CALL get_qs_env(qs_env, kg_env=kg_env)
             ekin_mol = 0.0_dp
             IF (debug_forces) fodeb(1:3) = force(1)%rho_elec(1:3, 1)
             CALL kg_ekin_subset(qs_env=qs_env, &
@@ -852,7 +845,6 @@ CONTAINS
             END IF
          END IF
       END IF
-
       CALL pw_pool_give_back_pw(auxbas_pw_pool, rhoz_tot_gspace%pw)
       CALL pw_pool_give_back_pw(auxbas_pw_pool, zv_hartree_rspace%pw)
       CALL pw_pool_give_back_pw(auxbas_pw_pool, zv_hartree_gspace%pw)
@@ -886,7 +878,7 @@ CONTAINS
                ALLOCATE (mhz(ispin, 1)%matrix)
                CALL dbcsr_create(mhz(ispin, 1)%matrix, template=scrm(1)%matrix)
                CALL dbcsr_copy(mhz(ispin, 1)%matrix, scrm(1)%matrix)
-               mpz(ispin, 1)%matrix => p_env%p1_admm(ispin)%matrix
+               mpz(ispin, 1)%matrix => ec_env%z_admm(ispin)%matrix
             END DO
             !
             xc_section => admm_env%xc_section_aux
@@ -1023,7 +1015,7 @@ CONTAINS
                CALL dbcsr_create(mhz(ispin, 1)%matrix, template=scrm(1)%matrix)
                CALL dbcsr_copy(mhz(ispin, 1)%matrix, scrm(1)%matrix)
                CALL dbcsr_set(mhz(ispin, 1)%matrix, 0.0_dp)
-               mpz(ispin, 1)%matrix => p_env%p1_admm(ispin)%matrix
+               mpz(ispin, 1)%matrix => ec_env%z_admm(ispin)%matrix
             END DO
          ELSE
             ALLOCATE (mpz(nspins, 1), mhz(nspins, 1))
@@ -1072,7 +1064,7 @@ CONTAINS
          IF (dft_control%do_admm) THEN
             CALL get_qs_env(qs_env=qs_env, rho_aux_fit=rho_aux_fit)
             CALL qs_rho_get(rho_aux_fit, rho_ao_kp=matrix_p)
-            matrix_pz => p_env%p1_admm
+            matrix_pz => ec_env%z_admm
          ELSE
             CALL qs_rho_get(rho, rho_ao_kp=matrix_p)
          END IF
@@ -1095,33 +1087,122 @@ CONTAINS
 
       ! Overlap matrix
       ! H(drho+dz) + Wz
-      matrix_pz => p_env%p1
-      matrix_wz => p_env%w1
+      matrix_pz => ec_env%matrix_z
+      matrix_wz => ec_env%matrix_wz
+
+!-------------------------------
+
+      CALL get_qs_env(qs_env, matrix_s=matrix_s)
+      CALL qs_rho_get(rho, rho_ao=rho_ao)
+
+      IF (debug_forces) fodeb(1:3) = force(1)%overlap(1:3, 1)
+      NULLIFY (scrm)
+
+      norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
+      IF (iounit > 0) WRITE(iounit,*) "||Whz(MO) PFZ+ZFP||", norm_res
+      CALL dbcsr_dot(matrix_s(1)%matrix, matrix_wz(1)%matrix, norm_res)
+      IF (iounit > 0) WRITE(iounit,*) "Tr[WhzSin]", norm_res
+      CALL dbcsr_dot(rho_ao(1)%matrix, matrix_wz(1)%matrix, norm_res)
+      IF (iounit > 0) WRITE(iounit,*) "Tr[WhzPin]", norm_res
+      IF (nspins == 2) THEN
+         norm_res = dbcsr_frobenius_norm(matrix_wz(2)%matrix) 
+         IF (iounit > 0) WRITE(iounit,*) "||Whz(2)||", norm_res
+         CALL dbcsr_dot(matrix_s(1)%matrix, matrix_wz(2)%matrix, norm_res)
+         IF(iounit > 0) WRITE(iounit,*) "Tr[WhzSin(2)]", norm_res
+         CALL dbcsr_dot(rho_ao(2)%matrix, matrix_wz(2)%matrix, norm_res)
+         IF(iounit > 0) WRITE(iounit,*) "Tr[WhzPin(2)]", norm_res
+      END IF
+
+      IF (SIZE(matrix_wz, 1) == 2) THEN
+         CALL dbcsr_add(matrix_wz(1)%matrix, matrix_wz(2)%matrix, &
+                        alpha_scalar=1.0_dp, beta_scalar=1.0_dp)
+      END IF
+
+      CALL build_overlap_matrix(ks_env, matrix_s=scrm, &
+                                matrix_name="OVERLAP MATRIX", &
+                                basis_type_a="ORB", basis_type_b="ORB", &
+                                sab_nl=sab_orb, calculate_forces=.TRUE., &
+                                matrix_p=matrix_wz(1)%matrix)
+
+      CALL dbcsr_deallocate_matrix_set(scrm)
+      IF (debug_forces) THEN
+         fodeb(1:3) = force(1)%overlap(1:3, 1) - fodeb(1:3)
+         CALL mp_sum(fodeb, para_env%group)
+         IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Wz*dS ", fodeb
+      END IF
+
+      DO ispin = 1, nspins
+         CALL dbcsr_set(matrix_wz(ispin)%matrix, 0.0_dp)
+      END DO
+!-------------------------------
+
+      CALL get_qs_env(qs_env, matrix_s=matrix_s)
+      CALL qs_rho_get(rho, rho_ao=rho_ao)
+
+      CALL dbcsr_dot(rho_ao(1)%matrix, matrix_hz(1)%matrix, norm_res)
+      IF(para_env%mepos==0) WRITE(*,*) "Tr[PinHz]", norm_res
+      CALL dbcsr_dot(matrix_s(1)%matrix, matrix_hz(1)%matrix, norm_res)
+      IF(para_env%mepos==0) WRITE(*,*) "Tr[SinHz]", norm_res
+      IF (nspins == 2) THEN
+         CALL dbcsr_dot(rho_ao(2)%matrix, matrix_hz(2)%matrix, norm_res)
+         IF(para_env%mepos==0) WRITE(*,*) "Tr[PinHz]", norm_res
+         CALL dbcsr_dot(matrix_s(1)%matrix, matrix_hz(2)%matrix, norm_res)
+         IF(para_env%mepos==0) WRITE(*,*) "Tr[SinHz]", norm_res
+      END IF
 
       ! DEBUG - IF ground-state density matrix solved by diagonalization, then use this
-      IF (.NOT. dft_control%qs_control%do_ls_scf) THEN
+      IF (.NOT. dft_control%qs_control%do_ls_scf .AND. nspins == 1 ) THEN
 
          focc = 1.0_dp
          IF (nspins == 1) focc = 2.0_dp
 
-          CALL get_qs_env(qs_env, mos=mos)
-          DO ispin = 1, nspins
-             CALL calculate_whz_matrix(mos(ispin)%mo_set, matrix_hz(ispin)%matrix, &
-                                       matrix_wz(ispin)%matrix, focc)
-          END DO
+         CALL get_qs_env(qs_env, mos = mos)
+         DO ispin = 1, nspins
+            CALL calculate_whz_matrix(mos(ispin)%mo_set, matrix_hz(ispin)%matrix, &
+                                      matrix_wz(ispin)%matrix, focc)
+         END DO
 
-          norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
-          IF (iounit > 0) WRITE(iounit,*) "||Whz||", norm_res
+         norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
+         IF (iounit > 0) WRITE(iounit,*) "||Whz(MO)||", norm_res
+         CALL dbcsr_dot(matrix_s(1)%matrix, matrix_wz(1)%matrix, norm_res)
+         IF(iounit > 0) WRITE(iounit,*) "Tr[WhzSin]", norm_res
+         CALL dbcsr_dot(rho_ao(1)%matrix, matrix_wz(1)%matrix, norm_res)
+         IF(iounit > 0) WRITE(iounit,*) "Tr[WhzPin]", norm_res
+         IF (nspins == 2) THEN
+            norm_res = dbcsr_frobenius_norm(matrix_wz(2)%matrix) 
+            IF (iounit > 0) WRITE(iounit,*) "||Whz(2)||", norm_res
+            CALL dbcsr_dot(matrix_s(1)%matrix, matrix_wz(2)%matrix, norm_res)
+            IF(iounit > 0) WRITE(iounit,*) "Tr[WhzSin(2)]", norm_res
+            CALL dbcsr_dot(rho_ao(2)%matrix, matrix_wz(2)%matrix, norm_res)
+            IF(iounit > 0) WRITE(iounit,*) "Tr[WhzPin(2)]", norm_res
+         END IF
+
+!         DO ispin = 1, nspins
+!            CALL dbcsr_set(matrix_wz(ispin)%matrix, 0.0_dp)
+!         END DO
+
 
       ! Ground-state density has been calculated by LS
       ELSE 
       
-          eps_filter = dft_control%qs_control%eps_filter_matrix
-          CALL calculate_whz_ao_matrix(qs_env, matrix_hz, matrix_wz, eps_filter)
+         eps_filter = dft_control%qs_control%eps_filter_matrix
+         CALL calculate_whz_ao_matrix(qs_env, matrix_hz, matrix_wz, eps_filter)
 
-          ! fbelle
-          norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
-          IF (iounit > 0) WRITE(iounit,*) "||Whz||", norm_res
+         ! fbelle
+         norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
+         IF (iounit > 0) WRITE(iounit,*) "||Whz(AO)||", norm_res
+         CALL dbcsr_dot(matrix_s(1)%matrix, matrix_wz(1)%matrix, norm_res)
+         IF(iounit > 0) WRITE(iounit,*) "Tr[WhzSin]", norm_res
+         CALL dbcsr_dot(rho_ao(1)%matrix, matrix_wz(1)%matrix, norm_res)
+         IF(iounit > 0) WRITE(iounit,*) "Tr[WhzPin]", norm_res
+         IF ( nspins ==2 ) THEN
+            norm_res = dbcsr_frobenius_norm(matrix_wz(2)%matrix) 
+            IF (iounit > 0) WRITE(iounit,*) "||Whz(2)||", norm_res
+            CALL dbcsr_dot(matrix_s(1)%matrix, matrix_wz(2)%matrix, norm_res)
+            IF(iounit > 0) WRITE(iounit,*) "Tr[WhzSin(2)]", norm_res
+            CALL dbcsr_dot(rho_ao(2)%matrix, matrix_wz(2)%matrix, norm_res)
+            IF(iounit > 0) WRITE(iounit,*) "Tr[WhzPin(2)]", norm_res
+         END IF
 
       END IF
       ! DEBUG ------------ 
@@ -1567,23 +1648,34 @@ CONTAINS
        ! init temp matrix
        CALL dbcsr_create(matrix_tmp, template=matrix_hz(1)%matrix, matrix_type=dbcsr_type_no_symmetry)
 
-       ! Operation in MO-solver closed-shell:
-       ! Whz = 0.5*(CC^T*Hz*CC^T)
-       ! Here,  P = 2*CC^T
-       ! Liear sclaing implies absence of explicit knowledge of molecular orbital coefficients
-       !!! Scaling the density matrix at this stage, means dividing the final result by 4
-       !!! as two multiplications with P are carried out.
-       scaling = 0.5_dp
-       IF(nspins == 2) scaling = 1.0_dp
+       !Spin factors simplify to 
+       scaling = 1.0_dp
+       IF (nspins == 1) scaling = 0.5_dp
+
+       ! Operation in MO-solver :
+       ! Whz = focc*(CC^T*Hz*CC^T)
+       ! focc = 2.0_dp Closed-shell
+       ! focc = 1.0_dp Open-shell
+ 
+       ! Operation in AO-solver :
+       ! Whz = (scaling*P)*(focc*Hz)*(scaling*P)
+       ! focc see above
+       ! scaling = 0.5_dp Closed-shell (P = 2*CC^T), WHz = (0.5*P)*(2*Hz)*(0.5*P)
+       ! scaling = 1.0_dp Open-shell, WHz = P*Hz*P
+ 
+       ! Spin factors from Hz and P simplify to
+       scaling = 1.0_dp
+       IF (nspins == 1) scaling = 0.5_dp
 
        DO ispin = 1, nspins 
 
-          ! tmp1 = H*CC^T
-          CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_hz(ispin)%matrix, rho_ao(ispin)%matrix, &
+          ! tmp = H*CC^T
+          CALL dbcsr_multiply("N", "N", scaling, matrix_hz(ispin)%matrix, rho_ao(ispin)%matrix, &
                               0.0_dp, matrix_tmp, filter_eps = eps_filter)
-          ! tmp2 = CC^T*tmp1
-          ! Whz = Wz + focc*(scaling*P)*Hz*(scaling*P)
-          CALL dbcsr_multiply("N", "N", scaling, rho_ao(ispin)%matrix, matrix_tmp, &
+          ! WHz = CC^T*tmp
+          ! WHz = Wz + (scaling*P)*(focc*Hz)*(scaling*P)
+          ! WHz = Wz + scaling*(P*Hz*P)
+          CALL dbcsr_multiply("N", "N", 1.0_dp, rho_ao(ispin)%matrix, matrix_tmp, &
                               1.0_dp, matrix_whz(ispin)%matrix, filter_eps = eps_filter, &
                               retain_sparsity = .TRUE.)
 
