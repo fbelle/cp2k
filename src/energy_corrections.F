@@ -162,6 +162,7 @@ MODULE energy_corrections
                                               xc_rho_set_release,&
                                               xc_rho_set_type,&
                                               xc_rho_set_update 
+   USE ec_methods,                      ONLY: write_forces
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -194,14 +195,17 @@ CONTAINS
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'energy_correction'
 
-      INTEGER                                            :: handle, nkind, unit_nr
-      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: natom_of_kind
+!      INTEGER                                            :: handle, nkind, unit_nr
+      INTEGER                                            :: handle, unit_nr
+!      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: natom_of_kind
       LOGICAL                                            :: my_calc_forces
-      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+!      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(energy_correction_type), POINTER              :: ec_env
       TYPE(qs_energy_type), POINTER                      :: energy
-      TYPE(qs_force_type), DIMENSION(:), POINTER         :: ec_force, ks_force
+!      TYPE(qs_force_type), DIMENSION(:), POINTER         :: ec_force, ks_force
+      TYPE(qs_force_type), DIMENSION(:), POINTER         :: ks_force
+!      TYPE(section_vals_type), POINTER                   :: print_section
 
       CALL timeset(routineN, handle)
 
@@ -237,15 +241,22 @@ CONTAINS
                WRITE (unit_nr, '(T2,A,A,A,A,A)') "!", REPEAT("-", 25), &
                   " Energy Correction Forces ", REPEAT("-", 26), "!"
             END IF
-            CALL get_qs_env(qs_env, force=ks_force, atomic_kind_set=atomic_kind_set)
-            nkind = SIZE(atomic_kind_set)
-            ALLOCATE (natom_of_kind(nkind))
-            CALL get_atomic_kind_set(atomic_kind_set=atomic_kind_set, natom_of_kind=natom_of_kind)
-            NULLIFY (ec_force)
-            CALL allocate_qs_force(ec_force, natom_of_kind)
-            DEALLOCATE (natom_of_kind)
-            CALL zero_qs_force(ec_force)
-            CALL set_qs_env(qs_env, force=ec_force)
+!--------------------
+! original 
+!--------------------
+!            CALL get_qs_env(qs_env, force=ks_force, atomic_kind_set=atomic_kind_set)
+!            nkind = SIZE(atomic_kind_set)
+!            ALLOCATE (natom_of_kind(nkind))
+!            CALL get_atomic_kind_set(atomic_kind_set=atomic_kind_set, natom_of_kind=natom_of_kind)
+!            NULLIFY (ec_force)
+!            CALL allocate_qs_force(ec_force, natom_of_kind)
+!            DEALLOCATE (natom_of_kind)
+!            CALL zero_qs_force(ec_force)
+!            CALL set_qs_env(qs_env, force=ec_force)
+!--------------------
+            CALL get_qs_env(qs_env, force=ks_force)
+            CALL zero_qs_force(ks_force)
+!--------------------
          ELSE
             IF (unit_nr > 0) THEN
                WRITE (unit_nr, '(T2,A,A,A,A,A)') "!", REPEAT("-", 29), &
@@ -261,13 +272,6 @@ CONTAINS
             !
             IF (ec_env%should_update) THEN
                energy%nonscf_correction = ec_env%etotal - energy%total
-            END IF
-            IF (my_calc_forces) THEN
-               CALL get_qs_env(qs_env, force=ec_force)
-               ec_env%force => ec_force
-               CALL zero_qs_force(ks_force)
-               CALL sum_qs_force(ks_force, ec_force)
-               CALL set_qs_env(qs_env, force=ks_force)
             END IF
             energy%total = energy%total + energy%nonscf_correction
          CASE DEFAULT
@@ -335,9 +339,9 @@ CONTAINS
          CALL ec_build_core_hamiltonian_force(qs_env, ec_env)
          CALL ec_build_ks_matrix_force(qs_env, ec_env)
 
-         CALL response_calculation(qs_env, ec_env, ec_env%p_env)
+         CALL response_calculation(qs_env, ec_env)
 
-         CALL response_force(qs_env, ec_env%p_env, &
+         CALL response_force(qs_env, ec_env, &
                              ec_env%vh_rspace, ec_env%vxc_rspace, ec_env%vtau_rspace, &
                              ec_env%matrix_hz)
          !
@@ -818,7 +822,6 @@ CONTAINS
       TYPE(xc_rho_set_type), POINTER                     :: rho1_set, rho_set
       ! fbelle
 !      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_ps, matrix_rhs
-      REAL(dp)                                           :: trace
 
       CALL timeset(routineN, handle)
 
@@ -888,29 +891,11 @@ CONTAINS
          CALL pw_axpy(rho_g(ispin)%pw, rhoout_g(ispin)%pw, -1.0_dp)
          CALL pw_axpy(rhoout_g(ispin)%pw, rho_tot_gspace%pw)
       END DO
-!fbelle debug --------------------
-
-      DO ispin = 1,nspins
-         trace = pw_integral_ab(rhoout_r(ispin)%pw, rhoout_r(ispin)%pw)
-         IF(para_env%mepos==0) WRITE(*,*) "ec_ks_forces - int(drho_r^2]", trace
-         trace = pw_integral_ab(rhoout_g(ispin)%pw, rhoout_g(ispin)%pw)
-         IF(para_env%mepos==0) WRITE(*,*) "ec_ks_forces - int(drho_g^2]", trace
-      END DO
-
-!--------------------------------
       ! calculate associated hartree potential
       CALL pw_poisson_solve(poisson_env, rho_tot_gspace%pw, dehartree, &
                             v_hartree_gspace%pw)
       CALL pw_transfer(v_hartree_gspace%pw, dv_hartree_rspace%pw)
       CALL pw_scale(dv_hartree_rspace%pw, dv_hartree_rspace%pw%pw_grid%dvol)
-! fbelle
-IF(para_env%mepos==0) WRITE(*,*) "ec_nsc_force - v_[\delta n] - ehartree", dehartree
-      DO ispin = 1,nspins
-         trace = pw_integral_ab(rho_r(ispin)%pw, dv_hartree_rspace%pw)
-         IF(para_env%mepos==0) WRITE(*,*) "ec_nsc_force - int(rho_r*v_h_[\delta n]", trace
-      END DO
-!---------------
-
       ! Getting nuclear force contribution from the core charge density
       ! Vh(rho_in + rho_c) + Vh(rho_out - rho_in)
       CALL pw_transfer(v_hartree_rspace%pw, vtot_rspace%pw)
@@ -976,15 +961,6 @@ IF(para_env%mepos==0) WRITE(*,*) "ec_nsc_force - v_[\delta n] - ehartree", dehar
 
       DO ispin = 1, nspins
          CALL pw_scale(v_xc(ispin)%pw, v_xc(ispin)%pw%pw_grid%dvol)
-! fbelle debug
-
-         trace = pw_integral_ab(rho_r(ispin)%pw, v_xc(ispin)%pw)
-         IF(para_env%mepos==0) WRITE(*,*) "ec_nsc_force - int(rho_r*f_xc_[\delta n]", trace
-         trace = pw_integral_ab(rho_r(ispin)%pw, rho_r(ispin)%pw)
-         IF(para_env%mepos==0) WRITE(*,*) "ec_nsc_force - int(rho_in_r^2]", trace
-
-
-!-----------
          CALL pw_axpy(dv_hartree_rspace%pw, v_xc(ispin)%pw)
          CALL integrate_v_rspace(qs_env=qs_env, v_rspace=v_xc(ispin), &
                                  hmat=matrix_v(ispin, 1), &
@@ -1665,12 +1641,12 @@ IF(para_env%mepos==0) WRITE(*,*) "ec_nsc_force - v_[\delta n] - ehartree", dehar
          ec_env%eband = eband + ec_env%efield_nuclear
          ec_env%etotal = ec_env%eband + ec_env%ehartree + ec_env%exc - ec_env%vhxc + ec_env%edispersion
          IF (unit_nr > 0) THEN
-            WRITE (unit_nr, '(T3,A,T65,F16.10)') "Eband    ", ec_env%eband
-            WRITE (unit_nr, '(T3,A,T65,F16.10)') "Ehartree ", ec_env%ehartree
-            WRITE (unit_nr, '(T3,A,T65,F16.10)') "Exc      ", ec_env%exc
-            WRITE (unit_nr, '(T3,A,T65,F16.10)') "Evhxc    ", ec_env%vhxc
-            WRITE (unit_nr, '(T3,A,T65,F16.10)') "Edisp    ", ec_env%edispersion
-            WRITE (unit_nr, '(T3,A,T65,F16.10)') "Etotal Harris Functional   ", ec_env%etotal
+            WRITE (unit_nr, '(T3,A,T65,F25.10)') "Eband    ", ec_env%eband
+            WRITE (unit_nr, '(T3,A,T65,F25.10)') "Ehartree ", ec_env%ehartree
+            WRITE (unit_nr, '(T3,A,T65,F25.10)') "Exc      ", ec_env%exc
+            WRITE (unit_nr, '(T3,A,T65,F25.10)') "Evhxc    ", ec_env%vhxc
+            WRITE (unit_nr, '(T3,A,T65,F25.10)') "Edisp    ", ec_env%edispersion
+            WRITE (unit_nr, '(T3,A,T65,F25.10)') "Etotal Harris Functional   ", ec_env%etotal
          END IF
 
       CASE DEFAULT
@@ -1945,7 +1921,7 @@ IF(para_env%mepos==0) WRITE(*,*) "ec_nsc_force - v_[\delta n] - ehartree", dehar
                rdip = 0.0_dp
                DO ispin = 1, nspins
                   DO idir = 1, 3
-                     CALL dbcsr_dot(ec_env%p_env%p1(ispin)%matrix, moments(idir)%matrix, tmp)
+                     CALL dbcsr_dot(ec_env%matrix_z(ispin)%matrix, moments(idir)%matrix, tmp)
                      rdip(idir) = rdip(idir) + tmp
                   END DO
                END DO
