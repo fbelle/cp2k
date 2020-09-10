@@ -54,10 +54,12 @@ MODULE energy_corrections
                                               cp_print_key_unit_nr
    USE cp_para_types,                   ONLY: cp_para_env_type
    USE dbcsr_api,                       ONLY: &
-        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_desymmetrize, dbcsr_distribution_type, &
-        dbcsr_dot, dbcsr_filter, dbcsr_get_info, dbcsr_init_p, dbcsr_multiply, dbcsr_p_type, &
-        dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_type, dbcsr_type_no_symmetry, &
-        dbcsr_type_symmetric, dbcsr_print
+        dbcsr_add, dbcsr_add_on_diag, dbcsr_copy, dbcsr_create, dbcsr_desymmetrize, &
+        dbcsr_distribution_type, dbcsr_dot, dbcsr_filter, dbcsr_finalize, dbcsr_get_data_type, &
+        dbcsr_get_info, dbcsr_get_occupation, dbcsr_iterator_blocks_left, dbcsr_iterator_next_block, &
+        dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, dbcsr_init_p, dbcsr_multiply, & 
+        dbcsr_put_block, dbcsr_p_type, dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_type, &
+        dbcsr_type_no_symmetry, dbcsr_type_symmetric, dbcsr_print
    USE distribution_1d_types,           ONLY: distribution_1d_type
    USE distribution_2d_types,           ONLY: distribution_2d_type
    USE dm_ls_scf_methods,               ONLY: density_matrix_sign,&
@@ -75,6 +77,9 @@ MODULE energy_corrections
                                               ec_matrix_sign,&
                                               ec_matrix_tc2,&
                                               ec_matrix_trs4,&
+                                              ls_s_preconditioner_atomic,&
+                                              ls_s_preconditioner_molecular,&
+                                              ls_s_preconditioner_none,&
                                               ls_s_sqrt_ns,&
                                               ls_s_sqrt_proot
    USE input_section_types,             ONLY: section_get_ival,&
@@ -162,7 +167,6 @@ MODULE energy_corrections
                                               xc_rho_set_release,&
                                               xc_rho_set_type,&
                                               xc_rho_set_update 
-   USE ec_methods,                      ONLY: write_forces
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -690,7 +694,8 @@ CONTAINS
       END IF
       ! Overlap and kinetic energy matrices
       IF (debug_forces) fodeb(1:3) = force(1)%overlap(1:3, 1)
-      CALL build_overlap_matrix(ks_env, matrixkp_s=scrm, &
+      !CALL build_overlap_matrix(ks_env, matrixkp_s=scrm, &
+      CALL build_overlap_matrix(ks_env, matrixkp_s=ec_env%matrix_s, &
                                 matrix_name="OVERLAP MATRIX", &
                                 basis_type_a="HARRIS", &
                                 basis_type_b="HARRIS", &
@@ -1484,6 +1489,8 @@ CONTAINS
                                                             matrix_s_sqrt_inv, matrix_tmp
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(section_vals_type), POINTER                   :: input, solver_section
+      TYPE(dbcsr_type)                                   :: matrix_bs_sqrt, matrix_bs_sqrt_inv
+      LOGICAL                                            :: has_s_preconditioner
 
       CALL timeset(routineN, handle)
 
@@ -1524,8 +1531,36 @@ CONTAINS
       e_homo = -0.1_dp
       e_lumo = 0.1_dp
 
+!      threshold = MAX(eps_filter, 1.0e-12_dp)
+!      eps_filter = 1.0E-6_dp
+      threshold = 1.0E-6_dp
+!       threshold = eps_filter
 
-      threshold = MAX(eps_filter, 1.0e-12_dp)
+      SELECT CASE (s_preconditioner_type)
+      CASE (ls_s_preconditioner_none)
+         has_s_preconditioner = .FALSE.
+      CASE DEFAULT
+         has_s_preconditioner = .TRUE.
+      END SELECT
+
+      ! needs a preconditioner for S
+      IF (has_s_preconditioner) THEN
+         CALL dbcsr_create(matrix_bs_sqrt, template=matrix_s(1,1)%matrix, &
+                           matrix_type=dbcsr_type_no_symmetry)
+         CALL dbcsr_create(matrix_bs_sqrt_inv, template=matrix_s(1,1)%matrix, &
+                           matrix_type=dbcsr_type_no_symmetry)
+         CALL compute_matrix_preconditioner(matrix_s(1,1)%matrix, &
+                                            s_preconditioner_type, &
+                                            matrix_bs_sqrt, matrix_bs_sqrt_inv, &
+                                            eps_filter, s_sqrt_order, &
+                                            eps_lanczos, max_iter_lanczos)
+      ENDIF
+
+      ! precondition S
+      IF (has_s_preconditioner) THEN
+         ! forward sqrt_s
+         CALL transform_m_orth(matrix_s(1,1)%matrix, matrix_bs_sqrt_inv, eps_filter)
+      ENDIF
 
       SELECT CASE (ls_method)
       CASE (ec_curvy_steps)
@@ -1551,10 +1586,14 @@ CONTAINS
          CASE DEFAULT
             CPABORT("Unknown sqrt method.")
          END SELECT
-         CALL dbcsr_release(matrix_s_sqrt)
       CASE DEFAULT
          CPABORT("Wrong ls_method")
       END SELECT
+
+      ! F = S^-1/2 * F * S^1/2
+      DO ispin = 1, nspins
+         CALL transform_m_orth(matrix_ks(ispin,1)%matrix, matrix_s_sqrt_inv, eps_filter)
+      END DO
 
       DO ispin = 1, nspins
          nelectron = nmo(ispin)
@@ -1573,7 +1612,8 @@ CONTAINS
                                      max_iter_lanczos=max_iter_lanczos, &
                                      eps_lanczos=eps_lanczos, converged=converged)
          CASE (ec_matrix_tc2)
-            CPABORT("TC2 Method not available")
+!fbelle
+!            CPABORT("TC2 Method not available")
             CALL density_matrix_tc2(matrix_p(ispin, 1)%matrix, matrix_ks(ispin, 1)%matrix, &
                                     matrix_s_sqrt_inv, nelectron, eps_filter, &
                                     e_homo(ispin), e_lumo(ispin), &
@@ -1583,16 +1623,32 @@ CONTAINS
          END SELECT
       END DO
 
+      ! de-orthonormalize
+      IF (has_s_preconditioner) THEN
+         DO ispin = 1, nspins
+            ! F = S^1/2 * F_tilde * S^1/2 (backward)
+            CALL transform_m_orth(matrix_ks(ispin,1)%matrix, matrix_bs_sqrt, eps_filter)
+            ! P = S^-1/2 * P_tilde * S^-1/2 (forward)
+            CALL transform_m_orth(matrix_p(ispin,1)%matrix, matrix_bs_sqrt_inv, eps_filter)
+         END DO
+         ! backward sqrt_s
+         CALL transform_m_orth(matrix_s(1,1)%matrix, matrix_bs_sqrt, eps_filter)
+      ENDIF
+
       SELECT CASE (ls_method)
       CASE (ec_curvy_steps)
          CPABORT("Curvy Step Method not available")
       CASE (ec_matrix_sign)
          CALL dbcsr_release(matrix_s_inv)
       CASE (ec_matrix_trs4, ec_matrix_tc2)
+         CALL dbcsr_release(matrix_s_sqrt)
          CALL dbcsr_release(matrix_s_sqrt_inv)
       CASE DEFAULT
          CPABORT("Wrong ls_method")
       END SELECT
+
+      CALL dbcsr_release(matrix_bs_sqrt)
+      CALL dbcsr_release(matrix_bs_sqrt_inv)
 
       ! W matrix
       CALL dbcsr_create(matrix_tmp, template=matrix_s(1, 1)%matrix, matrix_type=dbcsr_type_no_symmetry)
@@ -1612,6 +1668,136 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE ec_ls_solver
+
+! **************************************************************************************************
+!> \brief compute for a block positive definite matrix s (bs)
+!>        the sqrt(bs) and inv(sqrt(bs))
+!> \param matrix_s ...
+!> \param preconditioner_type ...
+!> \param ls_mstruct ...
+!> \param matrix_bs_sqrt ...
+!> \param matrix_bs_sqrt_inv ...
+!> \param threshold ...
+!> \param order ...
+!> \param eps_lanczos ...
+!> \param max_iter_lanczos ...
+!> \par History
+!>       2010.10 created [Joost VandeVondele]
+!> \author Joost VandeVondele
+! **************************************************************************************************
+   SUBROUTINE compute_matrix_preconditioner(matrix_s, preconditioner_type, &
+                                            matrix_bs_sqrt, matrix_bs_sqrt_inv, threshold, order, eps_lanczos, max_iter_lanczos)
+
+      TYPE(dbcsr_type), INTENT(INOUT)                    :: matrix_s
+      INTEGER                                            :: preconditioner_type
+      TYPE(dbcsr_type), INTENT(INOUT)                    :: matrix_bs_sqrt, matrix_bs_sqrt_inv
+      REAL(KIND=dp)                                      :: threshold
+      INTEGER                                            :: order
+      REAL(KIND=dp)                                      :: eps_lanczos
+      INTEGER                                            :: max_iter_lanczos
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'compute_matrix_preconditioner', &
+         routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: datatype, handle, iblock_col, iblock_row
+      REAL(dp), DIMENSION(:, :), POINTER                 :: block_dp
+      TYPE(dbcsr_iterator_type)                          :: iter
+      TYPE(dbcsr_type)                                   :: matrix_bs
+
+      CALL timeset(routineN, handle)
+
+      datatype = dbcsr_get_data_type(matrix_s) ! could be single or double precision
+
+      ! first generate a block diagonal copy of s
+      CALL dbcsr_create(matrix_bs, template=matrix_s)
+
+      SELECT CASE (preconditioner_type)
+      CASE (ls_s_preconditioner_none)
+      CASE (ls_s_preconditioner_atomic, ls_s_preconditioner_molecular)
+         CALL dbcsr_iterator_start(iter, matrix_s)
+         DO WHILE (dbcsr_iterator_blocks_left(iter))
+            CALL dbcsr_iterator_next_block(iter, iblock_row, iblock_col, block_dp)
+
+            ! do we need the block ?
+            ! this depends on the preconditioner, but also the matrix clustering method employed
+            ! for a clustered matrix, right now, we assume that atomic and molecular preconditioners
+            ! are actually the same, and only require that the diagonal blocks (clustered) are present
+
+            IF (iblock_row == iblock_col) THEN
+               CALL dbcsr_put_block(matrix=matrix_bs, row=iblock_row, col=iblock_col, block=block_dp)
+            ENDIF
+
+         ENDDO
+         CALL dbcsr_iterator_stop(iter)
+      END SELECT
+
+      CALL dbcsr_finalize(matrix_bs)
+
+      SELECT CASE (preconditioner_type)
+      CASE (ls_s_preconditioner_none)
+         ! for now make it a simple identity matrix
+         CALL dbcsr_copy(matrix_bs_sqrt, matrix_bs)
+         CALL dbcsr_set(matrix_bs_sqrt, 0.0_dp)
+         CALL dbcsr_add_on_diag(matrix_bs_sqrt, 1.0_dp)
+
+         ! for now make it a simple identity matrix
+         CALL dbcsr_copy(matrix_bs_sqrt_inv, matrix_bs)
+         CALL dbcsr_set(matrix_bs_sqrt_inv, 0.0_dp)
+         CALL dbcsr_add_on_diag(matrix_bs_sqrt_inv, 1.0_dp)
+      CASE (ls_s_preconditioner_atomic, ls_s_preconditioner_molecular)
+         CALL dbcsr_copy(matrix_bs_sqrt, matrix_bs)
+         CALL dbcsr_copy(matrix_bs_sqrt_inv, matrix_bs)
+         ! XXXXXXXXXXX
+         ! XXXXXXXXXXX the threshold here could be done differently,
+         ! XXXXXXXXXXX using eps_filter is reducing accuracy for no good reason, this is cheap
+         ! XXXXXXXXXXX
+         CALL matrix_sqrt_Newton_Schulz(matrix_bs_sqrt, matrix_bs_sqrt_inv, matrix_bs, &
+                                        threshold=MIN(threshold, 1.0E-10_dp), order=order, &
+                                        eps_lanczos=eps_lanczos, max_iter_lanczos=max_iter_lanczos)
+      END SELECT
+
+      CALL dbcsr_release(matrix_bs)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE compute_matrix_preconditioner
+
+! **************************************************************************************************
+!> \brief performs a tranformation of a matrix back to/into orthonormal basis
+!>        in case of P a scaling of 0.5 has to be applied for closed shell case
+!> \param matrix       matrix to be transformed
+!> \param matrix_trafo transformation matrix
+!> \param eps_filter   filtering threshold for sparse matrices
+!> \par History
+!>       2012.05 created [Florian Schiffmann]
+!> \author Florian Schiffmann
+!>
+! **************************************************************************************************
+
+   SUBROUTINE transform_m_orth(matrix, matrix_trafo, eps_filter)
+      TYPE(dbcsr_type)                                   :: matrix
+      TYPE(dbcsr_type)                                   :: matrix_trafo
+      REAL(KIND=dp)                                      :: eps_filter
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'transform_matrix_orth', &
+         routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: handle
+      TYPE(dbcsr_type)                                   :: matrix_work
+
+      CALL timeset(routineN, handle)
+
+      CALL dbcsr_create(matrix_work, template=matrix, matrix_type=dbcsr_type_no_symmetry)
+
+      CALL dbcsr_multiply("N", "N", 1.0_dp, matrix, matrix_trafo, &
+                          0.0_dp, matrix_work, filter_eps=eps_filter)
+      CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_trafo, matrix_work, &
+                          0.0_dp, matrix, filter_eps=eps_filter, retain_sparsity=.TRUE.)
+
+      CALL dbcsr_release(matrix_work)
+      CALL timestop(handle)
+
+   END SUBROUTINE
 
 ! **************************************************************************************************
 !> \brief Calculate the energy correction
@@ -1635,6 +1821,10 @@ CONTAINS
          nspins = SIZE(ec_env%matrix_ks, 1)
          eband = 0.0_dp
          DO ispin = 1, nspins
+
+            CALL dbcsr_dot(ec_env%matrix_p(ispin, 1)%matrix, ec_env%matrix_s(1, 1)%matrix, trace)
+            IF (unit_nr > 0) WRITE (unit_nr, '(T2,A,T16,F16.10)') 'Tr[PS] ', trace
+
             CALL dbcsr_dot(ec_env%matrix_ks(ispin, 1)%matrix, ec_env%matrix_p(ispin, 1)%matrix, trace)
             eband = eband + trace
          END DO
