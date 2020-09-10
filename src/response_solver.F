@@ -138,7 +138,6 @@ MODULE response_solver
                                               xc_rho_set_type,&
                                               xc_rho_set_update
    ! fbelle
-   USE ec_ao_solver,                   ONLY: ec_res_ao
    USE ec_orth_solver,                 ONLY: ec_response_ao
 #include "./base/base_uses.f90"
 
@@ -166,7 +165,7 @@ CONTAINS
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(energy_correction_type), POINTER              :: ec_env
 
-      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'response_calculation', &
+      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'response_calculation'
 
       INTEGER                                            :: handle, ispin, nao, nao_aux, &
                                                             nspins, output_unit

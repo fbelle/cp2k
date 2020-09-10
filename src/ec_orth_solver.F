@@ -869,14 +869,14 @@ CONTAINS
        CALL projector(qs_env, matrix_p, matrix_z0, eps_filter, .FALSE.)
 
        ! A(x_0)
-       CALL build_hessian_op(qs_env = qs_env, &
-                             matrix_ks = matrix_ks, &
-                             matrix_p = matrix_p, &
-                             matrix_s_sqrt_inv = matrix_s_sqrt_inv, &
-                             matrix_cg = matrix_z0, & ! cg
-                             matrix_Ax = matrix_Ax, &
-                             eps_filter = eps_filter,&
-                             iounit= iounit)
+!       CALL build_hessian_op(qs_env = qs_env, &
+!                             matrix_ks = matrix_ks, &
+!                             matrix_p = matrix_p, &
+!                             matrix_s_sqrt_inv = matrix_s_sqrt_inv, &
+!                             matrix_cg = matrix_z0, & ! cg
+!                             matrix_Ax = matrix_Ax, &
+!                             eps_filter = eps_filter,&
+!                             iounit= iounit)
 
        CALL commutator(matrix_z0, matrix_p, matrix_z, eps_filter, .TRUE., alpha = 0.5_dp)
        ! Transform Z-matrix back into non-orthogonal basis
