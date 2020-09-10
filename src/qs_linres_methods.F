@@ -609,7 +609,7 @@ CONTAINS
             CALL preortho(psi_dbg, mo_coeff_array, Sc)
          END DO
 
-         CALL apply_op(qs_env, p_env, psi0_order, psi_dbg, Ap, chc)
+!         CALL apply_op(qs_env, p_env, psi0_order, psi_dbg, Ap, chc)
          !
          ! Build intermediate Z-Matrix
          DO ispin = 1, nspins
