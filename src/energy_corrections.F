@@ -2457,7 +2457,7 @@ CONTAINS
       INTEGER, DIMENSION(2)                              :: nmo
       REAL(KIND=dp)                                      :: eps_filter, eps_lanczos, mu
       TYPE(cp_para_env_type), POINTER                    :: para_env
-      TYPE(dbcsr_type)                                   :: matrix_tmp
+      !TYPE(dbcsr_type)                                   :: matrix_tmp
       TYPE(dft_control_type), POINTER                    :: dft_control
       REAL(KIND=dp), DIMENSION(2)                        :: e_homo, e_lumo, mu_spin
       LOGICAL                                            :: check_s_inv, converged, &
@@ -2615,15 +2615,18 @@ CONTAINS
 !      IF(para_env%mepos==0) WRITE(*,*) 'Tr[FP] ', trace
 
       ! W matrix
-      CALL dbcsr_create(matrix_tmp, template=ec_env%matrix_s(1,1)%matrix, &
-                        matrix_type=dbcsr_type_no_symmetry)
-      DO ispin = 1, nspins
-         CALL dbcsr_multiply("N", "N", 1.0_dp, ec_env%matrix_p(ispin, 1)%matrix, ec_env%matrix_ks(ispin, 1)%matrix, &
-                             0.0_dp, matrix_tmp, filter_eps=eps_filter)
-         CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_tmp, ec_env%matrix_p(ispin, 1)%matrix, &
-                             0.0_dp, ec_env%matrix_w(ispin, 1)%matrix, filter_eps=eps_filter)
-      ENDDO
-      CALL dbcsr_release(matrix_tmp)
+      CALL calculate_w_matrix(ec_env, ec_env%matrix_w, eps_filter, has_s_preconditioner)
+
+!      CALL dbcsr_create(matrix_tmp, template=ec_env%matrix_s(1,1)%matrix, &
+!                        matrix_type=dbcsr_type_no_symmetry)
+!      DO ispin = 1, nspins
+!         CALL dbcsr_multiply("N", "N", 1.0_dp, ec_env%matrix_p(ispin, 1)%matrix, &
+!                             ec_env%matrix_ks(ispin, 1)%matrix, &
+!                             0.0_dp, matrix_tmp, filter_eps=eps_filter)
+!         CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_tmp, ec_env%matrix_p(ispin, 1)%matrix, &
+!                             0.0_dp, ec_env%matrix_w(ispin, 1)%matrix, filter_eps=eps_filter)
+!      ENDDO
+!      CALL dbcsr_release(matrix_tmp)
 
       IF (nspins == 1) THEN
          CALL dbcsr_scale(ec_env%matrix_p(1, 1)%matrix, 2.0_dp)
@@ -2658,6 +2661,64 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE ec_ls_solver
+
+! **************************************************************************************************
+!> \brief Compute matrix_w as needed for the forces
+!> \param matrix_w ...
+!> \param ls_scf_env ...
+!> \par History
+!>       2010.11 created [Joost VandeVondele]
+!> \author Joost VandeVondele
+! **************************************************************************************************
+   SUBROUTINE calculate_w_matrix(ec_env, matrix_w, eps_filter, has_s_preconditioner)
+      TYPE(energy_correction_type)                       :: ec_env
+      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_w
+      REAL(KIND=dp)                                      :: eps_filter
+      LOGICAL                                            :: has_s_preconditioner
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'calculate_w_matrix'
+
+      INTEGER                                            :: handle, ispin
+      TYPE(dbcsr_type)                                   :: matrix_tmp1, matrix_tmp2, matrix_tmp3
+
+      CALL timeset(routineN, handle)
+
+      CALL dbcsr_create(matrix_tmp1, template=ec_env%matls_s, &
+                        matrix_type=dbcsr_type_no_symmetry)
+      CALL dbcsr_create(matrix_tmp2, template=ec_env%matls_s, &
+                        matrix_type=dbcsr_type_no_symmetry)
+      CALL dbcsr_create(matrix_tmp3, template=ec_env%matls_s, &
+                        matrix_type=dbcsr_type_no_symmetry)
+
+!      IF (ls_scf_env%nspins == 1) THEN
+!         scaling = 0.5_dp
+!      ELSE
+!         scaling = 1.0_dp
+!      ENDIF
+
+      DO ispin = 1, SIZE(matrix_w,1) 
+
+         CALL dbcsr_copy(matrix_tmp3, ec_env%matls_ks(ispin))
+         IF (has_s_preconditioner) THEN
+            CALL apply_matrix_preconditioner(matrix_tmp3, "backward", &
+                                             ec_env%matrix_bs_sqrt, ec_env%matrix_bs_sqrt_inv)
+         ENDIF
+         CALL dbcsr_filter(matrix_tmp3, eps_filter)
+
+         CALL dbcsr_multiply("N", "N", 1.0_dp, ec_env%matls_p(ispin), matrix_tmp3, &
+                             0.0_dp, matrix_tmp1, filter_eps=eps_filter)
+         CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_tmp1, ec_env%matls_p(ispin), &
+                             0.0_dp, matrix_tmp2, filter_eps=eps_filter)
+         CALL matrix_ls_to_qs(matrix_w(ispin,1)%matrix, matrix_tmp2, ec_env%ls_mstruct, covariant=.FALSE.)
+      ENDDO
+
+      CALL dbcsr_release(matrix_tmp1)
+      CALL dbcsr_release(matrix_tmp2)
+      CALL dbcsr_release(matrix_tmp3)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE calculate_w_matrix
 
 ! **************************************************************************************************
 !> \brief Report on the sparsities of various interesting matrices.
