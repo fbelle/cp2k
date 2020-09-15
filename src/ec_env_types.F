@@ -15,7 +15,9 @@ MODULE ec_env_types
    USE cp_dbcsr_operations,             ONLY: dbcsr_deallocate_matrix_set
    USE cp_fm_types,                     ONLY: cp_fm_p_type,&
                                               cp_fm_release
-   USE dbcsr_api,                       ONLY: dbcsr_p_type
+   USE dm_ls_scf_types,                 ONLY: ls_mstruct_type
+   USE dbcsr_api,                       ONLY: dbcsr_p_type,&
+                                              dbcsr_type
    USE input_section_types,             ONLY: section_vals_type
    USE kinds,                           ONLY: dp
    USE pw_types,                        ONLY: pw_p_type,&
@@ -92,6 +94,14 @@ MODULE ec_env_types
       TYPE(pw_p_type), DIMENSION(:), POINTER           :: vxc_rspace, vtau_rspace
       ! efield
       TYPE(efield_berry_type), POINTER                 :: efield => NULL()
+      ! LS matrices and types
+      TYPE(ls_mstruct_type)                            :: ls_mstruct
+      TYPE(dbcsr_type), DIMENSION(:), ALLOCATABLE      :: matls_ks
+      TYPE(dbcsr_type), DIMENSION(:), ALLOCATABLE      :: matls_p
+      TYPE(dbcsr_type)                                 :: matls_s
+      TYPE(dbcsr_type)  :: matrix_s_inv
+      TYPE(dbcsr_type)  :: matrix_bs_sqrt, matrix_bs_sqrt_inv
+      TYPE(dbcsr_type)  :: matrix_s_sqrt, matrix_s_sqrt_inv
    END TYPE energy_correction_type
 
 CONTAINS
