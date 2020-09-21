@@ -445,7 +445,7 @@ CONTAINS
       CALL section_vals_val_get(dft_section, "ENERGY_CORRECTION%_SECTION_PARAMETERS_", &
                                 l_val=qs_env%energy_correction)
       NULLIFY (ec_env)
-      CALL ec_env_create(qs_env, ec_env, dft_section)
+      CALL ec_env_create(qs_env, ec_env, dft_section, qs_env%input)
       CALL set_qs_env(qs_env, ec_env=ec_env)
 
       et_coupling_section => section_vals_get_subs_vals(qs_env%input, &
