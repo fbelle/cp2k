@@ -15,7 +15,8 @@ MODULE ec_env_types
    USE cp_dbcsr_operations,             ONLY: dbcsr_deallocate_matrix_set
    USE cp_fm_types,                     ONLY: cp_fm_p_type,&
                                               cp_fm_release
-   USE dm_ls_scf_types,                 ONLY: ls_mstruct_type
+   USE dm_ls_scf_types,                 ONLY: ls_scf_env_type,& 
+                                              ls_scf_release
    USE dbcsr_api,                       ONLY: dbcsr_p_type,&
                                               dbcsr_type
    USE input_section_types,             ONLY: section_vals_type
@@ -95,13 +96,7 @@ MODULE ec_env_types
       ! efield
       TYPE(efield_berry_type), POINTER                 :: efield => NULL()
       ! LS matrices and types
-      TYPE(ls_mstruct_type)                            :: ls_mstruct
-      TYPE(dbcsr_type), DIMENSION(:), ALLOCATABLE      :: matls_ks
-      TYPE(dbcsr_type), DIMENSION(:), ALLOCATABLE      :: matls_p
-      TYPE(dbcsr_type)                                 :: matls_s
-      TYPE(dbcsr_type)  :: matrix_s_inv
-      TYPE(dbcsr_type)  :: matrix_bs_sqrt, matrix_bs_sqrt_inv
-      TYPE(dbcsr_type)  :: matrix_s_sqrt, matrix_s_sqrt_inv
+      TYPE(ls_scf_env_type), POINTER                   :: ls_env
    END TYPE energy_correction_type
 
 CONTAINS
@@ -169,6 +164,10 @@ CONTAINS
             DEALLOCATE (ec_env%vtau_rspace)
          END IF
          CALL efield_berry_release(ec_env%efield)
+
+         IF (ASSOCIATED(ec_env%ls_env)) THEN
+            CALL ls_scf_release(ec_env%ls_env)
+         ENDIF
 
          DEALLOCATE (ec_env)
 

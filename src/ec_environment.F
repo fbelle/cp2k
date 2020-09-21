@@ -19,9 +19,15 @@ MODULE ec_environment
                                               create_primitive_basis_set,&
                                               gto_basis_set_type
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_para_env,                     ONLY: cp_para_env_retain
    USE cp_para_types,                   ONLY: cp_para_env_type
+   USE dm_ls_scf_types,                 ONLY: ls_scf_env_type
    USE ec_env_types,                    ONLY: energy_correction_type
    USE input_constants,                 ONLY: ec_functional_harris,&
+                                              ls_s_inversion_hotelling,&
+                                              ls_s_inversion_none,&
+                                              ls_s_inversion_sign_sqrt,&
+                                              ls_s_preconditioner_none,&
                                               xc_vdw_fun_nonloc,&
                                               xc_vdw_fun_pairpot
    USE input_cp2k_check,                ONLY: xc_functionals_expand
@@ -30,7 +36,10 @@ MODULE ec_environment
                                               section_vals_type,&
                                               section_vals_val_get
    USE kinds,                           ONLY: dp
+   USE molecule_types,                  ONLY: molecule_of_atom,&
+                                              molecule_type
    USE orbital_pointers,                ONLY: init_orbital_pointers
+   USE particle_types,                  ONLY: particle_type
    USE qs_dispersion_nonloc,            ONLY: qs_dispersion_nonloc_init
    USE qs_dispersion_pairpot,           ONLY: qs_dispersion_pairpot_init
    USE qs_dispersion_types,             ONLY: qs_dispersion_type
@@ -63,14 +72,15 @@ CONTAINS
 !>       2019.09 created
 !> \author JGH
 ! **************************************************************************************************
-   SUBROUTINE ec_env_create(qs_env, ec_env, dft_section)
+   SUBROUTINE ec_env_create(qs_env, ec_env, dft_section, input)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(energy_correction_type), POINTER              :: ec_env
       TYPE(section_vals_type), POINTER                   :: dft_section
+      TYPE(section_vals_type), OPTIONAL, POINTER         :: input
 
       CPASSERT(.NOT. ASSOCIATED(ec_env))
       ALLOCATE (ec_env)
-      CALL init_ec_env(qs_env, ec_env, dft_section)
+      CALL init_ec_env(qs_env, ec_env, dft_section, input)
 
    END SUBROUTINE ec_env_create
 
@@ -83,10 +93,11 @@ CONTAINS
 !>       2019.09 created
 !> \author JGH
 ! **************************************************************************************************
-   SUBROUTINE init_ec_env(qs_env, ec_env, dft_section)
+   SUBROUTINE init_ec_env(qs_env, ec_env, dft_section, input)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(energy_correction_type), POINTER              :: ec_env
       TYPE(section_vals_type), OPTIONAL, POINTER         :: dft_section
+      TYPE(section_vals_type), OPTIONAL, POINTER         :: input
 
       INTEGER                                            :: ikind, maxlgto, nkind
       LOGICAL                                            :: explicit
@@ -99,7 +110,7 @@ CONTAINS
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_kind_type), POINTER                        :: qs_kind
       TYPE(section_vals_type), POINTER                   :: nl_section, pp_section, section1, &
-                                                            section2, xc_section
+                                                            section2, solver_section, xc_section
 
       NULLIFY (atomic_kind_set, dispersion_env, para_env)
       NULLIFY (ec_env%sab_orb, ec_env%sac_ppl, ec_env%sap_ppnl)
@@ -226,8 +237,131 @@ CONTAINS
             CALL qs_dispersion_nonloc_init(dispersion_env, para_env)
          END IF
          ec_env%dispersion_env => dispersion_env
+
+         ! Initialize Harris LS solver environment
+         NULLIFY(solver_section)
+         solver_section => section_vals_get_subs_vals(input, "DFT%ENERGY_CORRECTION%LS_SOLVER")
+         IF (ASSOCIATED(solver_section)) THEN
+            CALL ec_ls_create(qs_env, ec_env%ls_env)
+         END IF
+
       END IF
 
    END SUBROUTINE init_ec_env
+
+! **************************************************************************************************
+!> \brief Initializes ec_env
+!> \param qs_env ...
+!> \param ec_env ...
+!> \param qs_kind_set ...
+!> \param input ...
+!> \par History
+!>       2012.07 created [Martin Haeufel]
+!>       2018.01 TNADD correction {JGH]
+!>       2019.09 refactoring energy correction
+!> \author Martin Haeufel
+! **************************************************************************************************
+   SUBROUTINE ec_ls_create(qs_env, ls_env)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(ls_scf_env_type), POINTER                     :: ls_env
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'ec_ls_create', routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: handle
+      REAL(KIND=dp)                                      :: mu
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(molecule_type), DIMENSION(:), POINTER         :: molecule_set
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+      TYPE(section_vals_type), POINTER                   :: input, solver_section
+
+      CALL timeset(routineN, handle)
+
+      WRITE(*,*) "init_ec_ls_env - BEGINNING"
+
+      ALLOCATE (ls_env)
+
+      CALL get_qs_env(qs_env, &
+                      dft_control = dft_control,&
+                      input = input,&
+                      molecule_set=molecule_set, &
+                      particle_set=particle_set,&
+                      para_env=ls_env%para_env, &
+                      nelectron_spin=ls_env%nelectron_spin)
+
+      ! copy some basic stuff
+      ls_env%nspins = dft_control%nspins
+      ls_env%natoms = SIZE(particle_set, 1)
+      CALL cp_para_env_retain(ls_env%para_env)
+
+      ! initialize block to group to defined molecules
+      ALLOCATE (ls_env%ls_mstruct%atom_to_molecule(ls_env%natoms))
+      CALL molecule_of_atom(molecule_set, atom_to_mol=ls_env%ls_mstruct%atom_to_molecule)
+
+      ! set up the buffer for the history of matrices
+!      ls_env%scf_history%nstore = 0 
+!      ls_env%scf_history%istore = 0
+      ls_env%extrapolation_order = 0
+
+      ls_env%do_transport = .FALSE.
+      ls_env%do_pao = .FALSE.
+      ls_env%ls_mstruct%do_pao = ls_env%do_pao
+      ls_env%do_pexsi = .FALSE.
+
+      ls_env%has_unit_metric = .FALSE.
+
+      ! ls_scf_init_read_write_input
+
+      solver_section => section_vals_get_subs_vals(input, "DFT%ENERGY_CORRECTION%LS_SOLVER")
+      CALL section_vals_val_get(solver_section, "EPS_FILTER", r_val=ls_env%eps_filter)
+      CALL section_vals_val_get(solver_section, "MU", r_val=mu)
+      CALL section_vals_val_get(solver_section, "FIXED_MU", l_val=ls_env%fixed_mu)
+      ls_env%mu_spin = mu
+      CALL section_vals_val_get(solver_section, "S_PRECONDITIONER", i_val=ls_env%s_preconditioner_type)
+      CALL section_vals_val_get(solver_section, "MATRIX_CLUSTER_TYPE", i_val=ls_env%ls_mstruct%cluster_type)
+      CALL section_vals_val_get(solver_section, "SINGLE_PRECISION_MATRICES", l_val=ls_env%ls_mstruct%single_precision)
+      CALL section_vals_val_get(solver_section, "S_INVERSION", i_val=ls_env%s_inversion_type)
+      CALL section_vals_val_get(solver_section, "CHECK_S_INV", l_val=ls_env%check_s_inv)
+      CALL section_vals_val_get(solver_section, "REPORT_ALL_SPARSITIES", l_val=ls_env%report_all_sparsities)
+      CALL section_vals_val_get(solver_section, "SIGN_METHOD", i_val=ls_env%sign_method)
+      CALL section_vals_val_get(solver_section, "SIGN_ORDER", i_val=ls_env%sign_order)
+      CALL section_vals_val_get(solver_section, "DYNAMIC_THRESHOLD", l_val=ls_env%dynamic_threshold)
+      CALL section_vals_val_get(solver_section, "NON_MONOTONIC", l_val=ls_env%non_monotonic)
+      CALL section_vals_val_get(solver_section, "S_SQRT_METHOD", i_val=ls_env%s_sqrt_method)
+      CALL section_vals_val_get(solver_section, "S_SQRT_ORDER", i_val=ls_env%s_sqrt_order)
+!      CALL section_vals_val_get(solver_section, "EXTRAPOLATION_ORDER", i_val=ls_env%extrapolation_order)
+      CALL section_vals_val_get(solver_section, "EPS_LANCZOS", r_val=ls_env%eps_lanczos)
+      CALL section_vals_val_get(solver_section, "MAX_ITER_LANCZOS", i_val=ls_env%max_iter_lanczos)
+
+      SELECT CASE (ls_env%s_inversion_type)
+      CASE (ls_s_inversion_sign_sqrt)
+         ls_env%needs_s_inv = .TRUE.
+         ls_env%use_s_sqrt = .TRUE.
+      CASE (ls_s_inversion_hotelling)
+         ls_env%needs_s_inv = .TRUE.
+         ls_env%use_s_sqrt = .FALSE.
+      CASE (ls_s_inversion_none)
+         ls_env%needs_s_inv = .FALSE.
+         ls_env%use_s_sqrt = .FALSE.
+      CASE DEFAULT
+         CPABORT("")
+      END SELECT
+
+      SELECT CASE (ls_env%s_preconditioner_type)
+      CASE (ls_s_preconditioner_none)
+         ls_env%has_s_preconditioner = .FALSE.
+      CASE DEFAULT
+         ls_env%has_s_preconditioner = .TRUE.
+      END SELECT
+
+      ! set up the buffer for the history of matrices
+      ls_env%scf_history%nstore = ls_env%extrapolation_order
+      ls_env%scf_history%istore = 0
+      ALLOCATE (ls_env%scf_history%matrix(ls_env%nspins, ls_env%scf_history%nstore))
+
+      NULLIFY (ls_env%mixing_store)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE ec_ls_create
 
 END MODULE ec_environment
