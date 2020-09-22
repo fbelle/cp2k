@@ -2436,7 +2436,7 @@ CONTAINS
       ENDIF
 
       ! Closed-shell 
-      IF (nspins == 1) CALL dbcsr_scale(ls_env%matrix_p(ispin), 2.0_dp)
+      IF (nspins == 1) CALL dbcsr_scale(ls_env%matrix_p(1), 2.0_dp)
 
 !      CALL post_ec_ls_sparsities(qs_env, eps_filter, ec_env, ls_env%needs_s_inv, use_s_sqrt)
       CALL post_scf_sparsities(ls_env)
