@@ -28,13 +28,16 @@ MODULE energy_corrections
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               copy_fm_to_dbcsr,&
+                                              cp_dbcsr_m_by_n_from_row_template,&
                                               cp_dbcsr_sm_fm_multiply,&
+                                              cp_dbcsr_plus_fm_fm_t,&
                                               dbcsr_allocate_matrix_set,&
                                               dbcsr_deallocate_matrix_set
    USE cp_fm_basic_linalg,              ONLY: cp_fm_column_scale,&
                                               cp_fm_triangular_invert
    USE cp_fm_cholesky,                  ONLY: cp_fm_cholesky_decompose
    USE cp_fm_diag,                      ONLY: choose_eigv_solver
+   USE cp_fm_pool_types,                ONLY: cp_fm_pool_p_type
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
                                               cp_fm_struct_release,&
                                               cp_fm_struct_type
@@ -43,11 +46,13 @@ MODULE energy_corrections
                                               cp_fm_p_type,&
                                               cp_fm_release,&
                                               cp_fm_set_all,&
+                                              cp_fm_to_fm,&
                                               cp_fm_to_fm_triangular,&
                                               cp_fm_type
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_get_default_unit_nr,&
-                                              cp_logger_type
+                                              cp_logger_type,&
+                                              cp_to_string
    USE cp_output_handling,              ONLY: cp_p_file,&
                                               cp_print_key_finished_output,&
                                               cp_print_key_should_output,&
@@ -93,7 +98,9 @@ MODULE energy_corrections
                                               ls_s_preconditioner_molecular,&
                                               ls_s_preconditioner_none,&
                                               ls_s_sqrt_ns,&
-                                              ls_s_sqrt_proot
+                                              ls_s_sqrt_proot,&
+                                              ot_precond_full_single_inverse,&
+                                              ot_precond_solver_default
    USE input_section_types,             ONLY: section_get_ival,&
                                               section_get_lval,&
                                               section_get_rval,&
@@ -113,6 +120,10 @@ MODULE energy_corrections
    USE moments_utils,                   ONLY: get_reference_point
    USE particle_types,                  ONLY: particle_type
    USE physcon,                         ONLY: debye
+   USE preconditioner,                  ONLY: make_preconditioner
+   USE preconditioner_types,            ONLY: destroy_preconditioner,&
+                                              init_preconditioner,&
+                                              preconditioner_type
    USE pw_env_types,                    ONLY: pw_env_get,&
                                               pw_env_type
    USE pw_methods,                      ONLY: pw_axpy,&
@@ -150,8 +161,18 @@ MODULE energy_corrections
    USE qs_kinetic,                      ONLY: build_kinetic_matrix
    USE qs_ks_methods,                   ONLY: calc_rho_tot_gspace
    USE qs_ks_types,                     ONLY: qs_ks_env_type
-   USE qs_mo_types,                     ONLY: get_mo_set,&
+   USE qs_matrix_pools,                 ONLY: mpools_create,&
+                                              mpools_rebuild_fm_pools,&
+                                              mpools_release,&
+                                              qs_matrix_pools_type
+   USE qs_mo_types,                     ONLY: allocate_mo_set,&
+                                              deallocate_mo_set,&
+                                              get_mo_set,&
+                                              init_mo_set,&
+                                              mo_set_type,&
                                               mo_set_p_type
+   USE qs_mo_methods,                   ONLY: calculate_density_matrix,&
+                                              calculate_subspace_eigenvalues
    USE qs_moments,                      ONLY: build_local_moment_matrix
    USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type
    USE qs_neighbor_lists,               ONLY: atom2d_build,&
@@ -159,6 +180,7 @@ MODULE energy_corrections
                                               build_neighbor_lists,&
                                               local_atoms_type,&
                                               pair_radius_setup
+   USE qs_ot_eigensolver,               ONLY: ot_eigensolver
    USE qs_overlap,                      ONLY: build_overlap_matrix
    USE qs_rho_types,                    ONLY: qs_rho_get,&
                                               qs_rho_type
@@ -1206,7 +1228,8 @@ CONTAINS
 
       SELECT CASE (ec_env%ks_solver)
       CASE (ec_diagonalization)
-         CALL ec_diag_solver(qs_env, ksmat, smat, pmat, wmat)
+         !CALL ec_diag_solver(qs_env, ksmat, smat, pmat, wmat)
+         CALL ec_ot_diag(qs_env, ec_env, ksmat, smat, pmat, wmat)
       CASE (ec_curvy_steps, ec_matrix_sign, ec_matrix_trs4, ec_matrix_tc2)
          CALL ec_ls_init(qs_env)
          !CALL ec_ls_solver(qs_env, ec_env%ks_solver, ksmat, smat, pmat, wmat)
@@ -2264,10 +2287,6 @@ CONTAINS
       TYPE(ls_scf_env_type), POINTER                     :: ls_env
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: wmat
       TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: ksmat, pmat
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: rho_ao
-      TYPE(qs_rho_type), POINTER                         :: rho
-      REAL(KIND=dp)                                      :: norm
-      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
 
       CALL timeset(routineN, handle)
 
@@ -2426,6 +2445,311 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE ec_ls_solver
+
+! **************************************************************************************************
+!> \brief LS-Energy correction to a KG OR KS simulation
+!>
+!> \param qs_env ...
+!> \par History
+!>       09.2020 created
+!> \author F.Belleflamme
+! **************************************************************************************************
+   SUBROUTINE ec_ot_diag(qs_env, ec_env, matrix_ks, matrix_s, matrix_p, matrix_w)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(energy_correction_type), POINTER              :: ec_env
+      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_s, matrix_ks, matrix_p,&
+                                                            matrix_w
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_ot_diag', &
+         routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: handle, homo, ispin, max_iter, &
+                                                            nmo, nspins
+      REAL(KIND=dp)                                      :: eps_iter
+      REAL(KIND=dp), DIMENSION(:), POINTER               :: eigenvalues, uno_evals
+      TYPE(cp_para_env_type), POINTER                    :: para_env
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(ls_scf_env_type), POINTER                     :: ls_env
+      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+      TYPE(cp_fm_type), POINTER                          :: mo_coeff
+      TYPE(preconditioner_type), POINTER                 :: local_preconditioner
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+
+
+      CALL timeset(routineN, handle)
+
+      CALL get_qs_env(qs_env,para_env=para_env)
+      IF(para_env%mepos==0) WRITE(*,*) "START ec_ls_init"
+      CALL get_qs_env(qs_env=qs_env, &
+                      blacs_env=blacs_env,&
+                      dft_control=dft_control) 
+      nspins = dft_control%nspins
+      ls_env => ec_env%ls_env
+
+      ! Some hardcoded values
+      max_iter = 200
+      eps_iter = 1.0E-8_dp
+
+      ! If linear scaling, need to allocate an init MO set
+      ! set it to qs_env%mos
+      IF (dft_control%qs_control%do_ls_scf) THEN
+         CALL ec_mos_init(qs_env)
+      END IF
+
+      CALL get_qs_env(qs_env, mos=mos)
+
+      ! Preconditioner
+      NULLIFY (uno_evals, local_preconditioner)
+      ALLOCATE (local_preconditioner)
+      CALL init_preconditioner(local_preconditioner, para_env=para_env, &
+                               blacs_env=blacs_env)
+      DO ispin = 1, nspins
+         !CALL make_preconditioner(local_preconditioner, &
+         !                         precon_type=ot_precond_full_single_inverse, &
+         !                         solver_type=ot_precond_solver_default, &
+         !                         matrix_h=ec_env%matrix_ks(ispin,1)%matrix, &
+         !                         matrix_s=ec_env%matrix_s(ispin,1)%matrix, &
+         !                         convert_precond_to_dbcsr=.TRUE., &
+         !                         mo_set=mos(ispin)%mo_set, energy_gap=0.2_dp)
+
+         CALL get_mo_set(mos(ispin)%mo_set, &
+                         mo_coeff=mo_coeff, &
+                         eigenvalues=eigenvalues, &
+                         nmo=nmo, &
+                         homo=homo)
+         CALL ot_eigensolver(matrix_h=matrix_ks(ispin,1)%matrix, &
+                             matrix_s=matrix_s(1,1)%matrix, &
+                             matrix_c_fm=mo_coeff, &
+                             !preconditioner=local_preconditioner, &
+                             eps_gradient=eps_iter, &
+                             iter_max=max_iter, &
+                             silent=.FALSE.)
+         CALL calculate_subspace_eigenvalues(mo_coeff, matrix_ks(ispin,1)%matrix, &
+                                             evals_arg=eigenvalues, do_rotation=.TRUE.)
+
+         ! Deallocate preconditioner
+         CALL destroy_preconditioner(local_preconditioner)
+         !MK WRITE(*,*) routinen//' copy_dbcsr_to_fm'
+
+         !fm->dbcsr
+         CALL copy_fm_to_dbcsr(mos(ispin)%mo_set%mo_coeff, &
+                               mos(ispin)%mo_set%mo_coeff_b)
+      END DO
+
+      ! Should have no smearing here
+!      CALL set_mo_occupation(mo_array=mos, &
+!                             smear=scf_control%smear)
+
+      ! Calculate density matrix from MOs
+      DO ispin = 1, nspins
+         CALL calculate_density_matrix(mos(ispin)%mo_set, matrix_p(ispin,1)%matrix)
+
+         CALL calc_w_matrix(mos(ispin)%mo_set, matrix_w(ispin,1)%matrix)
+      END DO
+
+      ! Get rid of MO environment again
+      DO ispin = 1, nspins
+         CALL deallocate_mo_set(mos(ispin)%mo_set)
+      END DO
+      IF (ASSOCIATED(qs_env%mos)) THEN
+         DO ispin = 1, SIZE(qs_env%mos)
+            CALL deallocate_mo_set(qs_env%mos(ispin)%mo_set)
+         END DO
+         DEALLOCATE (qs_env%mos)
+      END IF
+
+      CALL timestop(handle)
+
+   END SUBROUTINE ec_ot_diag
+
+! **************************************************************************************************
+!> \brief Calculate the W matrix from the MO eigenvectors, MO eigenvalues,
+!>       and the MO occupation numbers. Only works if they are eigenstates
+!> \param mo_set type containing the full matrix of the MO and the eigenvalues
+!> \param w_matrix sparse matrix
+!>        error
+!> \par History
+!>         Creation (03.03.03,MK)
+!>         Modification that computes it as a full block, several times (e.g. 20)
+!>               faster at the cost of some additional memory
+!> \author MK
+! **************************************************************************************************
+   SUBROUTINE calc_w_matrix(mo_set, w_matrix)
+
+      TYPE(mo_set_type), POINTER                         :: mo_set
+      TYPE(dbcsr_type), POINTER                          :: w_matrix
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'calc_w_matrix', &
+         routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: handle, imo
+      REAL(KIND=dp), DIMENSION(:), POINTER               :: eigocc
+      TYPE(cp_fm_type), POINTER                          :: weighted_vectors
+
+      CALL timeset(routineN, handle)
+      NULLIFY (weighted_vectors)
+
+      CALL dbcsr_set(w_matrix, 0.0_dp)
+      CALL cp_fm_create(weighted_vectors, mo_set%mo_coeff%matrix_struct, "weighted_vectors")
+      CALL cp_fm_to_fm(mo_set%mo_coeff, weighted_vectors)
+
+      ! scale every column with the occupation
+      ALLOCATE (eigocc(mo_set%homo))
+
+      DO imo = 1, mo_set%homo
+         eigocc(imo) = mo_set%eigenvalues(imo)*mo_set%occupation_numbers(imo)
+      ENDDO
+      CALL cp_fm_column_scale(weighted_vectors, eigocc)
+      DEALLOCATE (eigocc)
+
+      CALL cp_dbcsr_plus_fm_fm_t(sparse_matrix=w_matrix, &
+                                 matrix_v=mo_set%mo_coeff, &
+                                 matrix_g=weighted_vectors, &
+                                 ncol=mo_set%homo)
+
+      CALL cp_fm_release(weighted_vectors)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE calc_w_matrix
+
+! **************************************************************************************************
+!> \brief init mos environment for energy correction
+!>
+!> \param
+!> \par History
+!>       2018.7 created [Fabian Belleflamme]
+!> \author Fabian Belleflamme
+! **************************************************************************************************
+   SUBROUTINE ec_mos_init(qs_env)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_mos_init', &
+         routineP = moduleN//':'//routineN
+
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+      INTEGER                                            :: handle, ispin, nspins, multiplicity, nelectron
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(cp_para_env_type), POINTER                    :: para_env
+      TYPE(energy_correction_type), POINTER              :: ec_env
+      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
+      INTEGER                                            :: n_ao
+      INTEGER, DIMENSION(2)                              :: n_mo, nelectron_spin
+      REAL(dp)                                           :: maxocc
+      !
+      TYPE(cp_fm_type), POINTER                          :: mo_coeff
+      TYPE(dbcsr_type), POINTER                          :: mo_coeff_b
+      TYPE(cp_fm_pool_p_type), DIMENSION(:), POINTER     :: ao_mo_fm_pools
+      INTEGER                                            :: nmo
+      TYPE(qs_matrix_pools_type), POINTER                :: my_mpools
+      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
+
+      CALL timeset(routineN, handle)
+
+      NULLIFY (ao_mo_fm_pools, dft_control, mos)
+      NULLIFY (mo_coeff)
+
+      CALL get_qs_env(qs_env = qs_env, &
+                      dft_control = dft_control, &
+                      blacs_env=blacs_env, &
+                      qs_kind_set = qs_kind_set, &
+                      ec_env = ec_env, &
+                      nelectron_spin = nelectron_spin)
+      nspins = dft_control%nspins
+
+      !fbelle
+      CALL get_qs_env(qs_env,para_env=para_env)
+
+      ! Start setup
+      CALL get_qs_kind_set(qs_kind_set, nsgf = n_ao, nelectron=nelectron)
+
+      ! the total number of electrons
+      nelectron = nelectron-dft_control%charge
+      multiplicity = dft_control%multiplicity
+
+     ! setting maxocc and n_mo
+      IF (dft_control%nspins == 1) THEN
+         maxocc = 2.0_dp
+         nelectron_spin(1) = nelectron
+         nelectron_spin(2) = 0
+         IF (MODULO(nelectron, 2) == 0) THEN
+            n_mo(1) = nelectron/2
+         ELSE
+            n_mo(1) = INT(nelectron/2._dp)+1
+         END IF
+         n_mo(2) = 0
+      ELSE
+         maxocc = 1.0_dp
+
+         ! The simplist spin distribution is written here. Special cases will
+         ! need additional user input
+         IF (MODULO(nelectron+multiplicity-1, 2) /= 0) THEN
+            CPABORT("LSD: try to use a different multiplicity")
+         END IF
+
+         nelectron_spin(1) = (nelectron+multiplicity-1)/2
+         nelectron_spin(2) = (nelectron-multiplicity+1)/2
+
+         IF (nelectron_spin(2) < 0) THEN
+            CPABORT("LSD: too few electrons for this multiplicity")
+         END IF
+
+         n_mo(1) = nelectron_spin(1)
+         n_mo(2) = nelectron_spin(2)
+
+      END IF
+
+      ! Allocate MO set
+      ALLOCATE (mos(nspins))
+      DO ispin = 1, nspins
+         NULLIFY (mos(ispin)%mo_set)
+         CALL allocate_mo_set(mo_set = mos(ispin)%mo_set, &
+                              nao = n_ao, &
+                              nmo = n_mo(ispin), &
+                              nelectron = nelectron_spin(ispin), &
+                              n_el_f = REAL(nelectron_spin(ispin), dp), &
+                              maxocc = maxocc, &
+                              flexible_electron_count = dft_control%relax_multiplicity)
+      END DO
+
+      CALL set_qs_env(qs_env, mos=mos)
+
+      ! init pools
+      NULLIFY (my_mpools)
+      CALL mpools_create(mpools=my_mpools)
+      CALL mpools_rebuild_fm_pools(mpools=my_mpools, &
+                                   mos=mos, &
+                                   blacs_env=blacs_env, &
+                                   para_env=para_env)
+
+!   *** finish initialization of the MOs ***
+
+      CPASSERT(ASSOCIATED(mos))
+      NULLIFY (mo_coeff, mo_coeff_b)
+      DO ispin = 1, SIZE(mos)
+         CALL get_mo_set(mos(ispin)%mo_set, mo_coeff=mo_coeff, mo_coeff_b=mo_coeff_b)
+         IF (.NOT. ASSOCIATED(mo_coeff)) THEN
+            CALL init_mo_set(mos(ispin)%mo_set, &
+                             fm_pool=my_mpools%ao_mo_fm_pools(ispin)%pool, &
+                             name="ec_env"//TRIM(ADJUSTL(cp_to_string(qs_env%id_nr)))// &
+                             "%mo"//TRIM(ADJUSTL(cp_to_string(ispin))))
+         END IF
+
+         IF (.NOT. ASSOCIATED(mo_coeff_b)) THEN
+            CALL cp_fm_get_info(mos(ispin)%mo_set%mo_coeff, ncol_global=nmo)
+            CALL dbcsr_init_p(mos(ispin)%mo_set%mo_coeff_b)
+            CALL cp_dbcsr_m_by_n_from_row_template(mos(ispin)%mo_set%mo_coeff_b, &
+                                                   template=ec_env%matrix_s(1, 1)%matrix, &
+                                                   n = nmo, &
+                                                   sym = dbcsr_type_no_symmetry)
+         ENDIF
+      END DO
+
+      CALL mpools_release(mpools=my_mpools)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE ec_mos_init      
 
 END MODULE energy_corrections
 
