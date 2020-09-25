@@ -280,6 +280,10 @@ CONTAINS
       SELECT CASE (solver_method)
       CASE (ec_mo_solver)
          ! For MO solver
+         ! MO solver requires MO's calculated during ground-state,
+         ! which are not available if linear scaling schemes are used.
+         IF(dft_control%qs_control%do_ls_scf) &
+            CPABORT("Can not use this linear response solver with LS")
 
          ! initialized p_env
          CALL p_env_release(ec_env%p_env)

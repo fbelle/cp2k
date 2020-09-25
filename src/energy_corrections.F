@@ -2176,11 +2176,11 @@ CONTAINS
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(energy_correction_type), POINTER              :: ec_env
       TYPE(ls_scf_env_type), POINTER                     :: ls_env
+      REAL (KIND=dp)                                     :: eps_store
 
       CALL timeset(routineN, handle)
 
       CALL get_qs_env(qs_env,para_env=para_env)
-!      IF(para_env%mepos==0) WRITE(*,*) "START ec_ls_init"
       CALL get_qs_env(qs_env=qs_env, &
                       dft_control=dft_control,&
                       ec_env=ec_env)
@@ -2213,8 +2213,14 @@ CONTAINS
          CALL dbcsr_create(ls_env%matrix_ks(ispin), template=ls_env%matrix_s, &
                            matrix_type=dbcsr_type_no_symmetry)
       ENDDO
+
+      eps_store = ls_env%eps_filter
+      ls_env%eps_filter = ec_env%eps_default
+
       ! Set up S matrix and needed functions of S
       CALL ls_scf_init_matrix_s(ec_env%matrix_s(1,1)%matrix, ec_env%ls_env)
+
+      ls_env%eps_filter = eps_store
 
       ! Bring KS matrix from QS to LS form
       ! EC KS-matrix already calculated
@@ -2273,7 +2279,6 @@ CONTAINS
       eps_filter = ec_env%eps_default
       nspins = dft_control%nspins
       ls_env => ec_env%ls_env
-      IF(para_env%mepos==0) WRITE(*,*) "START ec_ls_solver"
 
       nmo = 0
       CALL get_qs_env(qs_env=qs_env, nelectron_spin=nmo)
@@ -2307,7 +2312,6 @@ CONTAINS
 
          SELECT CASE (ec_ls_method)
          CASE (ec_matrix_sign)
-            IF(para_env%mepos == 0) WRITE(*,*) "SIGN MATRIX"
             CALL density_matrix_sign(ls_env%matrix_p(ispin), &     ! ok
                                      ls_env%mu_spin(ispin), &             ! ok
                                      ls_env%fixed_mu, &                   ! ok
@@ -2321,7 +2325,6 @@ CONTAINS
                                      eps_filter)                          ! ok
 
          CASE (ec_matrix_trs4)
-            IF(para_env%mepos == 0) WRITE(*,*) "TRS4"
 
             CALL density_matrix_trs4( &
                     ls_env%matrix_p(ispin), &                !ok
@@ -2341,7 +2344,6 @@ CONTAINS
                     max_iter_lanczos = ls_env%max_iter_lanczos)            !ok
 
          CASE (ec_matrix_tc2)
-            IF(para_env%mepos == 0) WRITE(*,*) "TC2"
             CALL density_matrix_tc2( &
                     ls_env%matrix_p(ispin), &
                     ls_env%matrix_ks(ispin), &
@@ -2359,70 +2361,14 @@ CONTAINS
                     max_iter_lanczos = ls_env%max_iter_lanczos)
 
          CASE (ec_curvy_steps)
-            ! Cholesky decomposition to calculate S^1/2 and S^-1/2
-            norm = dbcsr_frobenius_norm(ls_env%matrix_s_sqrt)
-            IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - matrix_s_sqrt:", norm
-            norm = dbcsr_frobenius_norm(ls_env%matrix_s_sqrt_inv)
-            IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - matrix_s_sqrt_inv:", norm
-
-            CALL dbcsr_copy(ls_env%matrix_s_sqrt, ec_env%matrix_s(1,1)%matrix)
-
-            CALL get_qs_env(qs_env, blacs_env=blacs_env)
-
-!            CALL cp_dbcsr_cholesky_decompose(ls_env%matrix_s_sqrt, &
-!                                             para_env=para_env, &
-!                                             blacs_env=blacs_env)
-!            CALL dbcsr_copy(ls_env%matrix_s_sqrt_inv, ls_env%matrix_s_sqrt)
-!            CALL cp_dbcsr_cholesky_invert(ls_env%matrix_s_sqrt_inv, &
-!                                          para_env=para_env, &
-!                                          blacs_env=blacs_env, &
-!                                          upper_to_full=.TRUE.)
-!            CALL dbcsr_filter(ls_env%matrix_s_sqrt, ls_env%eps_filter)
-!            CALL dbcsr_filter(ls_env%matrix_s_sqrt_inv, ls_env%eps_filter)
-!
-!            ! Cholesky decomposition to calculate S^1/2 and S^-1/2
-!            norm = dbcsr_frobenius_norm(ls_env%matrix_s_sqrt)
-!            IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - CHOLESKY matrix_s_sqrt:", norm
-!            norm = dbcsr_frobenius_norm(ls_env%matrix_s_sqrt_inv)
-!            IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - CHOLESKY matrix_s_sqrt_inv:", norm
-
-            ! transform p
-            CALL get_qs_env(qs_env, rho=rho)
-            CALL qs_rho_get(rho, rho_ao_kp = rho_ao)
-            CALL matrix_qs_to_ls(matrix_ls = ls_env%matrix_p(ispin), &
-                                 matrix_qs = rho_ao(ispin,1)%matrix, &
-                                 ls_mstruct = ls_env%ls_mstruct, &
-                                 covariant = .TRUE.)
-
-! fbelle 
-! repurpose Curvy_steps for CG optimization of density matrix
-! F_out already in orthonormal basis
-! P_out needs to be transformed BACK once established
-            !DO ispin = 1, nspins
-               ksmat(ispin,1)%matrix => ls_env%matrix_ks(ispin)
-               pmat(ispin,1)%matrix => ls_env%matrix_p(ispin)
-            !END DO
-!            CALL prepare_newton(qs_env = qs_env, &
-!                                ksmat = ksmat,&
-!                                matrix_s = ls_env%matrix_s,&
-!                                !matrix_p = ls_env%matrix_p,&
-!                                matrix_p = pmat,&
-!                                matrix_s_sqrt = ls_env%matrix_s_sqrt,&
-!                                matrix_s_sqrt_inv = ls_env%matrix_s_sqrt_inv,&
-!                                eps_filter = eps_filter)
-
 
          END SELECT
-
-         norm = dbcsr_frobenius_norm(ls_env%matrix_p(1))
-         IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - ||P(AO)||_F :", norm
 
       END DO
 
 
       DEALLOCATE(ksmat, pmat)
 
-      IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver precondition p (forward-inv)"
       ! de-orthonormalize
       IF (ls_env%has_s_preconditioner) THEN
          DO ispin = 1, nspins
@@ -2430,7 +2376,6 @@ CONTAINS
             CALL apply_matrix_preconditioner(ls_env%matrix_p(ispin), "forward", &
                                              ls_env%matrix_bs_sqrt, ls_env%matrix_bs_sqrt_inv)
 
-            IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver filter  p"
             CALL dbcsr_filter(ls_env%matrix_p(ispin), eps_filter)
          END DO
       ENDIF

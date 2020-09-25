@@ -276,8 +276,6 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      WRITE(*,*) "init_ec_ls_env - BEGINNING"
-
       ALLOCATE (ls_env)
 
       CALL get_qs_env(qs_env, &
@@ -297,10 +295,6 @@ CONTAINS
       ALLOCATE (ls_env%ls_mstruct%atom_to_molecule(ls_env%natoms))
       CALL molecule_of_atom(molecule_set, atom_to_mol=ls_env%ls_mstruct%atom_to_molecule)
 
-      ! set up the buffer for the history of matrices
-!      ls_env%scf_history%nstore = 0 
-!      ls_env%scf_history%istore = 0
-      ls_env%extrapolation_order = 0
 
       ls_env%do_transport = .FALSE.
       ls_env%do_pao = .FALSE.
@@ -353,8 +347,9 @@ CONTAINS
          ls_env%has_s_preconditioner = .TRUE.
       END SELECT
 
-      ! set up the buffer for the history of matrices
-      ls_env%scf_history%nstore = ls_env%extrapolation_order
+      ! buffer for the history of matrices not needed here
+      ls_env%extrapolation_order = 0
+      ls_env%scf_history%nstore = 0 
       ls_env%scf_history%istore = 0
       ALLOCATE (ls_env%scf_history%matrix(ls_env%nspins, ls_env%scf_history%nstore))
 
