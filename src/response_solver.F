@@ -1153,32 +1153,32 @@ CONTAINS
          IF(para_env%mepos==0) WRITE(*,*) "Tr[SinHz]", norm_res
       END IF
 
-      ! DEBUG - IF ground-state density matrix solved by diagonalization, then use this
-      IF (.NOT. dft_control%qs_control%do_ls_scf .AND. nspins == 1 ) THEN
+!      ! DEBUG - IF ground-state density matrix solved by diagonalization, then use this
+!      IF (.NOT. dft_control%qs_control%do_ls_scf .AND. nspins == 1 ) THEN
 
          focc = 1.0_dp
          IF (nspins == 1) focc = 2.0_dp
 
          CALL get_qs_env(qs_env, mos = mos)
-         DO ispin = 1, nspins
-            CALL calculate_whz_matrix(mos(ispin)%mo_set, matrix_hz(ispin)%matrix, &
-                                      matrix_wz(ispin)%matrix, focc)
-         END DO
-
-         norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
-         IF (iounit > 0) WRITE(iounit,*) "||Whz(MO)||", norm_res
-         CALL dbcsr_dot(matrix_s(1)%matrix, matrix_wz(1)%matrix, norm_res)
-         IF(iounit > 0) WRITE(iounit,*) "Tr[WhzSin]", norm_res
-         CALL dbcsr_dot(rho_ao(1)%matrix, matrix_wz(1)%matrix, norm_res)
-         IF(iounit > 0) WRITE(iounit,*) "Tr[WhzPin]", norm_res
-         IF (nspins == 2) THEN
-            norm_res = dbcsr_frobenius_norm(matrix_wz(2)%matrix) 
-            IF (iounit > 0) WRITE(iounit,*) "||Whz(2)||", norm_res
-            CALL dbcsr_dot(matrix_s(1)%matrix, matrix_wz(2)%matrix, norm_res)
-            IF(iounit > 0) WRITE(iounit,*) "Tr[WhzSin(2)]", norm_res
-            CALL dbcsr_dot(rho_ao(2)%matrix, matrix_wz(2)%matrix, norm_res)
-            IF(iounit > 0) WRITE(iounit,*) "Tr[WhzPin(2)]", norm_res
-         END IF
+!         DO ispin = 1, nspins
+!            CALL calculate_whz_matrix(mos(ispin)%mo_set, matrix_hz(ispin)%matrix, &
+!                                      matrix_wz(ispin)%matrix, focc)
+!         END DO
+!
+!         norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
+!         IF (iounit > 0) WRITE(iounit,*) "||Whz(MO)||", norm_res
+!         CALL dbcsr_dot(matrix_s(1)%matrix, matrix_wz(1)%matrix, norm_res)
+!         IF(iounit > 0) WRITE(iounit,*) "Tr[WhzSin]", norm_res
+!         CALL dbcsr_dot(rho_ao(1)%matrix, matrix_wz(1)%matrix, norm_res)
+!         IF(iounit > 0) WRITE(iounit,*) "Tr[WhzPin]", norm_res
+!         IF (nspins == 2) THEN
+!            norm_res = dbcsr_frobenius_norm(matrix_wz(2)%matrix) 
+!            IF (iounit > 0) WRITE(iounit,*) "||Whz(2)||", norm_res
+!            CALL dbcsr_dot(matrix_s(1)%matrix, matrix_wz(2)%matrix, norm_res)
+!            IF(iounit > 0) WRITE(iounit,*) "Tr[WhzSin(2)]", norm_res
+!            CALL dbcsr_dot(rho_ao(2)%matrix, matrix_wz(2)%matrix, norm_res)
+!            IF(iounit > 0) WRITE(iounit,*) "Tr[WhzPin(2)]", norm_res
+!         END IF
 
 !         DO ispin = 1, nspins
 !            CALL dbcsr_set(matrix_wz(ispin)%matrix, 0.0_dp)
@@ -1186,7 +1186,7 @@ CONTAINS
 
 
       ! Ground-state density has been calculated by LS
-      ELSE 
+!      ELSE 
       
          eps_filter = dft_control%qs_control%eps_filter_matrix
          CALL calculate_whz_ao_matrix(qs_env, matrix_hz, matrix_wz, eps_filter)
@@ -1206,8 +1206,7 @@ CONTAINS
             CALL dbcsr_dot(rho_ao(2)%matrix, matrix_wz(2)%matrix, norm_res)
             IF(iounit > 0) WRITE(iounit,*) "Tr[WhzPin(2)]", norm_res
          END IF
-
-      END IF
+!      END IF
       ! DEBUG ------------ 
 
       IF (SIZE(matrix_wz, 1) == 2) THEN
