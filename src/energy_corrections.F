@@ -2504,13 +2504,13 @@ CONTAINS
       CALL init_preconditioner(local_preconditioner, para_env=para_env, &
                                blacs_env=blacs_env)
       DO ispin = 1, nspins
-         !CALL make_preconditioner(local_preconditioner, &
-         !                         precon_type=ot_precond_full_single_inverse, &
-         !                         solver_type=ot_precond_solver_default, &
-         !                         matrix_h=ec_env%matrix_ks(ispin,1)%matrix, &
-         !                         matrix_s=ec_env%matrix_s(ispin,1)%matrix, &
-         !                         convert_precond_to_dbcsr=.TRUE., &
-         !                         mo_set=mos(ispin)%mo_set, energy_gap=0.2_dp)
+         CALL make_preconditioner(local_preconditioner, &
+                                  precon_type=ot_precond_full_single_inverse, &
+                                  solver_type=ot_precond_solver_default, &
+                                  matrix_h=ec_env%matrix_ks(ispin,1)%matrix, &
+                                  matrix_s=ec_env%matrix_s(ispin,1)%matrix, &
+                                  convert_precond_to_dbcsr=.TRUE., &
+                                  mo_set=mos(ispin)%mo_set, energy_gap=0.2_dp)
 
          CALL get_mo_set(mos(ispin)%mo_set, &
                          mo_coeff=mo_coeff, &
@@ -2520,7 +2520,7 @@ CONTAINS
          CALL ot_eigensolver(matrix_h=matrix_ks(ispin,1)%matrix, &
                              matrix_s=matrix_s(1,1)%matrix, &
                              matrix_c_fm=mo_coeff, &
-                             !preconditioner=local_preconditioner, &
+                             preconditioner=local_preconditioner, &
                              eps_gradient=eps_iter, &
                              iter_max=max_iter, &
                              silent=.FALSE.)
@@ -2529,6 +2529,7 @@ CONTAINS
 
          ! Deallocate preconditioner
          CALL destroy_preconditioner(local_preconditioner)
+         DEALLOCATE (local_preconditioner)
          !MK WRITE(*,*) routinen//' copy_dbcsr_to_fm'
 
          !fm->dbcsr
@@ -2548,14 +2549,16 @@ CONTAINS
       END DO
 
       ! Get rid of MO environment again
-      DO ispin = 1, nspins
-         CALL deallocate_mo_set(mos(ispin)%mo_set)
-      END DO
-      IF (ASSOCIATED(qs_env%mos)) THEN
-         DO ispin = 1, SIZE(qs_env%mos)
-            CALL deallocate_mo_set(qs_env%mos(ispin)%mo_set)
+      IF (dft_control%qs_control%do_ls_scf) THEN
+         DO ispin = 1, nspins
+            CALL deallocate_mo_set(mos(ispin)%mo_set)
          END DO
-         DEALLOCATE (qs_env%mos)
+         IF (ASSOCIATED(qs_env%mos)) THEN
+            DO ispin = 1, SIZE(qs_env%mos)
+               CALL deallocate_mo_set(qs_env%mos(ispin)%mo_set)
+            END DO
+            DEALLOCATE (qs_env%mos)
+         END IF
       END IF
 
       CALL timestop(handle)
