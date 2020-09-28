@@ -42,6 +42,7 @@ MODULE energy_corrections
                                               cp_fm_struct_release,&
                                               cp_fm_struct_type
    USE cp_fm_types,                     ONLY: cp_fm_create,&
+                                              cp_fm_init_random,&
                                               cp_fm_get_info,&
                                               cp_fm_p_type,&
                                               cp_fm_release,&
@@ -153,6 +154,7 @@ MODULE energy_corrections
                                               sum_qs_force,&
                                               total_qs_force,&
                                               zero_qs_force
+   USE qs_initial_guess,                ONLY: calculate_atomic_block_dm
    USE qs_integrate_potential,          ONLY: integrate_v_core_rspace,&
                                               integrate_v_rspace
    USE qs_kind_types,                   ONLY: get_qs_kind,&
@@ -172,7 +174,8 @@ MODULE energy_corrections
                                               mo_set_type,&
                                               mo_set_p_type
    USE qs_mo_methods,                   ONLY: calculate_density_matrix,&
-                                              calculate_subspace_eigenvalues
+                                              calculate_subspace_eigenvalues,&
+                                              make_basis_sm
    USE qs_moments,                      ONLY: build_local_moment_matrix
    USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type
    USE qs_neighbor_lists,               ONLY: atom2d_build,&
@@ -684,6 +687,8 @@ CONTAINS
 
       logger => cp_get_default_logger()
       iounit = cp_logger_get_default_unit_nr(logger)
+
+      IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "ec_build_core_hamiltonian_force - START"
 
       calculate_forces = .TRUE.
 
@@ -2463,23 +2468,34 @@ CONTAINS
       CHARACTER(len=*), PARAMETER :: routineN = 'ec_ot_diag', &
          routineP = moduleN//':'//routineN
 
-      INTEGER                                            :: handle, homo, ispin, max_iter, &
-                                                            nmo, nspins
+      INTEGER                                            :: handle, homo, iounit, ispin, max_iter, &
+                                                            nao, nmo, nspins
+      INTEGER, DIMENSION(2)                              :: nelectron_spin
       REAL(KIND=dp)                                      :: eps_iter
-      REAL(KIND=dp), DIMENSION(:), POINTER               :: eigenvalues, uno_evals
+      REAL(KIND=dp), DIMENSION(:), POINTER               :: eigenvalues
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+      TYPE(cp_fm_type), POINTER                          :: mo_coeff, sv
+      TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(cp_para_env_type), POINTER                    :: para_env
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: p_rmpv
+      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: rho_ao
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(ls_scf_env_type), POINTER                     :: ls_env
       TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
-      TYPE(cp_fm_type), POINTER                          :: mo_coeff
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(preconditioner_type), POINTER                 :: local_preconditioner
-      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
-
+      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
+      TYPE(qs_rho_type), POINTER                         :: rho
 
       CALL timeset(routineN, handle)
 
+      logger => cp_get_default_logger()
+      iounit = cp_logger_get_default_unit_nr(logger)
+
+      IF (iounit > 0) WRITE (iounit, *) "ec_ot_diag START"
+
       CALL get_qs_env(qs_env,para_env=para_env)
-      IF(para_env%mepos==0) WRITE(*,*) "START ec_ls_init"
       CALL get_qs_env(qs_env=qs_env, &
                       blacs_env=blacs_env,&
                       dft_control=dft_control) 
@@ -2498,8 +2514,55 @@ CONTAINS
 
       CALL get_qs_env(qs_env, mos=mos)
 
+      !--------------------
+      ! If linear-sclaing, no MOS available, needs to be initialized here
+      CALL get_qs_env(qs_env, &
+                      atomic_kind_set=atomic_kind_set, &
+                      particle_set=particle_set, &
+                      nelectron_spin=nelectron_spin, &
+                      qs_kind_set=qs_kind_set)
+
+      ! Blocked initial guess of Harris DM
+      NULLIFY(p_rmpv)
+      IF (iounit > 0) WRITE (iounit, *) "ec_ot_diag - Blcok diagonal DM"
+!      p_rmpv => ec_env%matrix_p(:, 1)
+!      CALL calculate_atomic_block_dm(p_rmpv, ec_env%matrix_s(1,1)%matrix, &
+!                                     particle_set, atomic_kind_set, qs_kind_set, &
+!                                     nspins, nelectron_spin, iounit, para_env)
+
+      ! XXX will not work if Harris basis differs
+      CALL get_qs_env(qs_env, rho = rho)
+      CALL qs_rho_get(rho, rho_ao_kp = rho_ao)
+!      DO ispin = 1, nspins
+!         CALL dbcsr_copy(ec_env%matrix_p(ispin, 1)%matrix, rho_ao(ispin,1)%matrix)
+!      END DO
+!      p_rmpv => ec_env%matrix_p(:, 1)
+      p_rmpv => rho_ao(:, 1)
+
+      DO ispin = 1, nspins
+         CALL get_mo_set(mo_set=mos(ispin)%mo_set, &
+                         mo_coeff=mo_coeff, &
+                         nmo=nmo, nao=nao, homo=homo)
+
+         IF (iounit > 0) WRITE (iounit, *) "ec_ot_diag - Calculate first MOs"
+         CALL cp_fm_set_all(mo_coeff, 0.0_dp)
+         CALL cp_fm_init_random(mo_coeff, nmo)
+
+         NULLIFY(sv)
+         CALL cp_fm_create(sv, mo_coeff%matrix_struct, "SV")
+         ! multiply times PS
+         ! PS*C(:,1:nomo)+C(:,nomo+1:nmo) (nomo=NINT(nelectron/maxocc))
+         CALL cp_dbcsr_sm_fm_multiply(ec_env%matrix_s(1,1)%matrix, mo_coeff, sv, nmo)
+         CALL cp_dbcsr_sm_fm_multiply(p_rmpv(ispin)%matrix, sv, mo_coeff, homo)
+         CALL cp_fm_release(sv)
+         ! and ortho the result
+         ! If DFBT or SE, then needs has_unit_metrix option
+         CALL make_basis_sm(mo_coeff, nmo, ec_env%matrix_s(1,1)%matrix)
+      END DO
+      !--------------------
+
       ! Preconditioner
-      NULLIFY (uno_evals, local_preconditioner)
+      NULLIFY (local_preconditioner)
       ALLOCATE (local_preconditioner)
       CALL init_preconditioner(local_preconditioner, para_env=para_env, &
                                blacs_env=blacs_env)
@@ -2560,6 +2623,8 @@ CONTAINS
             DEALLOCATE (qs_env%mos)
          END IF
       END IF
+
+      IF(para_env%mepos==0) WRITE(*,*) "ec_ot_diag - END" 
 
       CALL timestop(handle)
 
