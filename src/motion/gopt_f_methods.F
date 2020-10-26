@@ -508,6 +508,8 @@ CONTAINS
                                                             conv_rg
       REAL(KIND=dp)                                      :: dumm, dxcon, gcon, maxdum(4), rmsgcon, &
                                                             rmsxcon, tmp_r1
+      ! fbelle
+      INTEGER                                            :: counts 
 
       dxcon = gopt_param%max_dr
       gcon = gopt_param%max_force
@@ -635,7 +637,22 @@ CONTAINS
          WRITE (UNIT=output_unit, FMT="(T2,51('-'))")
       END IF
 
-      IF (conv_dx .AND. conv_rdx .AND. conv_g .AND. conv_rg .AND. conv_p) conv = .TRUE.
+      !IF (conv_dx .AND. conv_rdx .AND. conv_g .AND. conv_rg .AND. conv_p) conv = .TRUE.
+
+      ! fbelle 
+      ! declare convergence after 3 of 5 conditions are met
+      counts = 0
+      IF(conv_dx) counts = counts + 1
+      IF(conv_rdx) counts = counts + 1
+      IF(conv_g) counts = counts + 1
+      IF(conv_rg) counts = counts + 1
+      IF(conv_p) counts = counts + 1
+
+      IF (counts >= 3) THEN
+         conv = .TRUE.
+         IF (output_unit > 0)  WRITE (UNIT=output_unit, FMT="(T2,A)") &
+                   " 3 of 5 criterions converged "
+      END IF
 
       IF ((conv) .AND. (output_unit > 0)) THEN
          WRITE (UNIT=output_unit, FMT="(/,T2,A)") REPEAT("*", 79)
