@@ -33,6 +33,7 @@ MODULE response_solver
                                               cp_fm_struct_release,&
                                               cp_fm_struct_type
    USE cp_fm_types,                     ONLY: cp_fm_create,&
+                                              cp_fm_init_random,&
                                               cp_fm_get_info,&
                                               cp_fm_p_type,&
                                               cp_fm_release,&
@@ -49,6 +50,7 @@ MODULE response_solver
         dbcsr_dot, dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_type, &
         dbcsr_type_no_symmetry, dbcsr_frobenius_norm, dbcsr_print
    USE ec_env_types,                    ONLY: energy_correction_type
+   USE ec_methods,                      ONLY: ec_mos_init
    USE hfx_derivatives,                 ONLY: derivatives_four_center
    USE hfx_energy_potential,            ONLY: integrate_four_center
    USE hfx_types,                       ONLY: hfx_type
@@ -113,9 +115,13 @@ MODULE response_solver
    USE qs_linres_types,                 ONLY: linres_control_create,&
                                               linres_control_release,&
                                               linres_control_type
-   USE qs_mo_types,                     ONLY: get_mo_set,&
+   USE qs_matrix_pools,                 ONLY: mpools_rebuild_fm_pools
+   USE qs_mo_types,                     ONLY: allocate_mo_set,&
+                                              deallocate_mo_set,&
+                                              get_mo_set,&
                                               mo_set_p_type,&
                                               mo_set_type
+   USE qs_mo_methods,                   ONLY: make_basis_sm
    USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type
    USE qs_p_env_methods,                ONLY: p_env_create,&
                                               p_env_psi0_changed
@@ -167,20 +173,24 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'response_calculation'
 
-      INTEGER                                            :: handle, ispin, nao, nao_aux, &
-                                                            nspins, output_unit
+      INTEGER                                            :: handle, ispin, homo, nao, nao_aux, &
+                                                            nmo, nspins, output_unit
       LOGICAL                                            :: should_stop
       TYPE(admm_type), POINTER                           :: admm_env
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+      TYPE(cp_fm_type), POINTER                          :: mo_coeff, sv
       TYPE(cp_logger_type), POINTER                      :: logger
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s, matrix_s_aux
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s, matrix_s_aux, rho_ao
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(linres_control_type), POINTER                 :: linres_control
+      TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
          POINTER                                         :: sab_orb
       TYPE(section_vals_type), POINTER                   :: solver_section
       TYPE(cp_para_env_type), POINTER                    :: para_env
       INTEGER                                            :: solver_method
       TYPE(qs_p_env_type), POINTER                       :: p_env
+      TYPE(qs_rho_type), POINTER                         :: rho
 
       CALL timeset(routineN, handle)
 
@@ -282,8 +292,44 @@ CONTAINS
          ! For MO solver
          ! MO solver requires MO's calculated during ground-state,
          ! which are not available if linear scaling schemes are used.
-         IF(dft_control%qs_control%do_ls_scf) &
-            CPABORT("Can not use this linear response solver with LS")
+!         IF(dft_control%qs_control%do_ls_scf) &
+!            CPABORT("Can not use this linear response solver with LS")
+
+         ! In linear scaling calculation, we need to introduce MOs here
+         IF (dft_control%qs_control%do_ls_scf) THEN
+
+            CALL ec_mos_init(qs_env, matrix_s(1)%matrix)
+            CALL get_qs_env(qs_env, mos=mos, rho=rho)
+
+            ! Get density matrix
+            CALL qs_rho_get(rho, rho_ao = rho_ao)
+
+            DO ispin = 1, nspins
+               CALL get_mo_set(mo_set=mos(ispin)%mo_set, &
+                               mo_coeff=mo_coeff, &
+                               nmo=nmo, nao=nao, homo=homo)
+
+               CALL cp_fm_set_all(mo_coeff, 0.0_dp)
+               CALL cp_fm_init_random(mo_coeff, nmo)
+
+               NULLIFY(sv)
+               CALL cp_fm_create(sv, mo_coeff%matrix_struct, "SV")
+               ! multiply times PS
+               ! PS*C(:,1:nomo)+C(:,nomo+1:nmo) (nomo=NINT(nelectron/maxocc))
+               CALL cp_dbcsr_sm_fm_multiply(matrix_s(1)%matrix, mo_coeff, sv, nmo)
+               CALL cp_dbcsr_sm_fm_multiply(rho_ao(ispin)%matrix, sv, mo_coeff, homo)
+               CALL cp_fm_release(sv)
+               ! and ortho the result
+               ! If DFBT or SE, then needs has_unit_metrix option
+               CALL make_basis_sm(mo_coeff, nmo, matrix_s(1)%matrix)
+
+               ! rebuilds fm_pools
+               ! originally done in qs_env_setup, only when mos associated
+               CALL get_qs_env(qs_env, blacs_env=blacs_env)
+               CALL mpools_rebuild_fm_pools(qs_env%mpools, mos=mos, &
+                                            blacs_env=blacs_env, para_env=para_env)
+            END DO
+         END IF
 
          ! initialized p_env
          CALL p_env_release(ec_env%p_env)
@@ -320,6 +366,20 @@ CONTAINS
          IF(output_unit > 0) WRITE(output_unit,*) "response - linres CG-MO"
          IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
          CALL response_equation(qs_env, ec_env, p_env, output_unit, should_stop)
+
+         ! Get rid of MO environment again
+         IF (dft_control%qs_control%do_ls_scf) THEN
+            DO ispin = 1, nspins
+               CALL deallocate_mo_set(mos(ispin)%mo_set)
+            END DO
+            IF (ASSOCIATED(qs_env%mos)) THEN
+               DO ispin = 1, SIZE(qs_env%mos)
+                  CALL deallocate_mo_set(qs_env%mos(ispin)%mo_set)
+               END DO
+               DEALLOCATE (qs_env%mos)
+            END IF
+         END IF
+
       CASE (ec_ls_solver)
          ! AO ortho solver
          IF(output_unit > 0) WRITE(output_unit,*) repeat("-",80)
