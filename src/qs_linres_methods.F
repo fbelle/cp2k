@@ -601,32 +601,32 @@ CONTAINS
             restart = .FALSE.
          ENDIF
          !
-         ! DEBUG ------------------------------ 
-         !
-         ! Projector on psi1
-         DO ispin = 1, nspins
-            CALL cp_fm_to_fm(psi1(ispin)%matrix, psi_dbg(ispin)%matrix)
-            CALL preortho(psi_dbg, mo_coeff_array, Sc)
-         END DO
-
-!         CALL apply_op(qs_env, p_env, psi0_order, psi_dbg, Ap, chc)
-         !
-         ! Build intermediate Z-Matrix
-         DO ispin = 1, nspins
-            CALL dbcsr_copy(p_env%p1(ispin)%matrix, matrix_s(1)%matrix)
-         END DO
-         CALL build_dm_response(psi0_order, psi_dbg, p_env%p1)
-         DO ispin = 1, nspins
-            CALL dbcsr_scale(p_env%p1(ispin)%matrix, 0.5_dp)
-         ENDDO
-         norm_zmo =  dbcsr_frobenius_norm(p_env%p1(1)%matrix)
-         !
-         ! Second order energy
-         CALL cp_fm_trace(psi_dbg(1)%matrix, Ap(1)%matrix, norm_elec)
-         !IF(para_env%mepos==0) WRITE(6,*) "linres_solver - Tr[xAx]", norm_elec
-         IF (iounit > 0) WRITE (iounit, "(T2,A18,T20,I3,T25,1E16.10,T45,1E16.10,T68,1E16.10)") &
-                              "It,res,zao,elec", iter, norm_res, norm_zmo, norm_elec
-         ! DEBUG ------------------------------ 
+!         ! DEBUG ------------------------------ 
+!         !
+!         ! Projector on psi1
+!         DO ispin = 1, nspins
+!            CALL cp_fm_to_fm(psi1(ispin)%matrix, psi_dbg(ispin)%matrix)
+!            CALL preortho(psi_dbg, mo_coeff_array, Sc)
+!         END DO
+!
+!!         CALL apply_op(qs_env, p_env, psi0_order, psi_dbg, Ap, chc)
+!         !
+!         ! Build intermediate Z-Matrix
+!         DO ispin = 1, nspins
+!            CALL dbcsr_copy(p_env%p1(ispin)%matrix, matrix_s(1)%matrix)
+!         END DO
+!         CALL build_dm_response(psi0_order, psi_dbg, p_env%p1)
+!         DO ispin = 1, nspins
+!            CALL dbcsr_scale(p_env%p1(ispin)%matrix, 0.5_dp)
+!         ENDDO
+!         norm_zmo =  dbcsr_frobenius_norm(p_env%p1(1)%matrix)
+!         !
+!         ! Second order energy
+!         CALL cp_fm_trace(psi_dbg(1)%matrix, Ap(1)%matrix, norm_elec)
+!         !IF(para_env%mepos==0) WRITE(6,*) "linres_solver - Tr[xAx]", norm_elec
+!         IF (iounit > 0) WRITE (iounit, "(T2,A18,T20,I3,T25,1E16.10,T45,1E16.10,T68,1E16.10)") &
+!                              "It,res,zao,elec", iter, norm_res, norm_zmo, norm_elec
+!         ! DEBUG ------------------------------ 
          !
          ! preconditioner
          linres_control%flag = ""

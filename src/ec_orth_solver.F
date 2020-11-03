@@ -62,6 +62,7 @@ MODULE ec_orth_solver
                                               kg_ekin_subset
    USE kinds,                           ONLY: dp
    USE machine,                         ONLY: m_walltime
+   USE mathlib,                         ONLY: abnormal_value
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type,&
                                               set_qs_env
@@ -287,6 +288,8 @@ CONTAINS
 
           ! Tr(r_0 * r_0)
           CALL dbcsr_dot(matrix_res(ispin)%matrix, matrix_res(ispin)%matrix, norm_rr(ispin))
+          IF (abnormal_value(norm_rr(ispin))) &
+             CPABORT("Preconditioner: Tr[r_j*r_j] is an abnormal value (NaN/Inf)")
           !IF(para_env%mepos==0) WRITE(*,*) "Tr(r_0 * z_0) (norm_rr)", norm_rr(1)
 
           IF (norm_rr(ispin) .LT. 0.0_dp) CPABORT("norm_rr < 0")
@@ -321,6 +324,8 @@ CONTAINS
           ! Tr[r_j+1*z_j+1]
           CALL dbcsr_dot(matrix_res(ispin)%matrix, matrix_res(ispin)%matrix, new_norm(ispin))
           IF (new_norm(ispin) .LT. 0.0_dp) CPABORT("tr(r_j+1*z_j+1) < 0")
+          IF (abnormal_value(new_norm(ispin))) &
+             CPABORT("Preconditioner: Tr[r_j+1*z_j+1] is an abnormal value (NaN/Inf)")
 !          IF (para_env%mepos==0) WRITE(*,*) "new_norm", new_norm(1)
           norm_res = MAX(norm_res, new_norm(ispin)/REAL(nao,dp))
 !          IF (para_env%mepos==0) WRITE(*,*) "norm_res", norm_res 
@@ -778,6 +783,8 @@ CONTAINS
              CALL dbcsr_dot(matrix_cg(ispin)%matrix, matrix_Ax(ispin)%matrix, norm_cA(ispin))
 
              CPABORT("tr(Ap_j*p_j) < 0")
+             IF (abnormal_value(norm_cA(ispin))) &
+                CPABORT("Preconditioner: Tr[Ap_j*p_j] is an abnormal value (NaN/Inf)")
 
           END IF
 
@@ -890,6 +897,8 @@ CONTAINS
           ! Tr[r_j+1*z_j+1]
           CALL dbcsr_dot(matrix_res(ispin)%matrix, matrix_z0(ispin)%matrix, new_norm(ispin))
           IF (new_norm(ispin) .LT. 0.0_dp) CPABORT("tr(r_j+1*z_j+1) < 0")
+          IF (abnormal_value(new_norm(ispin))) &
+             CPABORT("Preconditioner: Tr[r_j+1*z_j+1] is an abnormal value (NaN/Inf)")
 !          IF (iounit > 0) WRITE (iounit,*) "new_norm", new_norm(1)
           norm_res = MAX(norm_res, new_norm(ispin)/REAL(nao,dp))
 
