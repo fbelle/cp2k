@@ -444,6 +444,7 @@ CONTAINS
     TYPE(linres_control_type), POINTER                 :: linres_control
     TYPE(section_vals_type), POINTER                   :: solver_section
     REAL(KIND=dp)                                      :: norm_elec, norm_zao
+    INTEGER                                            :: counter
 
     CALL timeset(routineN, handle)
 
@@ -630,6 +631,48 @@ CONTAINS
 
     ! Matrix projector T
     CALL projector(qs_env, matrix_p, matrix_res, eps_filter, .TRUE.)
+
+    !-------------
+    ! testing of Z Matrix
+    counter=1
+    norm_zao=0.0_dp
+    norm_elec=0.0_dp
+    norm_rr = 0.0_dp
+    norm_res = 0.0_dp
+
+    ! Z = [cg_z,P]
+    CALL dbcsr_copy(matrix_z0(1)%matrix, matrix_cg_z(1)%matrix)
+    CALL projector(qs_env, matrix_p, matrix_z0, eps_filter, .FALSE.)
+
+    ! A(x_0)
+    CALL build_hessian_op(qs_env = qs_env, &
+                          matrix_ks = matrix_ks, &
+                          matrix_p = matrix_p, &
+                          matrix_s_sqrt_inv = matrix_s_sqrt_inv, &
+                          matrix_cg = matrix_z0, & ! cg
+                          matrix_Ax = matrix_Ax, &
+                          eps_filter = eps_filter,&
+                          iounit= iounit)
+
+    CALL commutator(matrix_z0, matrix_p, matrix_z, eps_filter, .TRUE., alpha = 0.5_dp)
+    ! Transform Z-matrix back into non-orthogonal basis
+    CALL transform_m_orth(matrix_z(1)%matrix, matrix_s_sqrt_inv, eps_filter)
+    norm_zao = dbcsr_frobenius_norm(matrix_z(1)%matrix)
+
+    CALL dbcsr_dot(matrix_z0(1)%matrix, matrix_Ax(1)%matrix, norm_elec)
+    norm_elec = 0.5_dp * norm_elec
+
+    CALL dbcsr_dot(matrix_res(1)%matrix, matrix_cg(1)%matrix, norm_rr(1))
+    norm_res = MAX(norm_res, ABS(norm_rr(1)/REAL(nao,dp)))
+
+
+    IF (iounit > 0) WRITE (iounit, "(T2,A18,T20,I3,T25,1E16.10,T45,1E16.10,T68,1E16.10)") &
+                           "It,res,zao,elec", counter, norm_res, norm_zao, norm_elec
+
+    norm_rr = 0.0_dp
+    norm_res = 0.0_dp
+
+    !------------
 
     ! Preconditioner
     linres_control%flag = ""
@@ -845,30 +888,32 @@ CONTAINS
        !-------------
        ! testing of Z Matrix
 
+       counter=counter+1
+
        ! Z = [cg_z,P]
-!       CALL dbcsr_copy(matrix_z0(1)%matrix, matrix_cg_z(1)%matrix)
-!       CALL projector(qs_env, matrix_p, matrix_z0, eps_filter, .FALSE.)
-!
-!       ! A(x_0)
-!       CALL build_hessian_op(qs_env = qs_env, &
-!                             matrix_ks = matrix_ks, &
-!                             matrix_p = matrix_p, &
-!                             matrix_s_sqrt_inv = matrix_s_sqrt_inv, &
-!                             matrix_cg = matrix_z0, & ! cg
-!                             matrix_Ax = matrix_Ax, &
-!                             eps_filter = eps_filter,&
-!                             iounit= iounit)
-!
-!       CALL commutator(matrix_z0, matrix_p, matrix_z, eps_filter, .TRUE., alpha = 0.5_dp)
-!       ! Transform Z-matrix back into non-orthogonal basis
-!       CALL transform_m_orth(matrix_z(1)%matrix, matrix_s_sqrt_inv, eps_filter)
-!       norm_zao = dbcsr_frobenius_norm(matrix_z(1)%matrix)
-!
-!       CALL dbcsr_dot(matrix_z0(1)%matrix, matrix_Ax(1)%matrix, norm_elec)
-!       norm_elec = 0.5_dp * norm_elec
-!
-!       IF (iounit > 0) WRITE (iounit, "(T2,A18,T20,I3,T25,1E16.10,T45,1E16.10,T68,1E16.10)") &
-!                              "It,res,zao,elec", i, norm_res, norm_zao, norm_elec
+       CALL dbcsr_copy(matrix_z0(1)%matrix, matrix_cg_z(1)%matrix)
+       CALL projector(qs_env, matrix_p, matrix_z0, eps_filter, .FALSE.)
+
+       ! A(x_0)
+       CALL build_hessian_op(qs_env = qs_env, &
+                             matrix_ks = matrix_ks, &
+                             matrix_p = matrix_p, &
+                             matrix_s_sqrt_inv = matrix_s_sqrt_inv, &
+                             matrix_cg = matrix_z0, & ! cg
+                             matrix_Ax = matrix_Ax, &
+                             eps_filter = eps_filter,&
+                             iounit= iounit)
+
+       CALL commutator(matrix_z0, matrix_p, matrix_z, eps_filter, .TRUE., alpha = 0.5_dp)
+       ! Transform Z-matrix back into non-orthogonal basis
+       CALL transform_m_orth(matrix_z(1)%matrix, matrix_s_sqrt_inv, eps_filter)
+       norm_zao = dbcsr_frobenius_norm(matrix_z(1)%matrix)
+
+       CALL dbcsr_dot(matrix_z0(1)%matrix, matrix_Ax(1)%matrix, norm_elec)
+       norm_elec = 0.5_dp * norm_elec
+
+       IF (iounit > 0) WRITE (iounit, "(T2,A18,T20,I3,T25,1E16.10,T45,1E16.10,T68,1E16.10)") &
+                              "It,res,zao,elec", counter, norm_res, norm_zao, norm_elec
        !------------
 
        ! Preconditioner
@@ -958,8 +1003,9 @@ CONTAINS
     !IF(iounit > 0) WRITE(iounit,*) "Tr[xAx]", norm_elec
 
     ! LAST print
-    IF (iounit > 0) WRITE (iounit, "(T2,A18,T20,A4,T25,1E16.10,T45,1E16.10,T68,1E16.10)") &
-       "It,res,zao,elec", "last", norm_res, norm_zao, norm_elec
+    counter=counter+1
+    IF (iounit > 0) WRITE (iounit, "(T2,A18,T20,I3,T25,1E16.10,T45,1E16.10,T68,1E16.10)") &
+                           "It,res,zao,elec", counter, norm_res, norm_zao, norm_elec
 
     CALL dbcsr_dot(ec_env%matrix_z(1)%matrix, matrix_s(1)%matrix, norm_res)
     IF (iounit > 0) WRITE (iounit,*) "Tr[PzS]", norm_res
