@@ -1046,7 +1046,8 @@ MODULE input_constants
                                                ec_curvy_steps = 1002, &
                                                ec_matrix_sign = 1003, &
                                                ec_matrix_trs4 = 1004, &
-                                               ec_matrix_tc2 = 1005
+                                               ec_matrix_tc2 = 1005, &
+                                               ec_ot_diag = 1006
    INTEGER, PARAMETER, PUBLIC               :: ec_functional_harris = 2001
 
    ! Response solver for energy correction

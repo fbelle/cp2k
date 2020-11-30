@@ -92,6 +92,7 @@ MODULE energy_corrections
                                               ec_matrix_sign,&
                                               ec_matrix_tc2,&
                                               ec_matrix_trs4,&
+                                              ec_ot_diag,&
                                               ls_s_inversion_sign_sqrt,&
                                               ls_s_inversion_hotelling,&
                                               ls_s_inversion_none,&
@@ -1233,8 +1234,9 @@ CONTAINS
 
       SELECT CASE (ec_env%ks_solver)
       CASE (ec_diagonalization)
-         !CALL ec_diag_solver(qs_env, ksmat, smat, pmat, wmat)
-         CALL ec_ot_diag(qs_env, ec_env, ksmat, smat, pmat, wmat)
+         CALL ec_diag_solver(qs_env, ksmat, smat, pmat, wmat)
+      CASE (ec_ot_diag)
+         CALL ec_ot_diag_solver(qs_env, ec_env, ksmat, smat, pmat, wmat)
       CASE (ec_curvy_steps, ec_matrix_sign, ec_matrix_trs4, ec_matrix_tc2)
          CALL ec_ls_init(qs_env)
          !CALL ec_ls_solver(qs_env, ec_env%ks_solver, ksmat, smat, pmat, wmat)
@@ -2242,6 +2244,7 @@ CONTAINS
                            matrix_type=dbcsr_type_no_symmetry)
       ENDDO
 
+      ! contains eps_filter from LS_SOLVER section (for response calculation)
       eps_store = ls_env%eps_filter
       ls_env%eps_filter = ec_env%eps_default
 
@@ -2314,8 +2317,8 @@ CONTAINS
       ls_env%lumo_spin(:) = 0.0_dp
 
       ! Avoid too small threshold for inversion
-      threshold = 1.0E-6_dp
-!      threshold = eps_filter 
+      !threshold = 1.0E-6_dp
+      threshold = eps_filter 
 
       ! F = S^-1/2 * F * S^-1/2 
       IF (ls_env%has_s_preconditioner) THEN
@@ -2459,13 +2462,13 @@ CONTAINS
 !>       09.2020 created
 !> \author F.Belleflamme
 ! **************************************************************************************************
-   SUBROUTINE ec_ot_diag(qs_env, ec_env, matrix_ks, matrix_s, matrix_p, matrix_w)
+   SUBROUTINE ec_ot_diag_solver(qs_env, ec_env, matrix_ks, matrix_s, matrix_p, matrix_w)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(energy_correction_type), POINTER              :: ec_env
       TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_s, matrix_ks, matrix_p,&
                                                             matrix_w
 
-      CHARACTER(len=*), PARAMETER :: routineN = 'ec_ot_diag', &
+      CHARACTER(len=*), PARAMETER :: routineN = 'ec_ot_diag_solver', &
          routineP = moduleN//':'//routineN
 
       INTEGER                                            :: handle, homo, iounit, ispin, max_iter, &
@@ -2493,7 +2496,7 @@ CONTAINS
       logger => cp_get_default_logger()
       iounit = cp_logger_get_default_unit_nr(logger)
 
-      IF (iounit > 0) WRITE (iounit, *) "ec_ot_diag START"
+      !IF (iounit > 0) WRITE (iounit, *) "ec_ot_diag_solver START"
 
       CALL get_qs_env(qs_env,para_env=para_env)
       CALL get_qs_env(qs_env=qs_env, &
@@ -2524,7 +2527,7 @@ CONTAINS
 
       ! Blocked initial guess of Harris DM
       NULLIFY(p_rmpv)
-      IF (iounit > 0) WRITE (iounit, *) "ec_ot_diag - Blcok diagonal DM"
+      IF (iounit > 0) WRITE (iounit, *) "ec_ot_diag_solver - Block diagonal DM"
 !      p_rmpv => ec_env%matrix_p(:, 1)
 !      CALL calculate_atomic_block_dm(p_rmpv, ec_env%matrix_s(1,1)%matrix, &
 !                                     particle_set, atomic_kind_set, qs_kind_set, &
@@ -2544,7 +2547,7 @@ CONTAINS
                          mo_coeff=mo_coeff, &
                          nmo=nmo, nao=nao, homo=homo)
 
-         IF (iounit > 0) WRITE (iounit, *) "ec_ot_diag - Calculate first MOs"
+         IF (iounit > 0) WRITE (iounit, *) "ec_ot_diag_solver - Calculate first MOs"
          CALL cp_fm_set_all(mo_coeff, 0.0_dp)
          CALL cp_fm_init_random(mo_coeff, nmo)
 
@@ -2624,11 +2627,11 @@ CONTAINS
          END IF
       END IF
 
-      IF(para_env%mepos==0) WRITE(*,*) "ec_ot_diag - END" 
+      !IF(para_env%mepos==0) WRITE(*,*) "ec_ot_diag - END" 
 
       CALL timestop(handle)
 
-   END SUBROUTINE ec_ot_diag
+   END SUBROUTINE ec_ot_diag_solver
 
 ! **************************************************************************************************
 !> \brief Calculate the W matrix from the MO eigenvectors, MO eigenvalues,
