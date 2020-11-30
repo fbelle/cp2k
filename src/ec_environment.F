@@ -304,6 +304,8 @@ CONTAINS
       ls_env%has_unit_metric = .FALSE.
 
       ! ls_scf_init_read_write_input
+      ! XXX DEBUG 
+      ! Careful LS_SOLVER is currently for both Harris solver and response solver
 
       solver_section => section_vals_get_subs_vals(input, "DFT%ENERGY_CORRECTION%LS_SOLVER")
       CALL section_vals_val_get(solver_section, "EPS_FILTER", r_val=ls_env%eps_filter)

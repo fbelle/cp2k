@@ -424,7 +424,7 @@ CONTAINS
     CHARACTER(len=*), PARAMETER :: routineN = 'ec_response_ao', routineP = moduleN//':'//routineN
     
     INTEGER                                            :: i, handle, ispin, max_iter_lanczos, nao, &
-                                                          nspins, s_sqrt_method, s_sqrt_order, iter
+                                                          nspins, s_sqrt_method, s_sqrt_order
     LOGICAL                                            :: restart 
     REAL(KIND=dp)                                      :: eps_filter, eps_lanczos, focc, norm_res, &
                                                           t1, t2
@@ -443,8 +443,9 @@ CONTAINS
     LOGICAL                                            :: do_precond
     TYPE(linres_control_type), POINTER                 :: linres_control
     TYPE(section_vals_type), POINTER                   :: solver_section
-    REAL(KIND=dp)                                      :: norm_elec, norm_zao
-    INTEGER                                            :: counter
+! DEBUG
+!    REAL(KIND=dp)                                      :: norm_elec, norm_zao
+!    INTEGER                                            :: counter
 
     CALL timeset(routineN, handle)
 
@@ -591,12 +592,14 @@ CONTAINS
     ! E^[1]_Harris = -4*G[\delta P]*Pin - Pin*G[\delta P] = -4*[G[\delta P], Pin]
     CALL commutator(matrix_nsc, matrix_p, matrix_res, eps_filter, .FALSE., alpha = focc)
 
-    norm_zao = dbcsr_frobenius_norm(matrix_nsc(1)%matrix)
-    IF (iounit > 0) WRITE(iounit,*) "||RHS||_F :", norm_zao
-    IF (nspins==2) THEN
-      norm_zao = dbcsr_frobenius_norm(matrix_nsc(2)%matrix)
-      IF (iounit > 0)  WRITE(iounit,*) "||RHS(2)||_F :", norm_zao
-    END IF
+!    ! DEBUG
+!    norm_zao = dbcsr_frobenius_norm(matrix_nsc(1)%matrix)
+!    IF (iounit > 0) WRITE(iounit,*) "||RHS||_F :", norm_zao
+!    IF (nspins==2) THEN
+!      norm_zao = dbcsr_frobenius_norm(matrix_nsc(2)%matrix)
+!      IF (iounit > 0)  WRITE(iounit,*) "||RHS(2)||_F :", norm_zao
+!    END IF
+!    ! DEBUG
 
     ! Initial guess cg_Z 
     DO ispin = 1, nspins
@@ -632,47 +635,47 @@ CONTAINS
     ! Matrix projector T
     CALL projector(qs_env, matrix_p, matrix_res, eps_filter, .TRUE.)
 
-    !-------------
-    ! testing of Z Matrix
-    counter=1
-    norm_zao=0.0_dp
-    norm_elec=0.0_dp
-    norm_rr = 0.0_dp
-    norm_res = 0.0_dp
-
-    ! Z = [cg_z,P]
-    CALL dbcsr_copy(matrix_z0(1)%matrix, matrix_cg_z(1)%matrix)
-    CALL projector(qs_env, matrix_p, matrix_z0, eps_filter, .FALSE.)
-
-    ! A(x_0)
-    CALL build_hessian_op(qs_env = qs_env, &
-                          matrix_ks = matrix_ks, &
-                          matrix_p = matrix_p, &
-                          matrix_s_sqrt_inv = matrix_s_sqrt_inv, &
-                          matrix_cg = matrix_z0, & ! cg
-                          matrix_Ax = matrix_Ax, &
-                          eps_filter = eps_filter,&
-                          iounit= iounit)
-
-    CALL commutator(matrix_z0, matrix_p, matrix_z, eps_filter, .TRUE., alpha = 0.5_dp)
-    ! Transform Z-matrix back into non-orthogonal basis
-    CALL transform_m_orth(matrix_z(1)%matrix, matrix_s_sqrt_inv, eps_filter)
-    norm_zao = dbcsr_frobenius_norm(matrix_z(1)%matrix)
-
-    CALL dbcsr_dot(matrix_z0(1)%matrix, matrix_Ax(1)%matrix, norm_elec)
-    norm_elec = 0.5_dp * norm_elec
-
-    CALL dbcsr_dot(matrix_res(1)%matrix, matrix_cg(1)%matrix, norm_rr(1))
-    norm_res = MAX(norm_res, ABS(norm_rr(1)/REAL(nao,dp)))
-
-
-    IF (iounit > 0) WRITE (iounit, "(T2,A18,T20,I3,T25,1E16.10,T45,1E16.10,T68,1E16.10)") &
-                           "It,res,zao,elec", counter, norm_res, norm_zao, norm_elec
-
-    norm_rr = 0.0_dp
-    norm_res = 0.0_dp
-
-    !------------
+!    !-------------
+!    ! testing of Z Matrix
+!    counter=1
+!    norm_zao=0.0_dp
+!    norm_elec=0.0_dp
+!    norm_rr = 0.0_dp
+!    norm_res = 0.0_dp
+!
+!    ! Z = [cg_z,P]
+!    CALL dbcsr_copy(matrix_z0(1)%matrix, matrix_cg_z(1)%matrix)
+!    CALL projector(qs_env, matrix_p, matrix_z0, eps_filter, .FALSE.)
+!
+!    ! A(x_0)
+!    CALL build_hessian_op(qs_env = qs_env, &
+!                          matrix_ks = matrix_ks, &
+!                          matrix_p = matrix_p, &
+!                          matrix_s_sqrt_inv = matrix_s_sqrt_inv, &
+!                          matrix_cg = matrix_z0, & ! cg
+!                          matrix_Ax = matrix_Ax, &
+!                          eps_filter = eps_filter,&
+!                          iounit= iounit)
+!
+!    CALL commutator(matrix_z0, matrix_p, matrix_z, eps_filter, .TRUE., alpha = 0.5_dp)
+!    ! Transform Z-matrix back into non-orthogonal basis
+!    CALL transform_m_orth(matrix_z(1)%matrix, matrix_s_sqrt_inv, eps_filter)
+!    norm_zao = dbcsr_frobenius_norm(matrix_z(1)%matrix)
+!
+!    CALL dbcsr_dot(matrix_z0(1)%matrix, matrix_Ax(1)%matrix, norm_elec)
+!    norm_elec = 0.5_dp * norm_elec
+!
+!    CALL dbcsr_dot(matrix_res(1)%matrix, matrix_cg(1)%matrix, norm_rr(1))
+!    norm_res = MAX(norm_res, ABS(norm_rr(1)/REAL(nao,dp)))
+!
+!
+!    IF (iounit > 0) WRITE (iounit, "(T2,A18,T20,I3,T25,1E16.10,T45,1E16.10,T68,1E16.10)") &
+!                           "It,res,zao,elec", counter, norm_res, norm_zao, norm_elec
+!
+!    norm_rr = 0.0_dp
+!    norm_res = 0.0_dp
+!
+!    !------------
 
     ! Preconditioner
     linres_control%flag = ""
@@ -853,7 +856,7 @@ CONTAINS
 
        ! need to recompute the residue
        restart = .FALSE.
-       IF (MOD(iter, linres_control%restart_every) .EQ. 0) THEN
+       IF (MOD(i, linres_control%restart_every) .EQ. 0) THEN
           !
           ! r_j+1 = b - A * x_j+1
           CALL build_hessian_op(qs_env = qs_env, &
@@ -885,36 +888,37 @@ CONTAINS
           restart = .FALSE.
        ENDIF
 
-       !-------------
-       ! testing of Z Matrix
-
-       counter=counter+1
-
-       ! Z = [cg_z,P]
-       CALL dbcsr_copy(matrix_z0(1)%matrix, matrix_cg_z(1)%matrix)
-       CALL projector(qs_env, matrix_p, matrix_z0, eps_filter, .FALSE.)
-
-       ! A(x_0)
-       CALL build_hessian_op(qs_env = qs_env, &
-                             matrix_ks = matrix_ks, &
-                             matrix_p = matrix_p, &
-                             matrix_s_sqrt_inv = matrix_s_sqrt_inv, &
-                             matrix_cg = matrix_z0, & ! cg
-                             matrix_Ax = matrix_Ax, &
-                             eps_filter = eps_filter,&
-                             iounit= iounit)
-
-       CALL commutator(matrix_z0, matrix_p, matrix_z, eps_filter, .TRUE., alpha = 0.5_dp)
-       ! Transform Z-matrix back into non-orthogonal basis
-       CALL transform_m_orth(matrix_z(1)%matrix, matrix_s_sqrt_inv, eps_filter)
-       norm_zao = dbcsr_frobenius_norm(matrix_z(1)%matrix)
-
-       CALL dbcsr_dot(matrix_z0(1)%matrix, matrix_Ax(1)%matrix, norm_elec)
-       norm_elec = 0.5_dp * norm_elec
-
-       IF (iounit > 0) WRITE (iounit, "(T2,A18,T20,I3,T25,1E16.10,T45,1E16.10,T68,1E16.10)") &
-                              "It,res,zao,elec", counter, norm_res, norm_zao, norm_elec
-       !------------
+!       !-------------
+!       ! testing of Z Matrix
+!
+!       counter=counter+1
+!
+!       ! Z = [cg_z,P]
+!       CALL dbcsr_copy(matrix_z0(1)%matrix, matrix_cg_z(1)%matrix)
+!       CALL projector(qs_env, matrix_p, matrix_z0, eps_filter, .FALSE.)
+!
+!       ! A(x_0)
+!       IF (iounit > 0)  WRITE(iounit,*) "build z interm:"
+!       CALL build_hessian_op(qs_env = qs_env, &
+!                             matrix_ks = matrix_ks, &
+!                             matrix_p = matrix_p, &
+!                             matrix_s_sqrt_inv = matrix_s_sqrt_inv, &
+!                             matrix_cg = matrix_z0, & ! cg
+!                             matrix_Ax = matrix_Ax, &
+!                             eps_filter = eps_filter,&
+!                             iounit= iounit)
+!
+!       CALL commutator(matrix_z0, matrix_p, matrix_z, eps_filter, .TRUE., alpha = 0.5_dp)
+!       ! Transform Z-matrix back into non-orthogonal basis
+!       CALL transform_m_orth(matrix_z(1)%matrix, matrix_s_sqrt_inv, eps_filter)
+!       norm_zao = dbcsr_frobenius_norm(matrix_z(1)%matrix)
+!
+!       CALL dbcsr_dot(matrix_z0(1)%matrix, matrix_Ax(1)%matrix, norm_elec)
+!       norm_elec = 0.5_dp * norm_elec
+!
+!       IF (iounit > 0) WRITE (iounit, "(T2,A18,T20,I3,T25,1E16.10,T45,1E16.10,T68,1E16.10)") &
+!                              "It,res,zao,elec", counter, norm_res, norm_zao, norm_elec
+!       !------------
 
        ! Preconditioner
        linres_control%flag = ""
@@ -985,30 +989,33 @@ CONTAINS
        CALL dbcsr_copy(ec_env%matrix_z(ispin)%matrix, matrix_z(ispin)%matrix, keep_sparsity=.TRUE.)
     END DO
 
-    norm_zao = dbcsr_frobenius_norm(matrix_z(1)%matrix)
-    IF (iounit > 0) WRITE (iounit,*) "|| Z (AO) ||_F :", norm_zao
-
-    ! x*A*x
-    CALL build_hessian_op(qs_env = qs_env, &
-                          matrix_ks = matrix_ks, &
-                          matrix_p = matrix_p, &
-                          matrix_s_sqrt_inv = matrix_s_sqrt_inv, &
-                          matrix_cg = matrix_cg_z, & ! cg
-                          matrix_Ax = matrix_Ax, &
-                          eps_filter = eps_filter,&
-                          iounit= iounit)
-
-    CALL dbcsr_dot(matrix_cg_z(1)%matrix, matrix_Ax(1)%matrix, norm_elec)
-    norm_elec = 0.5_dp * norm_elec
+! ! DEBUG
+!    norm_zao = dbcsr_frobenius_norm(matrix_z(1)%matrix)
+!    IF (iounit > 0) WRITE (iounit,*) "|| Z (AO) ||_F :", norm_zao
+!
+!    ! x*A*x
+!    IF (iounit > 0)  WRITE(iounit,*) "build last z:"
+!    CALL build_hessian_op(qs_env = qs_env, &
+!                          matrix_ks = matrix_ks, &
+!                          matrix_p = matrix_p, &
+!                          matrix_s_sqrt_inv = matrix_s_sqrt_inv, &
+!                          matrix_cg = matrix_cg_z, & ! cg
+!                          matrix_Ax = matrix_Ax, &
+!                          eps_filter = eps_filter,&
+!                          iounit= iounit)
+!
+!    CALL dbcsr_dot(matrix_cg_z(1)%matrix, matrix_Ax(1)%matrix, norm_elec)
+!    norm_elec = 0.5_dp * norm_elec
     !IF(iounit > 0) WRITE(iounit,*) "Tr[xAx]", norm_elec
 
-    ! LAST print
-    counter=counter+1
-    IF (iounit > 0) WRITE (iounit, "(T2,A18,T20,I3,T25,1E16.10,T45,1E16.10,T68,1E16.10)") &
-                           "It,res,zao,elec", counter, norm_res, norm_zao, norm_elec
-
-    CALL dbcsr_dot(ec_env%matrix_z(1)%matrix, matrix_s(1)%matrix, norm_res)
-    IF (iounit > 0) WRITE (iounit,*) "Tr[PzS]", norm_res
+!    ! LAST print
+!    counter=counter+1
+!    IF (iounit > 0) WRITE (iounit, "(T2,A18,T20,I3,T25,1E16.10,T45,1E16.10,T68,1E16.10)") &
+!                           "It,res,zao,elec", counter, norm_res, norm_zao, norm_elec
+!
+!    CALL dbcsr_dot(ec_env%matrix_z(1)%matrix, matrix_s(1)%matrix, norm_res)
+!    IF (iounit > 0) WRITE (iounit,*) "Tr[PzS]", norm_res
+! ! DEBUG
 
     ! Calculate energy-weighted response density matrix
     ! AO: Wz = 0.5*(Z*KS*P + P*KS*Z)

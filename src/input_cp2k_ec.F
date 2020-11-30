@@ -16,7 +16,7 @@ MODULE input_cp2k_ec
                                               VandeVondele2012
    USE input_constants,                 ONLY: &
         ec_curvy_steps, ec_diagonalization, ec_functional_harris, ec_mo_solver, ec_ls_solver,&
-        ec_matrix_sign, ec_matrix_tc2, ec_matrix_trs4, kg_cholesky, ls_cluster_atomic, &
+        ec_matrix_sign, ec_matrix_tc2, ec_matrix_trs4, ec_ot_diag, kg_cholesky, ls_cluster_atomic, &
         ls_cluster_molecular, ls_s_inversion_hotelling, ls_s_inversion_sign_sqrt, &
         ls_s_preconditioner_atomic, ls_s_preconditioner_molecular, ls_s_preconditioner_none, &
         ls_s_sqrt_ns, ls_s_sqrt_proot, ls_scf_sign_ns, ls_scf_sign_proot, ot_precond_full_all, &
@@ -126,14 +126,15 @@ CONTAINS
                           usage="ALGORITHM DIAGONALIZATION", &
                           default_i_val=ec_diagonalization, &
                           enum_c_vals=s2a("DIAGONALIZATION", "CURVY_STEPS", &
-                                          "MATRIX_SIGN", "TRS4", "TC2"), &
+                                          "MATRIX_SIGN", "TRS4", "TC2", "OT_DIAG"), &
                           enum_desc=s2a("Diagonalization of KS matrix.", &
                                         "Head-Grodon curvy step algorithm", &
                                         "Matrix Sign algorithm", &
                                         "Trace resetting trs4 algorithm", &
-                                        "Trace resetting tc2 algorithm"), &
+                                        "Trace resetting tc2 algorithm", &
+                                        "OT diagonalization"), &
                           enum_i_vals=(/ec_diagonalization, ec_curvy_steps, ec_matrix_sign, &
-                                        ec_matrix_trs4, ec_matrix_tc2/))
+                                        ec_matrix_trs4, ec_matrix_tc2, ec_ot_diag/))
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
