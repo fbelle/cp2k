@@ -67,7 +67,6 @@ MODULE qs_environment
                                               distribution_1d_type
    USE distribution_methods,            ONLY: distribute_molecules_1d
    USE dm_ls_scf_create,                ONLY: ls_scf_create
-   USE ec_env_types,                    ONLY: energy_correction_type
    USE ec_environment,                  ONLY: ec_env_create
    USE et_coupling_types,               ONLY: et_coupling_create
    USE ewald_environment_types,         ONLY: ewald_env_create,&
@@ -265,7 +264,6 @@ CONTAINS
       TYPE(cell_type), POINTER                           :: my_cell, my_cell_ref
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
       TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(energy_correction_type), POINTER              :: ec_env
       TYPE(kpoint_type), POINTER                         :: kpoints
       TYPE(lri_environment_type), POINTER                :: lri_env
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
@@ -444,9 +442,9 @@ CONTAINS
       dft_section => section_vals_get_subs_vals(qs_env%input, "DFT")
       CALL section_vals_val_get(dft_section, "ENERGY_CORRECTION%_SECTION_PARAMETERS_", &
                                 l_val=qs_env%energy_correction)
-      NULLIFY (ec_env)
-      CALL ec_env_create(qs_env, ec_env, dft_section, qs_env%input)
-      CALL set_qs_env(qs_env, ec_env=ec_env)
+      IF (qs_env%energy_correction) THEN
+         CALL ec_env_create(qs_env, qs_env%ec_env, dft_section, qs_env%input)
+      END IF
 
       et_coupling_section => section_vals_get_subs_vals(qs_env%input, &
                                                         "PROPERTIES%ET_COUPLING")
