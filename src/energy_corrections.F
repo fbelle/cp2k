@@ -2294,7 +2294,6 @@ CONTAINS
       TYPE(energy_correction_type), POINTER              :: ec_env
       TYPE(ls_scf_env_type), POINTER                     :: ls_env
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: wmat
-      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: ksmat, pmat
 
       CALL timeset(routineN, handle)
 
@@ -2310,11 +2309,14 @@ CONTAINS
       nmo = 0
       CALL get_qs_env(qs_env=qs_env, nelectron_spin=nmo)
       IF (nspins == 1) nmo(1) = nmo(1)/2
-!      e_homo = -0.1_dp
-!      e_lumo = 0.1_dp
-
       ls_env%homo_spin(:) = 0.0_dp
       ls_env%lumo_spin(:) = 0.0_dp
+
+      ALLOCATE (matrix_ks_deviation(nspin))
+      DO ispin = 1, nspins
+         CALL dbcsr_create(matrix_ks_deviation(ispin), template=ls_env%matrix_ks(ispin))
+         CALL dbcsr_set(matrix_ks_deviation(ispin), 0.0_dp)
+      ENDDO
 
       ! Avoid too small threshold for inversion
       !threshold = 1.0E-6_dp
@@ -2330,7 +2332,8 @@ CONTAINS
          END DO
       END IF
 
-      ALLOCATE(ksmat(nspins,1), pmat(nspins, 1))
+
+
 
       DO ispin = 1, nspins
          !nelectron = nmo(ispin)
@@ -2366,6 +2369,7 @@ CONTAINS
                     ls_env%homo_spin(ispin),&
                     ls_env%lumo_spin(ispin),&
                     ls_env%mu_spin(ispin), &                               !ok
+                    matrix_ks_deviation=matrix_ks_deviation(ispin), &
                     dynamic_threshold = ls_env%dynamic_threshold, &        !ok
                     eps_lanczos = ls_env%eps_lanczos, &                    !ok
                     max_iter_lanczos = ls_env%max_iter_lanczos)            !ok
@@ -2392,9 +2396,6 @@ CONTAINS
          END SELECT
 
       END DO
-
-
-      DEALLOCATE(ksmat, pmat)
 
       ! de-orthonormalize
       IF (ls_env%has_s_preconditioner) THEN
@@ -2449,6 +2450,11 @@ CONTAINS
          CALL dbcsr_release(ls_env%matrix_ks(ispin))
       ENDDO
       DEALLOCATE (ls_env%matrix_ks)
+
+      DO ispin = 1, nspins
+         CALL dbcsr_release(matrix_ks_deviation(ispin))
+      ENDDO
+      DEALLOCATE (matrix_ks_deviation)
 
       CALL timestop(handle)
 
