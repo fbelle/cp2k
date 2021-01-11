@@ -2176,6 +2176,7 @@ CONTAINS
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       INTEGER                                            :: iounit 
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
+      REAL(KIND=dp)                                      :: store_eps
 
       CALL timeset(routineN, handle)
 
@@ -2251,11 +2252,13 @@ CONTAINS
             CPABORT("Unknown inital guess for OT-Diagonalization (Harris functional)")
          END SELECT
 
-         ! copy density matrix to ls env
+         ! Bring P matrix from QS to LS form
          IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - copy ec to ls"
          DO ispin = 1, nspins
-            CALL matrix_qs_to_ls(ls_env%matrix_p(ispin), ec_env%matrix_p(ispin, 1)%matrix, &
-                                 ls_env%ls_mstruct, covariant=.FALSE.)
+            CALL matrix_qs_to_ls(matrix_ls = ls_env%matrix_p(ispin), &
+                                 matrix_qs = ec_env%matrix_p(ispin,1)%matrix, &
+                                 ls_mstruct = ls_env%ls_mstruct, &
+                                 covariant = .FALSE.)
             CALL dbcsr_filter(ls_env%matrix_p(ispin), ls_env%eps_filter)
          END DO
 
@@ -2323,7 +2326,10 @@ CONTAINS
 
             ! Requires inital guess, i.e. ground-state DM
             check_convergence = .TRUE.
+            store_eps = ls_env%eps_filter
+            ls_env%eps_filter = ec_env%eps_default
             CALL dm_ls_curvy_optimization(ls_env, energy%total, check_convergence)
+            ls_env%eps_filter = store_eps
 
             IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - CURVY_STEPS END"
 
