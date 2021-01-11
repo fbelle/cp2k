@@ -389,8 +389,8 @@ CONTAINS
          ls_env%has_s_preconditioner = .TRUE.
       END SELECT
 
-!      IF (ls_env%curvy_steps .AND. ls_env%has_s_preconditioner) &
-!         CPABORT("S Preconditioning not implemented in combination with CURVY_STEPS.")
+      IF (ls_env%curvy_steps .AND. ls_env%has_s_preconditioner) &
+         CPABORT("S Preconditioning not implemented in combination with CURVY_STEPS.")
       IF (ls_env%curvy_steps .AND. .NOT. ls_env%use_s_sqrt) &
          CPABORT("CURVY_STEPS requires the use of the sqrt inversion.")
 

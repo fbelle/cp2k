@@ -2385,26 +2385,15 @@ CONTAINS
       ls_env%homo_spin(:) = 0.0_dp
       ls_env%lumo_spin(:) = 0.0_dp
 
-
-      ! curvy : no s preconditioner
-
-      ! bring back S^1/2
+      ! F = S^-1/2 * F * S^-1/2 
       IF (ls_env%has_s_preconditioner) THEN
-         CALL apply_matrix_preconditioner(ls_env%matrix_s, "backward", &
-                                          ls_env%matrix_bs_sqrt, ls_env%matrix_bs_sqrt_inv)
-      ENDIF
+         DO ispin = 1, nspins
+            CALL apply_matrix_preconditioner(ls_env%matrix_ks(ispin), "forward", &
+                                             ls_env%matrix_bs_sqrt, ls_env%matrix_bs_sqrt_inv)
 
-! s preconditioning only used for cheaper S^1/2 calculation, do not keep it for F or P
-!      ! F = S^-1/2 * F * S^-1/2 
-!      IF (ls_env%has_s_preconditioner) THEN
-!         DO ispin = 1, nspins
-!            CALL apply_matrix_preconditioner(ls_env%matrix_ks(ispin), "forward", &
-!                                             ls_env%matrix_bs_sqrt, ls_env%matrix_bs_sqrt_inv)
-!
-!            CALL dbcsr_filter(ls_env%matrix_ks(ispin), ls_env%eps_filter)
-!         END DO
-!      END IF
-
+            CALL dbcsr_filter(ls_env%matrix_ks(ispin), ls_env%eps_filter)
+         END DO
+      END IF
 
       IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - CURVY_STEPS"
 
@@ -2468,7 +2457,6 @@ CONTAINS
          store_eps = ls_env%eps_filter
          ls_env%eps_filter = ec_env%eps_default
 
-
          CALL dm_ls_curvy_optimization(ls_env, energy%total, check_convergence)
 
          ls_env%eps_filter = store_eps
@@ -2478,16 +2466,16 @@ CONTAINS
       END DO
 
 !      ! de-orthonormalize
-!      IF (ls_env%has_s_preconditioner) THEN
-!         DO ispin = 1, nspins
-!            ! P = S^-1/2 * P_tilde * S^-1/2 (forward)
-!            CALL apply_matrix_preconditioner(ls_env%matrix_p(ispin), "forward", &
-!                                             ls_env%matrix_bs_sqrt, ls_env%matrix_bs_sqrt_inv)
-!
-!            CALL dbcsr_filter(ls_env%matrix_p(ispin), ls_env%eps_filter)
-!         END DO
-!      ENDIF
-!
+      IF (ls_env%has_s_preconditioner) THEN
+         DO ispin = 1, nspins
+            ! P = S^-1/2 * P_tilde * S^-1/2 (forward)
+            CALL apply_matrix_preconditioner(ls_env%matrix_p(ispin), "forward", &
+                                             ls_env%matrix_bs_sqrt, ls_env%matrix_bs_sqrt_inv)
+
+            CALL dbcsr_filter(ls_env%matrix_p(ispin), ls_env%eps_filter)
+         END DO
+      ENDIF
+
 ! closed shell also already done in curvy
 !      ! Closed-shell 
 !      IF (nspins == 1) CALL dbcsr_scale(ls_env%matrix_p(1), 2.0_dp)
