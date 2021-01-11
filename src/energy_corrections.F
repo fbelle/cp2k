@@ -2213,8 +2213,15 @@ CONTAINS
          ! Get old density matrix
          CALL get_qs_env(qs_env, rho = rho)
          CALL qs_rho_get(rho, rho_ao = rho_ao)
+         !DO ispin = 1, nspins
+         !   CALL dbcsr_copy(ls_env%matrix_p(ispin), rho_ao(ispin)%matrix) 
+         !END DO
+
+         ! copy density matrix to ls env
          DO ispin = 1, nspins
-            CALL dbcsr_copy(ls_env%matrix_p(ispin), rho_ao(ispin)%matrix) 
+            CALL matrix_qs_to_ls(ls_env%matrix_p(ispin), rho_ao(ispin)%matrix, &
+                                 ls_env%ls_mstruct, covariant=.FALSE.)
+            CALL dbcsr_filter(ls_env%matrix_p(ispin), ls_env%eps_filter)
          END DO
 
       END IF
