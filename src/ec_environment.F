@@ -18,16 +18,35 @@ MODULE ec_environment
    USE basis_set_types,                 ONLY: copy_gto_basis_set,&
                                               create_primitive_basis_set,&
                                               gto_basis_set_type
+   USE bibliography,                    ONLY: cite_reference,&
+                                              Niklasson2003,&
+                                              Niklasson2014,&
+                                              Shao2003
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_para_env,                     ONLY: cp_para_env_retain
    USE cp_para_types,                   ONLY: cp_para_env_type
    USE dm_ls_scf_types,                 ONLY: ls_scf_env_type
    USE ec_env_types,                    ONLY: energy_correction_type
-   USE input_constants,                 ONLY: ec_functional_harris,&
+   USE input_constants,                 ONLY: ec_curvy_steps,&
+                                              ec_diagonalization,&
+                                              ec_functional_harris,&
+                                              ec_matrix_sign,&
+                                              ec_matrix_tc2,&
+                                              ec_matrix_trs4,&
+                                              ec_ot_block_dm,&
+                                              ec_ot_diag,&
+                                              ec_ot_gs,&
+                                              kg_cholesky,&
+                                              ls_cluster_atomic,&
+                                              ls_cluster_molecular,&
                                               ls_s_inversion_hotelling,&
                                               ls_s_inversion_none,&
                                               ls_s_inversion_sign_sqrt,&
+                                              ls_s_preconditioner_atomic,&
+                                              ls_s_preconditioner_molecular,&
                                               ls_s_preconditioner_none,&
+                                              ls_s_sqrt_ns,&
+                                              ls_s_sqrt_proot,&
                                               xc_vdw_fun_nonloc,&
                                               xc_vdw_fun_pairpot
    USE input_cp2k_check,                ONLY: xc_functionals_expand
@@ -36,6 +55,7 @@ MODULE ec_environment
                                               section_vals_type,&
                                               section_vals_val_get
    USE kinds,                           ONLY: dp
+   USE machine,                         ONLY: m_flush
    USE molecule_types,                  ONLY: molecule_of_atom,&
                                               molecule_type
    USE orbital_pointers,                ONLY: init_orbital_pointers
@@ -60,6 +80,7 @@ MODULE ec_environment
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'ec_environment'
 
    PUBLIC :: ec_env_create
+   PUBLIC :: ec_write_input
 
 CONTAINS
 
@@ -109,8 +130,8 @@ CONTAINS
       TYPE(qs_dispersion_type), POINTER                  :: dispersion_env
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_kind_type), POINTER                        :: qs_kind
-      TYPE(section_vals_type), POINTER                   :: nl_section, pp_section, section1, &
-                                                            section2, solver_section, xc_section
+      TYPE(section_vals_type), POINTER                   :: ec_section, nl_section, pp_section, &
+                                                            section1, section2, xc_section
 
       NULLIFY (atomic_kind_set, dispersion_env, para_env)
       NULLIFY (ec_env%sab_orb, ec_env%sac_ppl, ec_env%sap_ppnl)
@@ -132,21 +153,25 @@ CONTAINS
       ec_env%mao = .FALSE.
 
       IF (qs_env%energy_correction) THEN
-         CALL section_vals_val_get(dft_section, "ENERGY_CORRECTION%ALGORITHM", &
+
+         ec_section => section_vals_get_subs_vals(input, "DFT%ENERGY_CORRECTION")
+         CALL section_vals_val_get(ec_section, "ALGORITHM", &
                                    i_val=ec_env%ks_solver)
-         CALL section_vals_val_get(dft_section, "ENERGY_CORRECTION%ENERGY_FUNCTIONAL", &
+         CALL section_vals_val_get(ec_section, "ENERGY_FUNCTIONAL", &
                                    i_val=ec_env%energy_functional)
-         CALL section_vals_val_get(dft_section, "ENERGY_CORRECTION%FACTORIZATION", &
+         CALL section_vals_val_get(ec_section, "FACTORIZATION", &
                                    i_val=ec_env%factorization)
-         CALL section_vals_val_get(dft_section, "ENERGY_CORRECTION%EPS_DEFAULT", &
+         CALL section_vals_val_get(ec_section, "OT_INITIAL_GUESS", &
+                                   i_val=ec_env%ec_initial_guess)
+         CALL section_vals_val_get(ec_section, "EPS_DEFAULT", &
                                    r_val=ec_env%eps_default)
-         CALL section_vals_val_get(dft_section, "ENERGY_CORRECTION%HARRIS_BASIS", &
+         CALL section_vals_val_get(ec_section, "HARRIS_BASIS", &
                                    c_val=ec_env%basis)
-         CALL section_vals_val_get(dft_section, "ENERGY_CORRECTION%MAO", &
+         CALL section_vals_val_get(ec_section, "MAO", &
                                    l_val=ec_env%mao)
-         CALL section_vals_val_get(dft_section, "ENERGY_CORRECTION%MAO_MAX_ITER", &
+         CALL section_vals_val_get(ec_section, "MAO_MAX_ITER", &
                                    i_val=ec_env%mao_max_iter)
-         CALL section_vals_val_get(dft_section, "ENERGY_CORRECTION%MAO_EPS_GRAD", &
+         CALL section_vals_val_get(ec_section, "MAO_EPS_GRAD", &
                                    r_val=ec_env%mao_eps_grad)
 
          ! set basis
@@ -212,8 +237,8 @@ CONTAINS
          ! select the XC section
          NULLIFY (xc_section)
          xc_section => section_vals_get_subs_vals(dft_section, "XC")
-         section1 => section_vals_get_subs_vals(dft_section, "ENERGY_CORRECTION%XC")
-         section2 => section_vals_get_subs_vals(dft_section, "ENERGY_CORRECTION%XC%XC_FUNCTIONAL")
+         section1 => section_vals_get_subs_vals(ec_section, "XC")
+         section2 => section_vals_get_subs_vals(ec_section, "XC%XC_FUNCTIONAL")
          CALL section_vals_get(section2, explicit=explicit)
          IF (explicit) THEN
             CALL xc_functionals_expand(section2, section1)
@@ -239,9 +264,13 @@ CONTAINS
          ec_env%dispersion_env => dispersion_env
 
          ! Initialize Harris LS solver environment
-         NULLIFY(solver_section)
-         solver_section => section_vals_get_subs_vals(input, "DFT%ENERGY_CORRECTION%LS_SOLVER")
-         IF (ASSOCIATED(solver_section)) THEN
+         ec_env%use_ls_solver = .FALSE.
+         ec_env%use_ls_solver =  ( ec_env%ks_solver .EQ. ec_curvy_steps ) &
+                                 .OR. ( ec_env%ks_solver .EQ. ec_matrix_sign ) &
+                                 .OR. ( ec_env%ks_solver .EQ. ec_matrix_trs4 ) &
+                                 .OR. ( ec_env%ks_solver .EQ. ec_matrix_tc2 )
+
+         IF (ec_env%use_ls_solver) THEN
             CALL ec_ls_create(qs_env, ec_env%ls_env)
          END IF
 
@@ -250,16 +279,14 @@ CONTAINS
    END SUBROUTINE init_ec_env
 
 ! **************************************************************************************************
-!> \brief Initializes ec_env
+!> \brief Initializes linear scaling environment for LS based solver of 
+!>        Harris energy functional and parses input section
 !> \param qs_env ...
-!> \param ec_env ...
-!> \param qs_kind_set ...
-!> \param input ...
+!> \param ls_env The linear scaling environment  
+!> 
 !> \par History
-!>       2012.07 created [Martin Haeufel]
-!>       2018.01 TNADD correction {JGH]
-!>       2019.09 refactoring energy correction
-!> \author Martin Haeufel
+!>       2020.10 created [Fabian Belleflamme]
+!> \author Fabian Belleflamme
 ! **************************************************************************************************
    SUBROUTINE ec_ls_create(qs_env, ls_env)
       TYPE(qs_environment_type), POINTER                 :: qs_env
@@ -272,7 +299,7 @@ CONTAINS
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(molecule_type), DIMENSION(:), POINTER         :: molecule_set
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
-      TYPE(section_vals_type), POINTER                   :: input, solver_section
+      TYPE(section_vals_type), POINTER                   :: ec_section, input
 
       CALL timeset(routineN, handle)
 
@@ -295,49 +322,52 @@ CONTAINS
       ALLOCATE (ls_env%ls_mstruct%atom_to_molecule(ls_env%natoms))
       CALL molecule_of_atom(molecule_set, atom_to_mol=ls_env%ls_mstruct%atom_to_molecule)
 
-
       ls_env%do_transport = .FALSE.
       ls_env%do_pao = .FALSE.
       ls_env%ls_mstruct%do_pao = ls_env%do_pao
       ls_env%do_pexsi = .FALSE.
-
       ls_env%has_unit_metric = .FALSE.
 
-      ! ls_scf_init_read_write_input
-      ! XXX DEBUG 
-      ! Careful LS_SOLVER is currently for both Harris solver and response solver
-
-      solver_section => section_vals_get_subs_vals(input, "DFT%ENERGY_CORRECTION%LS_SOLVER")
-      CALL section_vals_val_get(solver_section, "EPS_FILTER", r_val=ls_env%eps_filter)
-      CALL section_vals_val_get(solver_section, "MU", r_val=mu)
-      CALL section_vals_val_get(solver_section, "FIXED_MU", l_val=ls_env%fixed_mu)
+      ec_section => section_vals_get_subs_vals(input, "DFT%ENERGY_CORRECTION")
+      CALL section_vals_val_get(ec_section, "EPS_FILTER", r_val=ls_env%eps_filter)
+      CALL section_vals_val_get(ec_section, "MU", r_val=mu)
+      CALL section_vals_val_get(ec_section, "FIXED_MU", l_val=ls_env%fixed_mu)
       ls_env%mu_spin = mu
-      CALL section_vals_val_get(solver_section, "S_PRECONDITIONER", i_val=ls_env%s_preconditioner_type)
-      CALL section_vals_val_get(solver_section, "MATRIX_CLUSTER_TYPE", i_val=ls_env%ls_mstruct%cluster_type)
-      CALL section_vals_val_get(solver_section, "SINGLE_PRECISION_MATRICES", l_val=ls_env%ls_mstruct%single_precision)
-      CALL section_vals_val_get(solver_section, "S_INVERSION", i_val=ls_env%s_inversion_type)
-      CALL section_vals_val_get(solver_section, "CHECK_S_INV", l_val=ls_env%check_s_inv)
-      CALL section_vals_val_get(solver_section, "REPORT_ALL_SPARSITIES", l_val=ls_env%report_all_sparsities)
-      CALL section_vals_val_get(solver_section, "SIGN_METHOD", i_val=ls_env%sign_method)
-      CALL section_vals_val_get(solver_section, "SIGN_ORDER", i_val=ls_env%sign_order)
-      CALL section_vals_val_get(solver_section, "DYNAMIC_THRESHOLD", l_val=ls_env%dynamic_threshold)
-      CALL section_vals_val_get(solver_section, "NON_MONOTONIC", l_val=ls_env%non_monotonic)
-      CALL section_vals_val_get(solver_section, "S_SQRT_METHOD", i_val=ls_env%s_sqrt_method)
-      CALL section_vals_val_get(solver_section, "S_SQRT_ORDER", i_val=ls_env%s_sqrt_order)
-!      CALL section_vals_val_get(solver_section, "EXTRAPOLATION_ORDER", i_val=ls_env%extrapolation_order)
-      CALL section_vals_val_get(solver_section, "EPS_LANCZOS", r_val=ls_env%eps_lanczos)
-      CALL section_vals_val_get(solver_section, "MAX_ITER_LANCZOS", i_val=ls_env%max_iter_lanczos)
+      CALL section_vals_val_get(ec_section, "S_PRECONDITIONER", i_val=ls_env%s_preconditioner_type)
+      CALL section_vals_val_get(ec_section, "MATRIX_CLUSTER_TYPE", i_val=ls_env%ls_mstruct%cluster_type)
+      CALL section_vals_val_get(ec_section, "SINGLE_PRECISION_MATRICES", l_val=ls_env%ls_mstruct%single_precision)
+      CALL section_vals_val_get(ec_section, "S_INVERSION", i_val=ls_env%s_inversion_type)
+      CALL section_vals_val_get(ec_section, "CHECK_S_INV", l_val=ls_env%check_s_inv)
+      CALL section_vals_val_get(ec_section, "REPORT_ALL_SPARSITIES", l_val=ls_env%report_all_sparsities)
+      CALL section_vals_val_get(ec_section, "SIGN_METHOD", i_val=ls_env%sign_method)
+      CALL section_vals_val_get(ec_section, "SIGN_ORDER", i_val=ls_env%sign_order)
+      CALL section_vals_val_get(ec_section, "DYNAMIC_THRESHOLD", l_val=ls_env%dynamic_threshold)
+      CALL section_vals_val_get(ec_section, "NON_MONOTONIC", l_val=ls_env%non_monotonic)
+      CALL section_vals_val_get(ec_section, "S_SQRT_METHOD", i_val=ls_env%s_sqrt_method)
+      CALL section_vals_val_get(ec_section, "S_SQRT_ORDER", i_val=ls_env%s_sqrt_order)
+      CALL section_vals_val_get(ec_section, "EPS_LANCZOS", r_val=ls_env%eps_lanczos)
+      CALL section_vals_val_get(ec_section, "MAX_ITER_LANCZOS", i_val=ls_env%max_iter_lanczos)
 
-      SELECT CASE (ls_env%s_inversion_type)
-      CASE (ls_s_inversion_sign_sqrt)
-         ls_env%needs_s_inv = .TRUE.
-         ls_env%use_s_sqrt = .TRUE.
-      CASE (ls_s_inversion_hotelling)
-         ls_env%needs_s_inv = .TRUE.
-         ls_env%use_s_sqrt = .FALSE.
-      CASE (ls_s_inversion_none)
+      SELECT CASE (qs_env%ec_env%ks_solver) 
+      CASE (ec_matrix_sign)
+         ! S inverse required for Sign matrix algorithm, 
+         ! calculated either by Hotelling or multiplying S matrix sqrt inv 
+         SELECT CASE (ls_env%s_inversion_type)
+         CASE (ls_s_inversion_sign_sqrt)
+            ls_env%needs_s_inv = .TRUE.
+            ls_env%use_s_sqrt = .TRUE.
+         CASE (ls_s_inversion_hotelling)
+            ls_env%needs_s_inv = .TRUE.
+            ls_env%use_s_sqrt = .FALSE.
+         CASE (ls_s_inversion_none)
+            ls_env%needs_s_inv = .FALSE.
+            ls_env%use_s_sqrt = .FALSE.
+         CASE DEFAULT
+            CPABORT("")
+         END SELECT
+      CASE (ec_matrix_trs4, ec_matrix_tc2, ec_curvy_steps)
          ls_env%needs_s_inv = .FALSE.
-         ls_env%use_s_sqrt = .FALSE.
+         ls_env%use_s_sqrt = .TRUE.
       CASE DEFAULT
          CPABORT("")
       END SELECT
@@ -349,7 +379,7 @@ CONTAINS
          ls_env%has_s_preconditioner = .TRUE.
       END SELECT
 
-      ! buffer for the history of matrices not needed here
+      ! buffer for the history of matrices, not needed here
       ls_env%extrapolation_order = 0
       ls_env%scf_history%nstore = 0 
       ls_env%scf_history%istore = 0
@@ -360,5 +390,155 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE ec_ls_create
+
+! **************************************************************************************************
+!> \brief Initializes linear scaling environment for LS based solver of 
+!>        Harris energy functional and parses input section
+!> \param qs_env ...
+!> \param ls_env The linear scaling environment  
+!> 
+!> \par History
+!>       2020.10 created [Fabian Belleflamme]
+!> \author Fabian Belleflamme
+! **************************************************************************************************
+   SUBROUTINE ec_write_input(ec_env, unit_nr)
+      TYPE(energy_correction_type), POINTER              :: ec_env
+      INTEGER, INTENT(IN)                                :: unit_nr
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'ec_write_input', routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: handle
+      TYPE(ls_scf_env_type), POINTER                     :: ls_env 
+
+      CALL timeset(routineN, handle)
+
+      WRITE (unit_nr, '()')
+      WRITE (unit_nr, '(T2,A,A,A)') REPEAT("-", 30), " Energy Correction ", REPEAT("-", 29)
+
+      ! Algorithm
+      SELECT CASE (ec_env%ks_solver)
+      CASE (ec_diagonalization)
+          WRITE (unit_nr, '(T2,A,T61,A20)') "Algorithm: ", "DIAGONALIZATION"
+      CASE (ec_ot_diag)
+          WRITE (unit_nr, '(T2,A,T61,A20)') "Algorithm: ", "OT DIAGONALIZATION"
+      CASE (ec_curvy_steps)
+          WRITE (unit_nr, '(T2,A,T61,A20)') "Algorithm: ", "CURVY_STEPS"
+          CALL cite_reference(Shao2003)
+      CASE (ec_matrix_sign)
+          WRITE (unit_nr, '(T2,A,T61,A20)') "Algorithm: ", "MATRIX_SIGN"
+      CASE (ec_matrix_trs4)
+          WRITE (unit_nr, '(T2,A,T61,A20)') "Algorithm: ", "TRS4"
+          CALL cite_reference(Niklasson2003)
+      CASE (ec_matrix_tc2)
+          WRITE (unit_nr, '(T2,A,T61,A20)') "Algorithm: ", "TC2"
+           CALL cite_reference(Niklasson2014)
+      END SELECT
+
+      ! Harris functional parameters
+      WRITE (unit_nr, '(T2,A,T61,E20.3)') "eps_default:", ec_env%eps_default
+
+      CALL uppercase(ec_env%basis)
+      SELECT CASE (ec_env%basis)
+      CASE ("ORBITAL")
+          WRITE (unit_nr, '(T2,A,T61,A20)') "Harris basis: ", "ORBITAL"
+      CASE ("PRIMITIVE")
+          WRITE (unit_nr, '(T2,A,T61,A20)') "Harris basis: ", "PRIMITIVE"
+      CASE ("HARRIS")
+          WRITE (unit_nr, '(T2,A,T61,A20)') "Harris Basis: ", "HARRIS"
+      END SELECT
+
+      ! MAO
+      WRITE (unit_nr, '(T2,A,T61,L20)') "MAO:", ec_env%mao
+      WRITE (unit_nr, '(T2,A,T61,I20)') "MAO_MAX_ITER:", ec_env%mao_max_iter
+      WRITE (unit_nr, '(T2,A,T61,E20.3)') "MAO_EPS_GRAD:", ec_env%mao_eps_grad
+      WRITE (unit_nr, '()')
+
+      ! Parameters depending on chosen algorithm to solve Harris functional
+      IF ( .NOT. ec_env%use_ls_solver) THEN
+
+         WRITE (unit_nr, '(T2,A)') "MO Solver"
+         WRITE (unit_nr, '()')
+
+         SELECT CASE (ec_env%ks_solver)
+         CASE (ec_diagonalization)
+
+            SELECT CASE (ec_env%factorization)
+            CASE (kg_cholesky)
+                WRITE (unit_nr, '(T2,A,T61,A20)') "Factorization: ", "CHOLESKY"
+            END SELECT
+
+         CASE (ec_ot_diag)
+
+            ! OT Diagonalization 
+            ! Initial guess : 1) block diagonal initial guess
+            !                 2) GS-density matrix (might require trafo if basis diff)
+
+            SELECT CASE (ec_env%ec_initial_guess)
+            CASE (ec_ot_block_dm)
+                WRITE (unit_nr, '(T2,A,T61,A20)') "OT Diag initial guess: ", "ATOMIC"
+            CASE (ec_ot_gs)
+                WRITE (unit_nr, '(T2,A,T61,A20)') "OT Diag initial guess: ", "GROUND STATE DM"
+            END SELECT
+
+         CASE DEFAULT
+               CPABORT("Unknown Diagonalization algorithm for Harris functional")
+         END SELECT
+
+      ELSE 
+
+         WRITE (unit_nr, '(T2,A)') "AO Solver"
+         WRITE (unit_nr, '()')
+
+         ls_env => ec_env%ls_env
+         WRITE (unit_nr, '(T2,A,T61,E20.3)') "eps_filter:", ls_env%eps_filter
+         WRITE (unit_nr, '(T2,A,T61,L20)') "fixed chemical potential (mu)", ls_env%fixed_mu
+         WRITE (unit_nr, '(T2,A,T61,L20)') "Computing inv(S):", ls_env%needs_s_inv
+         WRITE (unit_nr, '(T2,A,T61,L20)') "Computing sqrt(S):", ls_env%use_s_sqrt
+         WRITE (unit_nr, '(T2,A,T61,L20)') "Computing S preconditioner ", ls_env%has_s_preconditioner
+         WRITE (unit_nr, '(T2,A,T61,L20)') "has unit metric:", ls_env%has_unit_metric
+         WRITE (unit_nr, '(T2,A,T61,L20)') "Use single precision matrices", &
+               ls_env%ls_mstruct%single_precision
+
+         IF (ls_env%use_s_sqrt) THEN
+            SELECT CASE (ls_env%s_sqrt_method)
+            CASE (ls_s_sqrt_ns)
+               WRITE (unit_nr, '(T2,A,T61,A20)') "S sqrt method:", "NEWTONSCHULZ"
+            CASE (ls_s_sqrt_proot)
+               WRITE (unit_nr, '(T2,A,T61,A20)') "S sqrt method:", "PROOT"
+            CASE DEFAULT
+               CPABORT("Unknown sqrt method.")
+            END SELECT
+       
+            WRITE (unit_nr, '(T2,A,T61,I20)') "S sqrt order:", ls_env%s_sqrt_order
+
+         END IF
+
+         SELECT CASE (ls_env%s_preconditioner_type)
+         CASE (ls_s_preconditioner_none)
+            WRITE (unit_nr, '(T2,A,T61,A20)') "S preconditioner type ", "NONE"
+         CASE (ls_s_preconditioner_atomic)
+            WRITE (unit_nr, '(T2,A,T61,A20)') "S preconditioner type ", "ATOMIC"
+         CASE (ls_s_preconditioner_molecular)
+            WRITE (unit_nr, '(T2,A,T61,A20)') "S preconditioner type ", "MOLECULAR"
+         END SELECT
+
+         SELECT CASE (ls_env%ls_mstruct%cluster_type)
+         CASE (ls_cluster_atomic)
+            WRITE (unit_nr, '(T2,A,T61,A20)') "Cluster type", ADJUSTR("ATOMIC")
+         CASE (ls_cluster_molecular)
+            WRITE (unit_nr, '(T2,A,T61,A20)') "Cluster type", ADJUSTR("MOLECULAR")
+         CASE DEFAULT
+            CPABORT("Unknown cluster type")
+         END SELECT
+
+
+      END IF
+
+      WRITE (unit_nr, '(T2,A)') REPEAT("-", 79)
+      WRITE (unit_nr, '()')
+
+      CALL timestop(handle)
+
+   END SUBROUTINE ec_write_input
 
 END MODULE ec_environment

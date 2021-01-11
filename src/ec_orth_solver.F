@@ -132,8 +132,8 @@ MODULE ec_orth_solver
 CONTAINS
 
 ! **************************************************************************************************
-!> \brief      Preconidtioning in the AO-based CG linear response solver 
-!>             Mi * z_0 = r_0
+!> \brief      Preconditioning of the AO-based CG linear response solver 
+!>             M * z_0 = r_0
 !>             M(X) = [F,B], with B = [X,P]               
 !>             for M we need F and P in ortho basis
 !>             Returns z_0, the preconditioned residual in orthonormal basis
@@ -440,7 +440,6 @@ CONTAINS
                                                           norm_rr, tr_rz00
     REAL(KIND=dp)                                      :: min_shift, old_conv, shift
     TYPE(dbcsr_type)                                   :: matrix_tmp
-    LOGICAL                                            :: do_precond
     TYPE(linres_control_type), POINTER                 :: linres_control
     TYPE(section_vals_type), POINTER                   :: solver_section
 ! DEBUG
@@ -465,10 +464,7 @@ CONTAINS
 
     CALL dbcsr_get_info(matrix_s(1)%matrix, nfullrows_total=nao)
 
-    do_precond = .TRUE.
-!    do_precond = .FALSE.
-
-    solver_section => section_vals_get_subs_vals(qs_env%input, "DFT%ENERGY_CORRECTION%LS_SOLVER")
+    solver_section => section_vals_get_subs_vals(qs_env%input, "DFT%ENERGY_CORRECTION%RESPONSE_SOLVER")
     CALL section_vals_val_get(solver_section, "S_SQRT_METHOD", i_val=s_sqrt_method)
     CALL section_vals_val_get(solver_section, "S_SQRT_ORDER", i_val=s_sqrt_order)
     CALL section_vals_val_get(solver_section, "EPS_LANCZOS", r_val=eps_lanczos)
