@@ -1248,10 +1248,13 @@ CONTAINS
          CALL ec_diag_solver(qs_env, ksmat, smat, pmat, wmat)
       CASE (ec_ot_diag)
          CALL ec_ot_diag_solver(qs_env, ec_env, ksmat, smat, pmat, wmat)
-      CASE (ec_curvy_steps, ec_matrix_sign, ec_matrix_trs4, ec_matrix_tc2)
+      CASE (ec_matrix_sign, ec_matrix_trs4, ec_matrix_tc2)
          CALL ec_ls_init(qs_env)
          !CALL ec_ls_solver(qs_env, ec_env%ks_solver, ksmat, smat, pmat, wmat)
          CALL ec_ls_solver(qs_env, ec_ls_method = ec_env%ks_solver)
+      CASE (ec_curvy_steps)
+         CALL ec_ls_init(qs_env)
+         CALL ec_ls_curvy(qs_env)
       CASE DEFAULT
          CPASSERT(.FALSE.)
       END SELECT
@@ -2163,20 +2166,9 @@ CONTAINS
       TYPE(ls_scf_env_type), POINTER                     :: ls_env
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: wmat
       TYPE(dbcsr_type), ALLOCATABLE, DIMENSION(:)        :: matrix_ks_deviation
-      TYPE(qs_energy_type), POINTER                      :: energy
-      ! curvy
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_ao 
-      TYPE(qs_rho_type), POINTER                         :: rho
       REAL(KIND=dp)                                      :: trace
-      LOGICAL                                            :: check_convergence
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: p_rmpv
-      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
-      TYPE(cp_logger_type), POINTER                      :: logger
-      INTEGER, DIMENSION(2)                              :: nelectron_spin
-      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       INTEGER                                            :: iounit 
-      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
-      REAL(KIND=dp)                                      :: store_eps
+      TYPE(cp_logger_type), POINTER                      :: logger
 
       CALL timeset(routineN, handle)
 
@@ -2204,7 +2196,7 @@ CONTAINS
       ENDDO
 
       ! F = S^-1/2 * F * S^-1/2 
-      IF (ls_env%has_s_preconditioner) THEN
+      IF (ls_env%has_s_preconditioner .AND. .NOT. ls_env%curvy_steps) THEN
          DO ispin = 1, nspins
             CALL apply_matrix_preconditioner(ls_env%matrix_ks(ispin), "forward", &
                                              ls_env%matrix_bs_sqrt, ls_env%matrix_bs_sqrt_inv)
@@ -2212,59 +2204,6 @@ CONTAINS
             CALL dbcsr_filter(ls_env%matrix_ks(ispin), ls_env%eps_filter)
          END DO
       END IF
-
-
-      ! Curvy
-      IF (ls_env%curvy_steps) THEN
-
-         IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - CURVY_STEPS"
-
-         ! Get old energy
-         CALL get_qs_env(qs_env, energy=energy)
-
-         SELECT CASE (ec_env%ec_initial_guess)
-         CASE (ec_ot_block_dm)
-
-            IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - block"
-            CALL get_qs_env(qs_env, &
-                            atomic_kind_set=atomic_kind_set, &
-                            particle_set=particle_set, &
-                            nelectron_spin=nelectron_spin, &
-                            qs_kind_set=qs_kind_set)
-
-            p_rmpv => ec_env%matrix_p(:, 1)
-            CALL calculate_atomic_block_dm(p_rmpv, ec_env%matrix_s(1,1)%matrix, &
-                                           particle_set, atomic_kind_set, qs_kind_set, &
-                                           nspins, nelectron_spin, iounit, para_env)
-
-         CASE (ec_ot_gs)
-            IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - GS"
-            IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - copy gs to ec"
-
-            ! Get old density matrix
-            CALL get_qs_env(qs_env, rho = rho)
-            CALL qs_rho_get(rho, rho_ao = rho_ao)
-            DO ispin = 1, nspins
-               CALL dbcsr_copy(ec_env%matrix_p(ispin,1)%matrix, rho_ao(ispin)%matrix) 
-            END DO
-
-         CASE DEFAULT
-            CPABORT("Unknown inital guess for OT-Diagonalization (Harris functional)")
-         END SELECT
-
-         ! Bring P matrix from QS to LS form
-         IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - copy ec to ls"
-         DO ispin = 1, nspins
-            CALL matrix_qs_to_ls(matrix_ls = ls_env%matrix_p(ispin), &
-                                 matrix_qs = ec_env%matrix_p(ispin,1)%matrix, &
-                                 ls_mstruct = ls_env%ls_mstruct, &
-                                 covariant = .FALSE.)
-            CALL dbcsr_filter(ls_env%matrix_p(ispin), ls_env%eps_filter)
-         END DO
-
-      END IF
-
-      IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - Start solver"
 
       DO ispin = 1, nspins
          nelectron_spin_real = ls_env%nelectron_spin(ispin)
@@ -2315,29 +2254,10 @@ CONTAINS
 
          CASE (ec_curvy_steps)
 
-            IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - CURVY_STEPS Start"
-
-
-            IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - ec_env%matrix_p"
-            CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
-
-            IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - ls_env%matrix_p"
-            CALL dbcsr_print(ls_env%matrix_p(1))
-
-            ! Requires inital guess, i.e. ground-state DM
-            check_convergence = .TRUE.
-            store_eps = ls_env%eps_filter
-            ls_env%eps_filter = ec_env%eps_default
-            CALL dm_ls_curvy_optimization(ls_env, energy%total, check_convergence)
-            ls_env%eps_filter = store_eps
-
-            IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - CURVY_STEPS END"
-
          END SELECT
 
       END DO
 
-IF (.NOT. ls_env%curvy_steps) THEN
       ! de-orthonormalize
       IF (ls_env%has_s_preconditioner) THEN
          DO ispin = 1, nspins
@@ -2351,7 +2271,6 @@ IF (.NOT. ls_env%curvy_steps) THEN
 
       ! Closed-shell 
       IF (nspins == 1) CALL dbcsr_scale(ls_env%matrix_p(1), 2.0_dp)
-END IF
 
       IF (ls_env%report_all_sparsities) CALL post_scf_sparsities(ls_env)
 
@@ -2403,6 +2322,221 @@ END IF
       CALL timestop(handle)
 
    END SUBROUTINE ec_ls_solver
+
+! **************************************************************************************************
+!> \brief Solve KS equation using linear scaling methods
+!>        sign_matrix purification 
+!>        
+!> \param qs_env ...
+!> \param matrix_ks Kohn-Sham Matrix to be transformed into density matrix
+!> \param matrix_s Harris overlap matrix
+!> \param matrix_p Density matrix
+!> \par History
+!>      12.2019 created [JGH]
+!>      08.2020 refactoring [fbelle]
+!> \author Fabian Belleflamme
+! **************************************************************************************************
+
+   SUBROUTINE ec_ls_curvy(qs_env)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'ec_ls_curvy', routineP = moduleN//':'//routineN
+
+      INTEGER                                            :: handle, ispin, nelectron_spin_real,&
+                                                            nspins
+      INTEGER, DIMENSION(2)                              :: nmo
+      TYPE(cp_para_env_type), POINTER                    :: para_env
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(energy_correction_type), POINTER              :: ec_env
+      TYPE(ls_scf_env_type), POINTER                     :: ls_env
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: wmat
+      ! curvy
+      TYPE(qs_energy_type), POINTER                      :: energy
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_ao 
+      TYPE(qs_rho_type), POINTER                         :: rho
+      REAL(KIND=dp)                                      :: trace
+      LOGICAL                                            :: check_convergence
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: p_rmpv
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(cp_logger_type), POINTER                      :: logger
+      INTEGER, DIMENSION(2)                              :: nelectron_spin
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+      INTEGER                                            :: iounit 
+      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
+      REAL(KIND=dp)                                      :: store_eps
+
+      CALL timeset(routineN, handle)
+
+      logger => cp_get_default_logger()
+      iounit = cp_logger_get_default_unit_nr(logger)
+
+      NULLIFY (para_env)
+      CALL get_qs_env(qs_env, &
+                      dft_control = dft_control,&
+                      para_env = para_env)
+      CALL get_qs_env(qs_env, energy=energy)
+      nspins = dft_control%nspins
+      ec_env => qs_env%ec_env
+      ls_env => ec_env%ls_env
+
+      nmo = 0
+      CALL get_qs_env(qs_env=qs_env, nelectron_spin=nmo)
+      IF (nspins == 1) nmo(1) = nmo(1)/2
+      ls_env%homo_spin(:) = 0.0_dp
+      ls_env%lumo_spin(:) = 0.0_dp
+
+
+      ! curvy : no s preconditioner
+
+      ! bring back S^1/2
+      IF (ls_env%has_s_preconditioner) THEN
+         CALL apply_matrix_preconditioner(ls_env%matrix_s, "backward", &
+                                          ls_env%matrix_bs_sqrt, ls_env%matrix_bs_sqrt_inv)
+      ENDIF
+
+! s preconditioning only used for cheaper S^1/2 calculation, do not keep it for F or P
+!      ! F = S^-1/2 * F * S^-1/2 
+!      IF (ls_env%has_s_preconditioner) THEN
+!         DO ispin = 1, nspins
+!            CALL apply_matrix_preconditioner(ls_env%matrix_ks(ispin), "forward", &
+!                                             ls_env%matrix_bs_sqrt, ls_env%matrix_bs_sqrt_inv)
+!
+!            CALL dbcsr_filter(ls_env%matrix_ks(ispin), ls_env%eps_filter)
+!         END DO
+!      END IF
+
+
+      IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - CURVY_STEPS"
+
+      SELECT CASE (ec_env%ec_initial_guess)
+      CASE (ec_ot_block_dm)
+
+         IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - block"
+         CALL get_qs_env(qs_env, &
+                         atomic_kind_set=atomic_kind_set, &
+                         particle_set=particle_set, &
+                         nelectron_spin=nelectron_spin, &
+                         qs_kind_set=qs_kind_set)
+
+         p_rmpv => ec_env%matrix_p(:, 1)
+         CALL calculate_atomic_block_dm(p_rmpv, ec_env%matrix_s(1,1)%matrix, &
+                                        particle_set, atomic_kind_set, qs_kind_set, &
+                                        nspins, nelectron_spin, iounit, para_env)
+
+      CASE (ec_ot_gs)
+         IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - GS"
+         IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - copy gs to ec"
+
+         ! Get old density matrix
+         CALL get_qs_env(qs_env, rho = rho)
+         CALL qs_rho_get(rho, rho_ao = rho_ao)
+         DO ispin = 1, nspins
+            CALL dbcsr_copy(ec_env%matrix_p(ispin,1)%matrix, rho_ao(ispin)%matrix) 
+         END DO
+
+      CASE DEFAULT
+         CPABORT("Unknown inital guess for OT-Diagonalization (Harris functional)")
+      END SELECT
+
+      ! Bring P matrix from QS to LS form
+      IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - copy ec to ls"
+      DO ispin = 1, nspins
+         CALL matrix_qs_to_ls(matrix_ls = ls_env%matrix_p(ispin), &
+                              matrix_qs = ec_env%matrix_p(ispin,1)%matrix, &
+                              ls_mstruct = ls_env%ls_mstruct, &
+                              covariant = .FALSE.)
+         CALL dbcsr_filter(ls_env%matrix_p(ispin), ls_env%eps_filter)
+      END DO
+
+      IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - Start solver"
+
+      DO ispin = 1, nspins
+         nelectron_spin_real = ls_env%nelectron_spin(ispin)
+         IF (ls_env%nspins == 1) nelectron_spin_real = nelectron_spin_real/2
+
+
+         IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - CURVY_STEPS Start"
+
+         !IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - ec_env%matrix_p"
+         !CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
+         !IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - ls_env%matrix_p"
+         !CALL dbcsr_print(ls_env%matrix_p(1))
+
+         ! Requires inital guess, i.e. ground-state DM
+         check_convergence = .TRUE.
+
+         store_eps = ls_env%eps_filter
+         ls_env%eps_filter = ec_env%eps_default
+
+
+         CALL dm_ls_curvy_optimization(ls_env, energy%total, check_convergence)
+
+         ls_env%eps_filter = store_eps
+
+         IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - CURVY_STEPS END"
+
+      END DO
+
+!      ! de-orthonormalize
+!      IF (ls_env%has_s_preconditioner) THEN
+!         DO ispin = 1, nspins
+!            ! P = S^-1/2 * P_tilde * S^-1/2 (forward)
+!            CALL apply_matrix_preconditioner(ls_env%matrix_p(ispin), "forward", &
+!                                             ls_env%matrix_bs_sqrt, ls_env%matrix_bs_sqrt_inv)
+!
+!            CALL dbcsr_filter(ls_env%matrix_p(ispin), ls_env%eps_filter)
+!         END DO
+!      ENDIF
+!
+! closed shell also already done in curvy
+!      ! Closed-shell 
+!      IF (nspins == 1) CALL dbcsr_scale(ls_env%matrix_p(1), 2.0_dp)
+
+      IF (ls_env%report_all_sparsities) CALL post_scf_sparsities(ls_env)
+
+      ! ls_scf_dm_to_ks
+      ! Density matrix from LS to EC
+      DO ispin = 1, nspins
+         CALL matrix_ls_to_qs(matrix_qs = ec_env%matrix_p(ispin,1)%matrix, &
+                              matrix_ls = ls_env%matrix_p(ispin), &
+                              ls_mstruct = ls_env%ls_mstruct, &
+                              covariant = .FALSE.)
+      END DO
+
+      trace = 0.0_dp
+      CALL dbcsr_dot(ec_env%matrix_p(1, 1)%matrix, ec_env%matrix_s(1, 1)%matrix, trace)
+      IF(para_env%mepos==0) WRITE(*,*) 'Tr[PS] ', trace
+      CALL dbcsr_dot(ec_env%matrix_ks(1, 1)%matrix, ec_env%matrix_p(1, 1)%matrix, trace)
+      IF(para_env%mepos==0) WRITE(*,*) 'Tr[FP] ', trace
+
+      wmat => ec_env%matrix_w(:,1)
+      CALL calculate_w_matrix(wmat, ec_env%ls_env)
+
+      ! clean up
+      CALL dbcsr_release(ls_env%matrix_s)
+      IF (ls_env%has_s_preconditioner) THEN
+         CALL dbcsr_release(ls_env%matrix_bs_sqrt)
+         CALL dbcsr_release(ls_env%matrix_bs_sqrt_inv)
+      ENDIF
+      IF (ls_env%needs_s_inv) THEN
+         CALL dbcsr_release(ls_env%matrix_s_inv)
+      ENDIF
+      IF (ls_env%use_s_sqrt) THEN
+         CALL dbcsr_release(ls_env%matrix_s_sqrt)
+         CALL dbcsr_release(ls_env%matrix_s_sqrt_inv)
+      ENDIF
+
+      DO ispin = 1, SIZE(ls_env%matrix_ks)
+         CALL dbcsr_release(ls_env%matrix_ks(ispin))
+      ENDDO
+      DEALLOCATE (ls_env%matrix_ks)
+
+      ! Curvy
+      CALL deallocate_curvy_data(ls_env%curvy_data)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE ec_ls_curvy
 
 ! **************************************************************************************************
 !> \brief Use OT-diagonalziation to obtain density matrix from Harris Kohn-Sham matrix 
