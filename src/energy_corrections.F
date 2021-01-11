@@ -2168,8 +2168,18 @@ CONTAINS
       TYPE(qs_rho_type), POINTER                         :: rho
       REAL(KIND=dp)                                      :: trace
       LOGICAL                                            :: check_convergence
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: p_rmpv
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(cp_logger_type), POINTER                      :: logger
+      INTEGER, DIMENSION(2)                              :: nelectron_spin
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+      INTEGER                                            :: iounit 
+      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
 
       CALL timeset(routineN, handle)
+
+      logger => cp_get_default_logger()
+      iounit = cp_logger_get_default_unit_nr(logger)
 
       NULLIFY (para_env)
       CALL get_qs_env(qs_env, &
@@ -2207,19 +2217,33 @@ CONTAINS
 
          IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - CURVY_STEPS"
 
-         ! Get old energy
-         CALL get_qs_env(qs_env, energy=energy)
-         
-         ! Get old density matrix
-         CALL get_qs_env(qs_env, rho = rho)
-         CALL qs_rho_get(rho, rho_ao = rho_ao)
-         !DO ispin = 1, nspins
-         !   CALL dbcsr_copy(ls_env%matrix_p(ispin), rho_ao(ispin)%matrix) 
-         !END DO
+         SELECT CASE (ec_env%ec_initial_guess)
+         CASE (ec_ot_block_dm)
+
+            p_rmpv => ec_env%matrix_p(:, 1)
+            CALL calculate_atomic_block_dm(p_rmpv, ec_env%matrix_s(1,1)%matrix, &
+                                           particle_set, atomic_kind_set, qs_kind_set, &
+                                           nspins, nelectron_spin, iounit, para_env)
+
+         CASE (ec_ot_gs)
+
+            ! Get old energy
+            CALL get_qs_env(qs_env, energy=energy)
+            
+            ! Get old density matrix
+            CALL get_qs_env(qs_env, rho = rho)
+            CALL qs_rho_get(rho, rho_ao = rho_ao)
+            DO ispin = 1, nspins
+               CALL dbcsr_copy(ec_env%matrix_p(ispin,1)%matrix, rho_ao(ispin)%matrix) 
+            END DO
+
+         CASE DEFAULT
+            CPABORT("Unknown inital guess for OT-Diagonalization (Harris functional)")
+         END SELECT
 
          ! copy density matrix to ls env
          DO ispin = 1, nspins
-            CALL matrix_qs_to_ls(ls_env%matrix_p(ispin), rho_ao(ispin)%matrix, &
+            CALL matrix_qs_to_ls(ls_env%matrix_p(ispin), ec_env%matrix_p(ispin, 1)%matrix, &
                                  ls_env%ls_mstruct, covariant=.FALSE.)
             CALL dbcsr_filter(ls_env%matrix_p(ispin), ls_env%eps_filter)
          END DO
