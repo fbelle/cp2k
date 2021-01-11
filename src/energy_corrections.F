@@ -79,7 +79,8 @@ MODULE energy_corrections
                                               ls_scf_init_matrix_s
    USE dm_ls_scf_qs,                    ONLY: matrix_ls_create,&
                                               matrix_qs_to_ls,&
-                                              matrix_ls_to_qs
+                                              matrix_ls_to_qs,&
+                                              ls_scf_qs_atomic_guess
    USE dm_ls_scf_types,                 ONLY: ls_scf_env_type
    USE ec_efield_local,                 ONLY: ec_efield_integrals,&
                                               ec_efield_local_operator
@@ -2217,8 +2218,18 @@ CONTAINS
 
          IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - CURVY_STEPS"
 
+         ! Get old energy
+         CALL get_qs_env(qs_env, energy=energy)
+
          SELECT CASE (ec_env%ec_initial_guess)
          CASE (ec_ot_block_dm)
+
+            IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - block"
+            CALL get_qs_env(qs_env, &
+                            atomic_kind_set=atomic_kind_set, &
+                            particle_set=particle_set, &
+                            nelectron_spin=nelectron_spin, &
+                            qs_kind_set=qs_kind_set)
 
             p_rmpv => ec_env%matrix_p(:, 1)
             CALL calculate_atomic_block_dm(p_rmpv, ec_env%matrix_s(1,1)%matrix, &
@@ -2226,10 +2237,9 @@ CONTAINS
                                            nspins, nelectron_spin, iounit, para_env)
 
          CASE (ec_ot_gs)
+            IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - GS"
+            IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - copy gs to ec"
 
-            ! Get old energy
-            CALL get_qs_env(qs_env, energy=energy)
-            
             ! Get old density matrix
             CALL get_qs_env(qs_env, rho = rho)
             CALL qs_rho_get(rho, rho_ao = rho_ao)
@@ -2242,6 +2252,7 @@ CONTAINS
          END SELECT
 
          ! copy density matrix to ls env
+         IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - copy ec to ls"
          DO ispin = 1, nspins
             CALL matrix_qs_to_ls(ls_env%matrix_p(ispin), ec_env%matrix_p(ispin, 1)%matrix, &
                                  ls_env%ls_mstruct, covariant=.FALSE.)
@@ -2249,6 +2260,8 @@ CONTAINS
          END DO
 
       END IF
+
+      IF (para_env%mepos==0) WRITE(*,*) "ec_ls_solver - Start solver"
 
       DO ispin = 1, nspins
          nelectron_spin_real = ls_env%nelectron_spin(ispin)
@@ -2298,6 +2311,15 @@ CONTAINS
                     max_iter_lanczos = ls_env%max_iter_lanczos)
 
          CASE (ec_curvy_steps)
+
+            IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - CURVY_STEPS Start"
+
+
+            IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - ec_env%matrix_p"
+            CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
+
+            IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - ls_env%matrix_p"
+            CALL dbcsr_print(ls_env%matrix_p(1))
 
             ! Requires inital guess, i.e. ground-state DM
             check_convergence = .TRUE.
