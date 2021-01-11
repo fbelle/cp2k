@@ -48,6 +48,7 @@ MODULE input_cp2k_ls
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'input_cp2k_ls'
 
    PUBLIC :: create_ls_scf_section
+   PUBLIC :: create_ls_curvy_section 
 
 CONTAINS
 ! **************************************************************************************************

@@ -70,6 +70,8 @@ MODULE energy_corrections
    USE distribution_2d_types,           ONLY: distribution_2d_type
    USE dm_ls_scf,                       ONLY: calculate_w_matrix,&
                                               post_scf_sparsities 
+   USE dm_ls_scf_curvy,                 ONLY: deallocate_curvy_data,&
+                                              dm_ls_curvy_optimization
    USE dm_ls_scf_methods,               ONLY: apply_matrix_preconditioner,&
                                               density_matrix_sign,&
                                               density_matrix_tc2,&
@@ -2160,6 +2162,12 @@ CONTAINS
       TYPE(ls_scf_env_type), POINTER                     :: ls_env
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: wmat
       TYPE(dbcsr_type), ALLOCATABLE, DIMENSION(:)        :: matrix_ks_deviation
+      TYPE(qs_energy_type), POINTER                      :: energy
+      ! curvy
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_ao 
+      TYPE(qs_rho_type), POINTER                         :: rho
+      REAL(KIND=dp)                                      :: trace
+      LOGICAL                                            :: check_convergence
 
       CALL timeset(routineN, handle)
 
@@ -2191,6 +2199,24 @@ CONTAINS
 
             CALL dbcsr_filter(ls_env%matrix_ks(ispin), ls_env%eps_filter)
          END DO
+      END IF
+
+
+      ! Curvy
+      IF (ls_env%curvy_steps) THEN
+
+         IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - CURVY_STEPS"
+
+         ! Get old energy
+         CALL get_qs_env(qs_env, energy=energy)
+         
+         ! Get old density matrix
+         CALL get_qs_env(qs_env, rho = rho)
+         CALL qs_rho_get(rho, rho_ao = rho_ao)
+         DO ispin = 1, nspins
+            CALL dbcsr_copy(ls_env%matrix_p(ispin), rho_ao(ispin)%matrix) 
+         END DO
+
       END IF
 
       DO ispin = 1, nspins
@@ -2243,12 +2269,16 @@ CONTAINS
          CASE (ec_curvy_steps)
 
             ! Requires inital guess, i.e. ground-state DM
-            !CALL dm_ls_curvy_optimization(ls_env, energy_old, check_convergence)
+            check_convergence = .TRUE.
+            CALL dm_ls_curvy_optimization(ls_env, energy%total, check_convergence)
+
+            IF(para_env%mepos==0) WRITE(*,*) "ec_ls_solver - CURVY_STEPS END"
 
          END SELECT
 
       END DO
 
+IF (.NOT. ls_env%curvy_steps) THEN
       ! de-orthonormalize
       IF (ls_env%has_s_preconditioner) THEN
          DO ispin = 1, nspins
@@ -2262,6 +2292,7 @@ CONTAINS
 
       ! Closed-shell 
       IF (nspins == 1) CALL dbcsr_scale(ls_env%matrix_p(1), 2.0_dp)
+END IF
 
       IF (ls_env%report_all_sparsities) CALL post_scf_sparsities(ls_env)
 
@@ -2275,10 +2306,10 @@ CONTAINS
       END DO
 
 !      trace = 0.0_dp
-!      CALL dbcsr_dot(ec_env%matrix_p(1, 1)%matrix, ec_env%matrix_s(1, 1)%matrix, trace)
-!      IF(para_env%mepos==0) WRITE(*,*) 'Tr[PS] ', trace
-!      CALL dbcsr_dot(ec_env%matrix_ks(1, 1)%matrix, ec_env%matrix_p(1, 1)%matrix, trace)
-!      IF(para_env%mepos==0) WRITE(*,*) 'Tr[FP] ', trace
+      CALL dbcsr_dot(ec_env%matrix_p(1, 1)%matrix, ec_env%matrix_s(1, 1)%matrix, trace)
+      IF(para_env%mepos==0) WRITE(*,*) 'Tr[PS] ', trace
+      CALL dbcsr_dot(ec_env%matrix_ks(1, 1)%matrix, ec_env%matrix_p(1, 1)%matrix, trace)
+      IF(para_env%mepos==0) WRITE(*,*) 'Tr[FP] ', trace
 
       wmat => ec_env%matrix_w(:,1)
       CALL calculate_w_matrix(wmat, ec_env%ls_env)
@@ -2306,6 +2337,9 @@ CONTAINS
          CALL dbcsr_release(matrix_ks_deviation(ispin))
       ENDDO
       DEALLOCATE (matrix_ks_deviation)
+
+      ! Curvy
+      CALL deallocate_curvy_data(ls_env%curvy_data)
 
       CALL timestop(handle)
 

@@ -299,7 +299,7 @@ CONTAINS
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(molecule_type), DIMENSION(:), POINTER         :: molecule_set
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
-      TYPE(section_vals_type), POINTER                   :: ec_section, input
+      TYPE(section_vals_type), POINTER                   :: curvy_section, ec_section, input
 
       CALL timeset(routineN, handle)
 
@@ -348,6 +348,16 @@ CONTAINS
       CALL section_vals_val_get(ec_section, "EPS_LANCZOS", r_val=ls_env%eps_lanczos)
       CALL section_vals_val_get(ec_section, "MAX_ITER_LANCZOS", i_val=ls_env%max_iter_lanczos)
 
+      ! curvy
+      curvy_section => section_vals_get_subs_vals(ec_section, "CURVY_STEPS")
+      CALL section_vals_get(curvy_section, explicit=ls_env%curvy_steps)
+      CALL section_vals_val_get(curvy_section, "LINE_SEARCH", i_val=ls_env%curvy_data%line_search_type)
+      CALL section_vals_val_get(curvy_section, "N_BCH_HISTORY", i_val=ls_env%curvy_data%n_bch_hist)
+      CALL section_vals_val_get(curvy_section, "MIN_HESSIAN_SHIFT", r_val=ls_env%curvy_data%min_shift)
+      CALL section_vals_val_get(curvy_section, "FILTER_FACTOR", r_val=ls_env%curvy_data%filter_factor)
+      CALL section_vals_val_get(curvy_section, "FILTER_FACTOR_SCALE", r_val=ls_env%curvy_data%scale_filter)
+      CALL section_vals_val_get(curvy_section, "MIN_FILTER", r_val=ls_env%curvy_data%min_filter)
+
       SELECT CASE (qs_env%ec_env%ks_solver) 
       CASE (ec_matrix_sign)
          ! S inverse required for Sign matrix algorithm, 
@@ -378,6 +388,11 @@ CONTAINS
       CASE DEFAULT
          ls_env%has_s_preconditioner = .TRUE.
       END SELECT
+
+      IF (ls_env%curvy_steps .AND. ls_env%has_s_preconditioner) &
+         CPABORT("S Preconditioning not implemented in combination with CURVY_STEPS.")
+      IF (ls_env%curvy_steps .AND. .NOT. ls_env%use_s_sqrt) &
+         CPABORT("CURVY_STEPS requires the use of the sqrt inversion.")
 
       ! buffer for the history of matrices, not needed here
       ls_env%extrapolation_order = 0

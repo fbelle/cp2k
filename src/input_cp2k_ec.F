@@ -23,6 +23,7 @@ MODULE input_cp2k_ec
         ls_s_sqrt_ns, ls_s_sqrt_proot, ls_scf_sign_ns, ls_scf_sign_proot, ot_precond_full_all, &
         ot_precond_full_kinetic, ot_precond_full_single,  ot_precond_full_single_inverse, &
         ot_precond_none, ot_precond_s_inverse, precond_mlp
+   USE input_cp2k_ls,                   ONLY: create_ls_curvy_section
    USE input_cp2k_xc,                   ONLY: create_xc_section
    USE input_keyword_types,             ONLY: keyword_create,&
                                               keyword_release,&
@@ -81,6 +82,12 @@ CONTAINS
       ! add a section for solver keywords
       NULLIFY (subsection)
       CALL create_ec_solver_section(subsection)
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+
+      ! add a section for solver keywords
+      NULLIFY (subsection)
+      CALL create_ls_curvy_section(subsection)
       CALL section_add_subsection(section, subsection)
       CALL section_release(subsection)
 
