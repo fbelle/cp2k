@@ -1069,10 +1069,14 @@ MODULE input_constants
                                                ec_ot_diag = 1006
    INTEGER, PARAMETER, PUBLIC               :: ec_functional_harris = 2001
 
-   ! Response solver for energy correction
-   INTEGER, PARAMETER, PUBLIC               :: ec_mo_solver = 1, &
-                                               ec_ls_solver = 2
 
+   ! response solver for energy correction
+   integer, parameter, public               :: ec_ot_block_dm = 1, &
+                                               ec_ot_gs = 2
+
+   ! response solver for energy correction
+   integer, parameter, public               :: ec_mo_solver = 1, &
+                                               ec_ls_solver = 2
 
    ! swarm parameters
    INTEGER, PARAMETER, PUBLIC               :: swarm_do_glbopt = 1

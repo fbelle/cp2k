@@ -56,8 +56,10 @@ MODULE ec_env_types
       INTEGER                                          :: energy_functional
       INTEGER                                          :: ks_solver
       INTEGER                                          :: factorization
+      INTEGER                                          :: ec_initial_guess
       REAL(KIND=dp)                                    :: eps_default
       LOGICAL                                          :: should_update
+      LOGICAL                                          :: use_ls_solver
       ! basis set
       CHARACTER(len=20)                                :: basis
       LOGICAL                                          :: mao

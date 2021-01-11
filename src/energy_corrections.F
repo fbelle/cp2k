@@ -70,8 +70,7 @@ MODULE energy_corrections
    USE distribution_2d_types,           ONLY: distribution_2d_type
    USE dm_ls_scf,                       ONLY: calculate_w_matrix,&
                                               post_scf_sparsities 
-   USE dm_ls_scf_methods,               ONLY: compute_matrix_preconditioner,&
-                                              apply_matrix_preconditioner,&
+   USE dm_ls_scf_methods,               ONLY: apply_matrix_preconditioner,&
                                               density_matrix_sign,&
                                               density_matrix_tc2,&
                                               density_matrix_trs4,&
@@ -83,6 +82,7 @@ MODULE energy_corrections
    USE ec_efield_local,                 ONLY: ec_efield_integrals,&
                                               ec_efield_local_operator
    USE ec_env_types,                    ONLY: energy_correction_type
+   USE ec_environment,                  ONLY: ec_write_input
    USE external_potential_types,        ONLY: get_potential,&
                                               gth_potential_type,&
                                               sgp_potential_type
@@ -92,7 +92,9 @@ MODULE energy_corrections
                                               ec_matrix_sign,&
                                               ec_matrix_tc2,&
                                               ec_matrix_trs4,&
+                                              ec_ot_block_dm,&
                                               ec_ot_diag,&
+                                              ec_ot_gs,&
                                               ls_s_inversion_sign_sqrt,&
                                               ls_s_inversion_hotelling,&
                                               ls_s_inversion_none,&
@@ -192,6 +194,7 @@ MODULE energy_corrections
    USE response_solver,                 ONLY: ks_ref_potential,&
                                               response_calculation,&
                                               response_force
+   USE string_utilities,                ONLY: uppercase
    USE task_list_methods,               ONLY: generate_qs_task_list
    USE task_list_types,                 ONLY: allocate_task_list,&
                                               deallocate_task_list
@@ -252,6 +255,13 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
+      logger => cp_get_default_logger()
+      IF (logger%para_env%ionode) THEN
+         unit_nr = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
+      ELSE
+         unit_nr = -1
+      ENDIF
+
       ! Check for energy correction
       IF (qs_env%energy_correction) THEN
          NULLIFY (ec_env)
@@ -262,13 +272,6 @@ CONTAINS
 
          my_calc_forces = .FALSE.
          IF (PRESENT(calculate_forces)) my_calc_forces = calculate_forces
-
-         logger => cp_get_default_logger()
-         IF (logger%para_env%ionode) THEN
-            unit_nr = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
-         ELSE
-            unit_nr = -1
-         ENDIF
 
          IF (ec_env%should_update) THEN
             ec_env%etotal = 0.0_dp
@@ -301,10 +304,15 @@ CONTAINS
             CALL zero_qs_force(ks_force)
 !--------------------
          ELSE
+            !IF (unit_nr > 0) THEN
+            !   WRITE (unit_nr, '(T2,A,A,A,A,A)') "!", REPEAT("-", 29), &
+            !      " Energy Correction ", REPEAT("-", 29), "!"
+            !END IF
+
             IF (unit_nr > 0) THEN
-               WRITE (unit_nr, '(T2,A,A,A,A,A)') "!", REPEAT("-", 29), &
-                  " Energy Correction ", REPEAT("-", 29), "!"
+               CALL ec_write_input(ec_env, unit_nr)
             END IF
+
          END IF
 
          CALL get_qs_env(qs_env, energy=energy)
@@ -689,7 +697,7 @@ CONTAINS
       logger => cp_get_default_logger()
       iounit = cp_logger_get_default_unit_nr(logger)
 
-      IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "ec_build_core_hamiltonian_force - START"
+!      IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "ec_build_core_hamiltonian_force - START"
 
       calculate_forces = .TRUE.
 
@@ -1138,7 +1146,7 @@ CONTAINS
          fodeb(1:3) = ftot(1:3, 1)
          DEALLOCATE (ftot)
          CALL mp_sum(fodeb, para_env%group)
-         IF (iounit > 0) WRITE (iounit, "(T3,A,T30,3F16.8)") "DEBUG:: Force Explicit", fodeb
+         IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Force Explicit", fodeb
       END IF
 
       DEALLOCATE (v_rspace)
@@ -1688,136 +1696,6 @@ CONTAINS
 !   END SUBROUTINE ec_ls_solver
 
 ! **************************************************************************************************
-!> \brief compute for a block positive definite matrix s (bs)
-!>        the sqrt(bs) and inv(sqrt(bs))
-!> \param matrix_s ...
-!> \param preconditioner_type ...
-!> \param ls_mstruct ...
-!> \param matrix_bs_sqrt ...
-!> \param matrix_bs_sqrt_inv ...
-!> \param threshold ...
-!> \param order ...
-!> \param eps_lanczos ...
-!> \param max_iter_lanczos ...
-!> \par History
-!>       2010.10 created [Joost VandeVondele]
-!> \author Joost VandeVondele
-! **************************************************************************************************
-!   SUBROUTINE compute_matrix_preconditioner(matrix_s, preconditioner_type, &
-!                                            matrix_bs_sqrt, matrix_bs_sqrt_inv, threshold, order, eps_lanczos, max_iter_lanczos)
-!
-!      TYPE(dbcsr_type), INTENT(INOUT)                    :: matrix_s
-!      INTEGER                                            :: preconditioner_type
-!      TYPE(dbcsr_type), INTENT(INOUT)                    :: matrix_bs_sqrt, matrix_bs_sqrt_inv
-!      REAL(KIND=dp)                                      :: threshold
-!      INTEGER                                            :: order
-!      REAL(KIND=dp)                                      :: eps_lanczos
-!      INTEGER                                            :: max_iter_lanczos
-!
-!      CHARACTER(LEN=*), PARAMETER :: routineN = 'compute_matrix_preconditioner', &
-!         routineP = moduleN//':'//routineN
-!
-!      INTEGER                                            :: datatype, handle, iblock_col, iblock_row
-!      REAL(dp), DIMENSION(:, :), POINTER                 :: block_dp
-!      TYPE(dbcsr_iterator_type)                          :: iter
-!      TYPE(dbcsr_type)                                   :: matrix_bs
-!
-!      CALL timeset(routineN, handle)
-!
-!      datatype = dbcsr_get_data_type(matrix_s) ! could be single or double precision
-!
-!      ! first generate a block diagonal copy of s
-!      CALL dbcsr_create(matrix_bs, template=matrix_s)
-!
-!      SELECT CASE (preconditioner_type)
-!      CASE (ls_s_preconditioner_none)
-!      CASE (ls_s_preconditioner_atomic, ls_s_preconditioner_molecular)
-!         CALL dbcsr_iterator_start(iter, matrix_s)
-!         DO WHILE (dbcsr_iterator_blocks_left(iter))
-!            CALL dbcsr_iterator_next_block(iter, iblock_row, iblock_col, block_dp)
-!
-!            ! do we need the block ?
-!            ! this depends on the preconditioner, but also the matrix clustering method employed
-!            ! for a clustered matrix, right now, we assume that atomic and molecular preconditioners
-!            ! are actually the same, and only require that the diagonal blocks (clustered) are present
-!
-!            IF (iblock_row == iblock_col) THEN
-!               CALL dbcsr_put_block(matrix=matrix_bs, row=iblock_row, col=iblock_col, block=block_dp)
-!            ENDIF
-!
-!         ENDDO
-!         CALL dbcsr_iterator_stop(iter)
-!      END SELECT
-!
-!      CALL dbcsr_finalize(matrix_bs)
-!
-!      SELECT CASE (preconditioner_type)
-!      CASE (ls_s_preconditioner_none)
-!         ! for now make it a simple identity matrix
-!         CALL dbcsr_copy(matrix_bs_sqrt, matrix_bs)
-!         CALL dbcsr_set(matrix_bs_sqrt, 0.0_dp)
-!         CALL dbcsr_add_on_diag(matrix_bs_sqrt, 1.0_dp)
-!
-!         ! for now make it a simple identity matrix
-!         CALL dbcsr_copy(matrix_bs_sqrt_inv, matrix_bs)
-!         CALL dbcsr_set(matrix_bs_sqrt_inv, 0.0_dp)
-!         CALL dbcsr_add_on_diag(matrix_bs_sqrt_inv, 1.0_dp)
-!      CASE (ls_s_preconditioner_atomic, ls_s_preconditioner_molecular)
-!         CALL dbcsr_copy(matrix_bs_sqrt, matrix_bs)
-!         CALL dbcsr_copy(matrix_bs_sqrt_inv, matrix_bs)
-!         ! XXXXXXXXXXX
-!         ! XXXXXXXXXXX the threshold here could be done differently,
-!         ! XXXXXXXXXXX using eps_filter is reducing accuracy for no good reason, this is cheap
-!         ! XXXXXXXXXXX
-!         CALL matrix_sqrt_Newton_Schulz(matrix_bs_sqrt, matrix_bs_sqrt_inv, matrix_bs, &
-!                                        threshold=MIN(threshold, 1.0E-10_dp), order=order, &
-!                                        eps_lanczos=eps_lanczos, max_iter_lanczos=max_iter_lanczos)
-!      END SELECT
-!
-!      CALL dbcsr_release(matrix_bs)
-!
-!      CALL timestop(handle)
-!
-!   END SUBROUTINE compute_matrix_preconditioner
-
-! **************************************************************************************************
-!> \brief performs a tranformation of a matrix back to/into orthonormal basis
-!>        in case of P a scaling of 0.5 has to be applied for closed shell case
-!> \param matrix       matrix to be transformed
-!> \param matrix_trafo transformation matrix
-!> \param eps_filter   filtering threshold for sparse matrices
-!> \par History
-!>       2012.05 created [Florian Schiffmann]
-!> \author Florian Schiffmann
-!>
-! **************************************************************************************************
-
-   SUBROUTINE transform_m_orth(matrix, matrix_trafo, eps_filter)
-      TYPE(dbcsr_type)                                   :: matrix
-      TYPE(dbcsr_type)                                   :: matrix_trafo
-      REAL(KIND=dp)                                      :: eps_filter
-
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'transform_matrix_orth', &
-         routineP = moduleN//':'//routineN
-
-      INTEGER                                            :: handle
-      TYPE(dbcsr_type)                                   :: matrix_work
-
-      CALL timeset(routineN, handle)
-
-      CALL dbcsr_create(matrix_work, template=matrix, matrix_type=dbcsr_type_no_symmetry)
-
-      CALL dbcsr_multiply("N", "N", 1.0_dp, matrix, matrix_trafo, &
-                          0.0_dp, matrix_work, filter_eps=eps_filter)
-      CALL dbcsr_multiply("N", "N", 1.0_dp, matrix_trafo, matrix_work, &
-                          0.0_dp, matrix, filter_eps=eps_filter, retain_sparsity=.TRUE.)
-
-      CALL dbcsr_release(matrix_work)
-      CALL timestop(handle)
-
-   END SUBROUTINE
-
-! **************************************************************************************************
 !> \brief Calculate the energy correction
 !> \param ec_env ...
 !> \param unit_nr ...
@@ -1841,7 +1719,7 @@ CONTAINS
          DO ispin = 1, nspins
 
             CALL dbcsr_dot(ec_env%matrix_p(ispin, 1)%matrix, ec_env%matrix_s(1, 1)%matrix, trace)
-            IF (unit_nr > 0) WRITE (unit_nr, '(T2,A,T16,F16.10)') 'Tr[PS] ', trace
+            IF (unit_nr > 0) WRITE (unit_nr, '(T3,A,T65,F16.10)') 'Tr[PS] ', trace
 
             CALL dbcsr_dot(ec_env%matrix_ks(ispin, 1)%matrix, ec_env%matrix_p(ispin, 1)%matrix, trace)
             eband = eband + trace
@@ -1849,12 +1727,12 @@ CONTAINS
          ec_env%eband = eband + ec_env%efield_nuclear
          ec_env%etotal = ec_env%eband + ec_env%ehartree + ec_env%exc - ec_env%vhxc + ec_env%edispersion
          IF (unit_nr > 0) THEN
-            WRITE (unit_nr, '(T3,A,T65,F25.10)') "Eband    ", ec_env%eband
-            WRITE (unit_nr, '(T3,A,T65,F25.10)') "Ehartree ", ec_env%ehartree
-            WRITE (unit_nr, '(T3,A,T65,F25.10)') "Exc      ", ec_env%exc
-            WRITE (unit_nr, '(T3,A,T65,F25.10)') "Evhxc    ", ec_env%vhxc
-            WRITE (unit_nr, '(T3,A,T65,F25.10)') "Edisp    ", ec_env%edispersion
-            WRITE (unit_nr, '(T3,A,T65,F25.10)') "Etotal Harris Functional   ", ec_env%etotal
+            WRITE (unit_nr, '(T3,A,T65,F16.10)') "Eband    ", ec_env%eband
+            WRITE (unit_nr, '(T3,A,T65,F16.10)') "Ehartree ", ec_env%ehartree
+            WRITE (unit_nr, '(T3,A,T65,F16.10)') "Exc      ", ec_env%exc
+            WRITE (unit_nr, '(T3,A,T65,F16.10)') "Evhxc    ", ec_env%vhxc
+            WRITE (unit_nr, '(T3,A,T65,F16.10)') "Edisp    ", ec_env%edispersion
+            WRITE (unit_nr, '(T3,A,T65,F16.10)') "Etotal Harris Functional   ", ec_env%etotal
          END IF
 
       CASE DEFAULT
@@ -2156,7 +2034,7 @@ CONTAINS
 
 ! **************************************************************************************************
 
-! New lnear scaling Harris solver
+! New linear scaling Harris solver
 
 ! **************************************************************************************************
 
@@ -2175,24 +2053,17 @@ CONTAINS
          routineP = moduleN//':'//routineN
 
       INTEGER                                            :: handle, ispin, nspins
-      TYPE(cp_para_env_type), POINTER                    :: para_env
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(energy_correction_type), POINTER              :: ec_env
       TYPE(ls_scf_env_type), POINTER                     :: ls_env
-      REAL (KIND=dp)                                     :: eps_store
 
       CALL timeset(routineN, handle)
 
-      CALL get_qs_env(qs_env,para_env=para_env)
       CALL get_qs_env(qs_env=qs_env, &
                       dft_control=dft_control,&
                       ec_env=ec_env)
       nspins = dft_control%nspins
       ls_env => ec_env%ls_env
-
-!-----------------------------------------------
-      ! LS_SCF_INIT_SCF ENVIRONMENT
-!-----------------------------------------------
 
       ! create the matrix template for use in the ls procedures
       CALL matrix_ls_create(matrix_ls=ls_env%matrix_s, matrix_qs=ec_env%matrix_s(1,1)%matrix, &
@@ -2217,14 +2088,8 @@ CONTAINS
                            matrix_type=dbcsr_type_no_symmetry)
       ENDDO
 
-      ! contains eps_filter from LS_SOLVER section (for response calculation)
-      eps_store = ls_env%eps_filter
-      ls_env%eps_filter = ec_env%eps_default
-
       ! Set up S matrix and needed functions of S
-      CALL ls_scf_init_matrix_s(ec_env%matrix_s(1,1)%matrix, ec_env%ls_env)
-
-      ls_env%eps_filter = eps_store
+      CALL ls_scf_init_matrix_s(ec_env%matrix_s(1,1)%matrix, ls_env)
 
       ! Bring KS matrix from QS to LS form
       ! EC KS-matrix already calculated
@@ -2248,7 +2113,8 @@ CONTAINS
 !> \param matrix_s Harris overlap matrix
 !> \param matrix_p Density matrix
 !> \par History
-!>      12.2019 created [fbelle]
+!>      12.2019 created [JGH]
+!>      08.2020 refactoring [fbelle]
 !> \author Fabian Belleflamme
 ! **************************************************************************************************
 
@@ -2261,12 +2127,12 @@ CONTAINS
       INTEGER                                            :: handle, ispin, nelectron_spin_real,&
                                                             nspins
       INTEGER, DIMENSION(2)                              :: nmo
-      REAL(KIND=dp)                                      :: eps_filter, threshold
       TYPE(cp_para_env_type), POINTER                    :: para_env
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(energy_correction_type), POINTER              :: ec_env
       TYPE(ls_scf_env_type), POINTER                     :: ls_env
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: wmat
+      TYPE(dbcsr_type), ALLOCATABLE, DIMENSION(:)        :: matrix_ks_deviation
 
       CALL timeset(routineN, handle)
 
@@ -2274,9 +2140,8 @@ CONTAINS
       CALL get_qs_env(qs_env, &
                       dft_control = dft_control,&
                       para_env = para_env)
-      ec_env => qs_env%ec_env
-      eps_filter = ec_env%eps_default
       nspins = dft_control%nspins
+      ec_env => qs_env%ec_env
       ls_env => ec_env%ls_env
 
       nmo = 0
@@ -2285,15 +2150,11 @@ CONTAINS
       ls_env%homo_spin(:) = 0.0_dp
       ls_env%lumo_spin(:) = 0.0_dp
 
-      ALLOCATE (matrix_ks_deviation(nspin))
+      ALLOCATE (matrix_ks_deviation(nspins))
       DO ispin = 1, nspins
          CALL dbcsr_create(matrix_ks_deviation(ispin), template=ls_env%matrix_ks(ispin))
          CALL dbcsr_set(matrix_ks_deviation(ispin), 0.0_dp)
       ENDDO
-
-      ! Avoid too small threshold for inversion
-      !threshold = 1.0E-6_dp
-      threshold = eps_filter 
 
       ! F = S^-1/2 * F * S^-1/2 
       IF (ls_env%has_s_preconditioner) THEN
@@ -2301,21 +2162,18 @@ CONTAINS
             CALL apply_matrix_preconditioner(ls_env%matrix_ks(ispin), "forward", &
                                              ls_env%matrix_bs_sqrt, ls_env%matrix_bs_sqrt_inv)
 
-            CALL dbcsr_filter(ls_env%matrix_ks(ispin), eps_filter)
+            CALL dbcsr_filter(ls_env%matrix_ks(ispin), ls_env%eps_filter)
          END DO
       END IF
 
-
-
-
       DO ispin = 1, nspins
-         !nelectron = nmo(ispin)
          nelectron_spin_real = ls_env%nelectron_spin(ispin)
          IF (ls_env%nspins == 1) nelectron_spin_real = nelectron_spin_real/2
 
          SELECT CASE (ec_ls_method)
          CASE (ec_matrix_sign)
-            CALL density_matrix_sign(ls_env%matrix_p(ispin), &     ! ok
+
+            CALL density_matrix_sign(ls_env%matrix_p(ispin), &            ! ok
                                      ls_env%mu_spin(ispin), &             ! ok
                                      ls_env%fixed_mu, &                   ! ok
                                      ls_env%sign_method, &                ! ok
@@ -2323,41 +2181,32 @@ CONTAINS
                                      ls_env%matrix_ks(ispin), &           ! ok
                                      ls_env%matrix_s, &                   ! ok
                                      ls_env%matrix_s_inv, &               ! ok
-                                     !nelectron, &                        !ok
                                      nelectron_spin_real,&
-                                     eps_filter)                          ! ok
+                                     ec_env%eps_default)                  ! ok
 
          CASE (ec_matrix_trs4)
 
             CALL density_matrix_trs4( &
-                    ls_env%matrix_p(ispin), &                !ok
-                    ls_env%matrix_ks(ispin), &               !ok
-                    ls_env%matrix_s_sqrt_inv, &                     !ok
-                    !nelectron, &                                    !ok
+                    ls_env%matrix_p(ispin), &
+                    ls_env%matrix_ks(ispin), &
+                    ls_env%matrix_s_sqrt_inv, &
                     nelectron_spin_real,&
-                    eps_filter, &                                   !ok
-                    !threshold, &                                   !ok
-                    !e_homo(ispin), &                                !ok
-                    !e_lumo(ispin), &                                !ok
+                    ec_env%eps_default, &
                     ls_env%homo_spin(ispin),&
                     ls_env%lumo_spin(ispin),&
-                    ls_env%mu_spin(ispin), &                               !ok
+                    ls_env%mu_spin(ispin),&
                     matrix_ks_deviation=matrix_ks_deviation(ispin), &
-                    dynamic_threshold = ls_env%dynamic_threshold, &        !ok
-                    eps_lanczos = ls_env%eps_lanczos, &                    !ok
-                    max_iter_lanczos = ls_env%max_iter_lanczos)            !ok
+                    dynamic_threshold = ls_env%dynamic_threshold, &
+                    eps_lanczos = ls_env%eps_lanczos, &
+                    max_iter_lanczos = ls_env%max_iter_lanczos)
 
          CASE (ec_matrix_tc2)
             CALL density_matrix_tc2( &
                     ls_env%matrix_p(ispin), &
                     ls_env%matrix_ks(ispin), &
                     ls_env%matrix_s_sqrt_inv, &
-                    !nelectron, &
-                    !nelectron, &                                    !ok
                     nelectron_spin_real,&
-                    eps_filter, &
-                    !e_homo(ispin), &
-                    !e_lumo(ispin), &
+                    ec_env%eps_default, &
                     ls_env%homo_spin(ispin),&
                     ls_env%lumo_spin(ispin),&
                     non_monotonic = ls_env%non_monotonic, &
@@ -2365,6 +2214,9 @@ CONTAINS
                     max_iter_lanczos = ls_env%max_iter_lanczos)
 
          CASE (ec_curvy_steps)
+
+            ! Requires inital guess, i.e. ground-state DM
+            !CALL dm_ls_curvy_optimization(ls_env, energy_old, check_convergence)
 
          END SELECT
 
@@ -2377,15 +2229,14 @@ CONTAINS
             CALL apply_matrix_preconditioner(ls_env%matrix_p(ispin), "forward", &
                                              ls_env%matrix_bs_sqrt, ls_env%matrix_bs_sqrt_inv)
 
-            CALL dbcsr_filter(ls_env%matrix_p(ispin), eps_filter)
+            CALL dbcsr_filter(ls_env%matrix_p(ispin), ls_env%eps_filter)
          END DO
       ENDIF
 
       ! Closed-shell 
       IF (nspins == 1) CALL dbcsr_scale(ls_env%matrix_p(1), 2.0_dp)
 
-!      CALL post_ec_ls_sparsities(qs_env, eps_filter, ec_env, ls_env%needs_s_inv, use_s_sqrt)
-      CALL post_scf_sparsities(ls_env)
+      IF (ls_env%report_all_sparsities) CALL post_scf_sparsities(ls_env)
 
       ! ls_scf_dm_to_ks
       ! Density matrix from LS to EC
@@ -2434,9 +2285,17 @@ CONTAINS
    END SUBROUTINE ec_ls_solver
 
 ! **************************************************************************************************
-!> \brief LS-Energy correction to a KG OR KS simulation
+!> \brief Use OT-diagonalziation to obtain density matrix from Harris Kohn-Sham matrix 
+!>        Initial guess of density matrix is either the atomic block initial guess from SCF 
+!>        or the ground-state density matrix. The latter only works if the same basis is used
 !>
 !> \param qs_env ...
+!> \param ec_env ...
+!> \param matrix_ks ...
+!> \param matrix_s ...
+!> \param matrix_p ...
+!> \param matrix_w ...
+!>
 !> \par History
 !>       09.2020 created
 !> \author F.Belleflamme
@@ -2444,16 +2303,17 @@ CONTAINS
    SUBROUTINE ec_ot_diag_solver(qs_env, ec_env, matrix_ks, matrix_s, matrix_p, matrix_w)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(energy_correction_type), POINTER              :: ec_env
-      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: matrix_s, matrix_ks, matrix_p,&
-                                                            matrix_w
+      TYPE(dbcsr_p_type), DIMENSION(:,:), INTENT(IN), &
+                                          POINTER        :: matrix_s, matrix_ks
+      TYPE(dbcsr_p_type), DIMENSION(:,:), INTENT(OUT), &
+                                          POINTER        :: matrix_p, matrix_w
 
       CHARACTER(len=*), PARAMETER :: routineN = 'ec_ot_diag_solver', &
          routineP = moduleN//':'//routineN
 
-      INTEGER                                            :: handle, homo, iounit, ispin, max_iter, &
-                                                            nao, nmo, nspins
+      INTEGER                                            :: handle, homo, ikind, iounit, ispin, &
+                                                            max_iter, nao, nkind, nmo, nspins
       INTEGER, DIMENSION(2)                              :: nelectron_spin
-      REAL(KIND=dp)                                      :: eps_iter
       REAL(KIND=dp), DIMENSION(:), POINTER               :: eigenvalues
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
@@ -2463,11 +2323,12 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: p_rmpv
       TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: rho_ao
       TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(ls_scf_env_type), POINTER                     :: ls_env
+      TYPE(gto_basis_set_type), POINTER                  :: basis_set, harris_basis
       TYPE(mo_set_p_type), DIMENSION(:), POINTER         :: mos
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(preconditioner_type), POINTER                 :: local_preconditioner
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
+      TYPE(qs_kind_type), POINTER                        :: qs_kind
       TYPE(qs_rho_type), POINTER                         :: rho
 
       CALL timeset(routineN, handle)
@@ -2477,16 +2338,14 @@ CONTAINS
 
       !IF (iounit > 0) WRITE (iounit, *) "ec_ot_diag_solver START"
 
-      CALL get_qs_env(qs_env,para_env=para_env)
       CALL get_qs_env(qs_env=qs_env, &
                       blacs_env=blacs_env,&
-                      dft_control=dft_control) 
+                      dft_control=dft_control,&
+                      para_env = para_env) 
       nspins = dft_control%nspins
-      ls_env => ec_env%ls_env
 
-      ! Some hardcoded values
+      ! Maximum number of OT iterations for diagonalization 
       max_iter = 200
-      eps_iter = 1.0E-8_dp
 
       ! If linear scaling, need to allocate an init MO set
       ! set it to qs_env%mos
@@ -2496,7 +2355,6 @@ CONTAINS
 
       CALL get_qs_env(qs_env, mos=mos)
 
-      !--------------------
       ! If linear-sclaing, no MOS available, needs to be initialized here
       CALL get_qs_env(qs_env, &
                       atomic_kind_set=atomic_kind_set, &
@@ -2504,27 +2362,54 @@ CONTAINS
                       nelectron_spin=nelectron_spin, &
                       qs_kind_set=qs_kind_set)
 
-      ! Blocked initial guess of Harris DM
+      ! Inital guess to use
       NULLIFY(p_rmpv)
-      IF (iounit > 0) WRITE (iounit, *) "ec_ot_diag_solver - Block diagonal DM"
-!      p_rmpv => ec_env%matrix_p(:, 1)
-!      CALL calculate_atomic_block_dm(p_rmpv, ec_env%matrix_s(1,1)%matrix, &
-!                                     particle_set, atomic_kind_set, qs_kind_set, &
-!                                     nspins, nelectron_spin, iounit, para_env)
 
-      ! XXX will not work if Harris basis differs
-      CALL get_qs_env(qs_env, rho = rho)
-      CALL qs_rho_get(rho, rho_ao_kp = rho_ao)
-!      DO ispin = 1, nspins
-!         CALL dbcsr_copy(ec_env%matrix_p(ispin, 1)%matrix, rho_ao(ispin,1)%matrix)
-!      END DO
-!      p_rmpv => ec_env%matrix_p(:, 1)
-      p_rmpv => rho_ao(:, 1)
+      ! Initital guess obtained for OT Diagonalization 
+      ! XXX Ground-state density matrix only works if same basis is used
+      ! XXX for Harris functional
+      SELECT CASE (ec_env%ec_initial_guess)
+      CASE (ec_ot_block_dm)
+         !IF (iounit > 0) WRITE (iounit, *) "ec_ot_diag_solver - Use ATOMIC inital guess"
+         p_rmpv => ec_env%matrix_p(:, 1)
+         CALL calculate_atomic_block_dm(p_rmpv, ec_env%matrix_s(1,1)%matrix, &
+                                        particle_set, atomic_kind_set, qs_kind_set, &
+                                        nspins, nelectron_spin, iounit, para_env)
+      CASE (ec_ot_gs)
+         !IF (iounit > 0) WRITE (iounit, *) "ec_ot_diag_solver - Use ground-state"
+         ! XXX will not work if Harris basis differs
+         ! Harris basis may differ from ground-state basis only if explicitly added
+         ! thus only one case needs to be tested
+
+         CALL get_qs_env(qs_env, qs_kind_set=qs_kind_set, nkind=nkind)
+         CALL uppercase(ec_env%basis)
+         IF (ec_env%basis == "HARRIS") THEN
+            DO ikind = 1, nkind
+               qs_kind => qs_kind_set(ikind)
+               ! Basis sets of ground-state
+               CALL get_qs_kind(qs_kind=qs_kind, basis_set=basis_set, basis_type="ORB")
+               ! Basis sets of energy correction 
+               CALL get_qs_kind(qs_kind=qs_kind, basis_set=harris_basis, basis_type="HARRIS")
+
+               IF (basis_set%name .NE. harris_basis%name) THEN
+                  CPABORT("Using ground-state DM as initial guess for OT-Diag requires same basis")
+               END IF
+            END DO
+         END IF
+
+         CALL get_qs_env(qs_env, rho = rho)
+         CALL qs_rho_get(rho, rho_ao_kp = rho_ao)
+         p_rmpv => rho_ao(:, 1)
+      CASE DEFAULT
+         CPABORT("Unknown inital guess for OT-Diagonalization (Harris functional)")
+      END SELECT
 
       DO ispin = 1, nspins
-         CALL get_mo_set(mo_set=mos(ispin)%mo_set, &
-                         mo_coeff=mo_coeff, &
-                         nmo=nmo, nao=nao, homo=homo)
+         CALL get_mo_set(mo_set = mos(ispin)%mo_set, &
+                         mo_coeff = mo_coeff, & 
+                         nmo = nmo, &
+                         nao = nao, &
+                         homo = homo)
 
          IF (iounit > 0) WRITE (iounit, *) "ec_ot_diag_solver - Calculate first MOs"
          CALL cp_fm_set_all(mo_coeff, 0.0_dp)
@@ -2541,7 +2426,6 @@ CONTAINS
          ! If DFBT or SE, then needs has_unit_metrix option
          CALL make_basis_sm(mo_coeff, nmo, ec_env%matrix_s(1,1)%matrix)
       END DO
-      !--------------------
 
       ! Preconditioner
       NULLIFY (local_preconditioner)
@@ -2566,7 +2450,7 @@ CONTAINS
                              matrix_s=matrix_s(1,1)%matrix, &
                              matrix_c_fm=mo_coeff, &
                              preconditioner=local_preconditioner, &
-                             eps_gradient=eps_iter, &
+                             eps_gradient=ec_env%eps_default, &
                              iter_max=max_iter, &
                              silent=.FALSE.)
          CALL calculate_subspace_eigenvalues(mo_coeff, matrix_ks(ispin,1)%matrix, &
