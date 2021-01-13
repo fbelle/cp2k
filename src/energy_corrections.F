@@ -83,6 +83,7 @@ MODULE energy_corrections
                                               ec_efield_local_operator
    USE ec_env_types,                    ONLY: energy_correction_type
    USE ec_environment,                  ONLY: ec_write_input
+   USE ec_newton,                       ONLY: prepare_newton
    USE external_potential_types,        ONLY: get_potential,&
                                               gth_potential_type,&
                                               sgp_potential_type
@@ -1074,6 +1075,9 @@ CONTAINS
          CALL dbcsr_create(ec_env%matrix_hz(ispin)%matrix, template=matrix_v(ispin, 1)%matrix)
          CALL dbcsr_copy(ec_env%matrix_hz(ispin)%matrix, matrix_v(ispin, 1)%matrix)
       END DO
+
+      IF (iounit > 0) WRITE(iounit,*) "||Hz||_F :", dbcsr_frobenius_norm(ec_env%matrix_hz(1)%matrix)
+
       CALL dbcsr_deallocate_matrix_set(matrix_v)
 !---------------------------------------
       !
@@ -2160,8 +2164,17 @@ CONTAINS
       TYPE(ls_scf_env_type), POINTER                     :: ls_env
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: wmat
       TYPE(dbcsr_type), ALLOCATABLE, DIMENSION(:)        :: matrix_ks_deviation
+      ! fbelle newton
+      TYPE(cp_logger_type), POINTER                      :: logger
+      INTEGER                                            :: iounit
+      TYPE(qs_rho_type), POINTER                         :: rho
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_ao
+      REAL(KIND=dp)                                      :: trace
 
       CALL timeset(routineN, handle)
+
+      logger => cp_get_default_logger()
+      iounit = cp_logger_get_default_unit_nr(logger)
 
       NULLIFY (para_env)
       CALL get_qs_env(qs_env, &
@@ -2199,47 +2212,47 @@ CONTAINS
 
          SELECT CASE (ec_ls_method)
          CASE (ec_matrix_sign)
-
-            CALL density_matrix_sign(ls_env%matrix_p(ispin), &            ! ok
-                                     ls_env%mu_spin(ispin), &             ! ok
-                                     ls_env%fixed_mu, &                   ! ok
-                                     ls_env%sign_method, &                ! ok
-                                     ls_env%sign_order, &                 ! ok
-                                     ls_env%matrix_ks(ispin), &           ! ok
-                                     ls_env%matrix_s, &                   ! ok
-                                     ls_env%matrix_s_inv, &               ! ok
-                                     nelectron_spin_real,&
-                                     ec_env%eps_default)                  ! ok
-
+!
+!            CALL density_matrix_sign(ls_env%matrix_p(ispin), &            ! ok
+!                                     ls_env%mu_spin(ispin), &             ! ok
+!                                     ls_env%fixed_mu, &                   ! ok
+!                                     ls_env%sign_method, &                ! ok
+!                                     ls_env%sign_order, &                 ! ok
+!                                     ls_env%matrix_ks(ispin), &           ! ok
+!                                     ls_env%matrix_s, &                   ! ok
+!                                     ls_env%matrix_s_inv, &               ! ok
+!                                     nelectron_spin_real,&
+!                                     ec_env%eps_default)                  ! ok
+!
          CASE (ec_matrix_trs4)
 
-            CALL density_matrix_trs4( &
-                    ls_env%matrix_p(ispin), &
-                    ls_env%matrix_ks(ispin), &
-                    ls_env%matrix_s_sqrt_inv, &
-                    nelectron_spin_real,&
-                    ec_env%eps_default, &
-                    ls_env%homo_spin(ispin),&
-                    ls_env%lumo_spin(ispin),&
-                    ls_env%mu_spin(ispin),&
-                    matrix_ks_deviation=matrix_ks_deviation(ispin), &
-                    dynamic_threshold = ls_env%dynamic_threshold, &
-                    eps_lanczos = ls_env%eps_lanczos, &
-                    max_iter_lanczos = ls_env%max_iter_lanczos)
+!            CALL density_matrix_trs4( &
+!                    ls_env%matrix_p(ispin), &
+!                    ls_env%matrix_ks(ispin), &
+!                    ls_env%matrix_s_sqrt_inv, &
+!                    nelectron_spin_real,&
+!                    ec_env%eps_default, &
+!                    ls_env%homo_spin(ispin),&
+!                    ls_env%lumo_spin(ispin),&
+!                    ls_env%mu_spin(ispin),&
+!                    matrix_ks_deviation=matrix_ks_deviation(ispin), &
+!                    dynamic_threshold = ls_env%dynamic_threshold, &
+!                    eps_lanczos = ls_env%eps_lanczos, &
+!                    max_iter_lanczos = ls_env%max_iter_lanczos)
 
          CASE (ec_matrix_tc2)
-            CALL density_matrix_tc2( &
-                    ls_env%matrix_p(ispin), &
-                    ls_env%matrix_ks(ispin), &
-                    ls_env%matrix_s_sqrt_inv, &
-                    nelectron_spin_real,&
-                    ec_env%eps_default, &
-                    ls_env%homo_spin(ispin),&
-                    ls_env%lumo_spin(ispin),&
-                    non_monotonic = ls_env%non_monotonic, &
-                    eps_lanczos = ls_env%eps_lanczos, &
-                    max_iter_lanczos = ls_env%max_iter_lanczos)
-
+!            CALL density_matrix_tc2( &
+!                    ls_env%matrix_p(ispin), &
+!                    ls_env%matrix_ks(ispin), &
+!                    ls_env%matrix_s_sqrt_inv, &
+!                    nelectron_spin_real,&
+!                    ec_env%eps_default, &
+!                    ls_env%homo_spin(ispin),&
+!                    ls_env%lumo_spin(ispin),&
+!                    non_monotonic = ls_env%non_monotonic, &
+!                    eps_lanczos = ls_env%eps_lanczos, &
+!                    max_iter_lanczos = ls_env%max_iter_lanczos)
+!
          CASE (ec_curvy_steps)
 
             ! Requires inital guess, i.e. ground-state DM
@@ -2248,6 +2261,17 @@ CONTAINS
          END SELECT
 
       END DO
+
+      CALL get_qs_env(qs_env, rho = rho)
+      CALL qs_rho_get(rho, rho_ao = rho_ao)
+      DO ispin = 1, nspins
+         CALL matrix_qs_to_ls(matrix_ls = ls_env%matrix_p(ispin), &
+                              matrix_qs = rho_ao(ispin)%matrix, &
+                              ls_mstruct = ls_env%ls_mstruct, &
+                              covariant = .FALSE.)
+      END DO
+
+      CALL prepare_newton(qs_env, ls_env, iounit)
 
       ! de-orthonormalize
       IF (ls_env%has_s_preconditioner) THEN
@@ -2260,8 +2284,10 @@ CONTAINS
          END DO
       ENDIF
 
+IF (ls_env%has_s_preconditioner) THEN
       ! Closed-shell 
       IF (nspins == 1) CALL dbcsr_scale(ls_env%matrix_p(1), 2.0_dp)
+ENDIF
 
       IF (ls_env%report_all_sparsities) CALL post_scf_sparsities(ls_env)
 
@@ -2274,11 +2300,11 @@ CONTAINS
                               covariant = .FALSE.)
       END DO
 
-!      trace = 0.0_dp
-!      CALL dbcsr_dot(ec_env%matrix_p(1, 1)%matrix, ec_env%matrix_s(1, 1)%matrix, trace)
-!      IF(para_env%mepos==0) WRITE(*,*) 'Tr[PS] ', trace
-!      CALL dbcsr_dot(ec_env%matrix_ks(1, 1)%matrix, ec_env%matrix_p(1, 1)%matrix, trace)
-!      IF(para_env%mepos==0) WRITE(*,*) 'Tr[FP] ', trace
+      trace = 0.0_dp
+      CALL dbcsr_dot(ec_env%matrix_p(1, 1)%matrix, ec_env%matrix_s(1, 1)%matrix, trace)
+      IF(para_env%mepos==0) WRITE(*,*) 'Tr[PS] ', trace
+      CALL dbcsr_dot(ec_env%matrix_ks(1, 1)%matrix, ec_env%matrix_p(1, 1)%matrix, trace)
+      IF(para_env%mepos==0) WRITE(*,*) 'Tr[FP] ', trace
 
       wmat => ec_env%matrix_w(:,1)
       CALL calculate_w_matrix(wmat, ec_env%ls_env)

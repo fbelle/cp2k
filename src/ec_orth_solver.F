@@ -444,6 +444,7 @@ CONTAINS
     TYPE(section_vals_type), POINTER                   :: solver_section
 ! DEBUG
 !    REAL(KIND=dp)                                      :: norm_elec, norm_zao
+    REAL(KIND=dp)                                      :: norm_zao
 !    INTEGER                                            :: counter
 
     CALL timeset(routineN, handle)
@@ -471,8 +472,8 @@ CONTAINS
     CALL section_vals_val_get(solver_section, "MAX_ITER_LANCZOS", i_val=max_iter_lanczos)  
 
     eps_filter = linres_control%eps_filter
-!    IF(iounit > 0) WRITE(iounit,*) "ec_orth_solver - eps", linres_control%eps
-!    IF(iounit > 0) WRITE(iounit,*) "ec_orth_solver - eps_filter", eps_filter
+    IF(iounit > 0) WRITE(iounit,*) "ec_orth_solver - eps", linres_control%eps
+    IF(iounit > 0) WRITE(iounit,*) "ec_orth_solver - eps_filter", eps_filter
 
     CALL qs_rho_get(rho, rho_ao = rho_ao)
 
@@ -533,6 +534,14 @@ CONTAINS
        CALL transform_m_orth(matrix_nsc(ispin)%matrix, matrix_s_sqrt_inv, eps_filter)
     END DO
 
+    ! DEBUG
+    norm_zao = dbcsr_frobenius_norm(matrix_p(1)%matrix)
+    IF (iounit > 0) WRITE(iounit,*) "||P||_F :", norm_zao
+    norm_zao = dbcsr_frobenius_norm(matrix_ks(1)%matrix)
+    IF (iounit > 0) WRITE(iounit,*) "||KS||_F :", norm_zao
+    norm_zao = dbcsr_frobenius_norm(matrix_nsc(1)%matrix)
+    IF (iounit > 0) WRITE(iounit,*) "||NSC||_F :", norm_zao
+
     !----------------------------------------
     ! Create non-symmetric work matrices: Ax, cg, res
     ! Content of Ax, cg, cg_z, res, z0 anti-symmetric
@@ -589,8 +598,8 @@ CONTAINS
     CALL commutator(matrix_nsc, matrix_p, matrix_res, eps_filter, .FALSE., alpha = focc)
 
 !    ! DEBUG
-!    norm_zao = dbcsr_frobenius_norm(matrix_nsc(1)%matrix)
-!    IF (iounit > 0) WRITE(iounit,*) "||RHS||_F :", norm_zao
+    norm_zao = dbcsr_frobenius_norm(matrix_nsc(1)%matrix)
+    IF (iounit > 0) WRITE(iounit,*) "||RHS||_F :", norm_zao
 !    IF (nspins==2) THEN
 !      norm_zao = dbcsr_frobenius_norm(matrix_nsc(2)%matrix)
 !      IF (iounit > 0)  WRITE(iounit,*) "||RHS(2)||_F :", norm_zao
