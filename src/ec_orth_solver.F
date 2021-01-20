@@ -532,6 +532,7 @@ CONTAINS
        CALL transform_m_orth(matrix_ks(ispin)%matrix, matrix_s_sqrt_inv, eps_filter)
        CALL transform_m_orth(matrix_nsc(ispin)%matrix, matrix_s_sqrt_inv, eps_filter)
     END DO
+    
 
     !----------------------------------------
     ! Create non-symmetric work matrices: Ax, cg, res
@@ -1247,6 +1248,11 @@ CONTAINS
 
     ! Build uncoupled term of Hessian linear transformation
     CALL hessian_op1(matrix_ks, matrix_p, matrix_cg, matrix_b, matrix_Ax, eps_filter)
+
+    ! Avoid the buildup of noisy blocks
+    DO ispin = 1, nspins
+       CALL dbcsr_filter(matrix_b(ispin)%matrix, eps_filter)
+    END DO
     
     norm_res = dbcsr_frobenius_norm(matrix_Ax(1)%matrix)
 !    IF (para_env%mepos==0) WRITE(*,*) "||Ax1||", norm_res
@@ -2645,6 +2651,9 @@ CONTAINS
       CALL dbcsr_transposed(matrix_work, matrix_tmp)
       CALL dbcsr_add(matrix_tmp, matrix_work, 0.5_dp, 0.5_dp)
       CALL dbcsr_copy(matrix, matrix_tmp)
+
+      ! Avoid the buildup of noisy blocks
+      CALL dbcsr_filter(matrix, eps_filter)
 
       CALL dbcsr_release(matrix_tmp)
       CALL dbcsr_release(matrix_work)
