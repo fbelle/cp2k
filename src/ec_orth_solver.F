@@ -1282,12 +1282,14 @@ CONTAINS
        DO ispin = 1, nspins
           ! Transform B into NON-ortho basis for collocation
           CALL transform_m_orth(matrix_b(ispin)%matrix, matrix_s_sqrt_inv, eps_filter)
+          ! Filter
+          CALL dbcsr_filter(matrix_b(ispin)%matrix, eps_filter)
           ! Keep symmetry of density matrix
           CALL dbcsr_copy(rho1_ao(ispin)%matrix, matrix_b(ispin)%matrix, keep_sparsity = .TRUE.)
        END DO
+
        ! Updates densities on grid wrt density matrix
        CALL qs_rho_update_rho(rho1, qs_env)
-
 
        t2_col = m_walltime()
        IF(iounit > 0) WRITE(iounit,"(T5,A,F8.2)") "TIME op2_col:", t2_col - t1
@@ -1480,6 +1482,7 @@ CONTAINS
     ! Transforming G(B) into orthonormal basis
     DO ispin = 1, nspins
        CALL transform_m_orth(matrix_G(ispin)%matrix, matrix_s_sqrt_inv, eps_filter)
+       CALL dbcsr_filter(matrix_G(ispin)%matrix, eps_filter)
     END DO
 
 !    CALL dbcsr_create(matrix_tmp, template=matrix_p(1)%matrix, matrix_type=dbcsr_type_no_symmetry)
