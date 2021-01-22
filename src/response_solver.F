@@ -63,6 +63,7 @@ MODULE response_solver
                                               ec_matrix_trs4,&
                                               kg_tnadd_atomic,&
                                               kg_tnadd_embed,&
+                                              kg_tnadd_embed_ri,&
                                               ls_s_sqrt_ns,&
                                               ls_s_sqrt_proot,&
                                               ot_precond_full_all,&
@@ -858,7 +859,8 @@ CONTAINS
       ! KG Embedding
       ! calculate kinetic energy potential and integrate with response density
       IF (dft_control%qs_control%do_kg) THEN
-         IF (qs_env%kg_env%tnadd_method == kg_tnadd_embed) THEN
+         IF (qs_env%kg_env%tnadd_method == kg_tnadd_embed  .OR. &
+            qs_env%kg_env%tnadd_method == kg_tnadd_embed_ri) THEN
             ekin_mol = 0.0_dp
             IF (debug_forces) fodeb(1:3) = force(1)%rho_elec(1:3, 1)
             CALL kg_ekin_subset(qs_env=qs_env, &

@@ -51,6 +51,7 @@ MODULE ec_orth_solver
                                               dbcsr_type_no_symmetry
    USE ec_env_types,                    ONLY: energy_correction_type 
    USE input_constants,                 ONLY: kg_tnadd_embed,&
+                                              kg_tnadd_embed_ri,&
                                               ls_s_sqrt_proot,&
                                               ls_s_sqrt_ns,&
                                               precond_mlp
@@ -1465,7 +1466,8 @@ CONTAINS
 
     ! Calculate KG correction to kernel
     IF (dft_control%qs_control%do_kg) THEN
-       IF (qs_env%kg_env%tnadd_method == kg_tnadd_embed) THEN
+       IF (qs_env%kg_env%tnadd_method == kg_tnadd_embed .OR. &
+          qs_env%kg_env%tnadd_method == kg_tnadd_embed_ri) THEN
 
           CPASSERT(dft_control%nimages == 1)
           ekin_mol = 0.0_dp

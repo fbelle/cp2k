@@ -14,6 +14,9 @@
 MODULE kg_correction
    USE atomic_kind_types,               ONLY: atomic_kind_type
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_log_handling,                 ONLY: cp_get_default_logger,&
+                                              cp_logger_get_default_unit_nr,&
+                                              cp_logger_type
    USE cp_para_types,                   ONLY: cp_para_env_type
    USE dbcsr_api,                       ONLY: dbcsr_add,&
                                               dbcsr_dot,&
@@ -38,7 +41,8 @@ MODULE kg_correction
    USE message_passing,                 ONLY: mp_sum
    USE pw_env_types,                    ONLY: pw_env_get,&
                                               pw_env_type
-   USE pw_methods,                      ONLY: pw_zero
+   USE pw_methods,                      ONLY: pw_scale,&
+                                              pw_zero
    USE pw_pool_types,                   ONLY: pw_pool_create_pw,&
                                               pw_pool_give_back_pw,&
                                               pw_pool_type
@@ -119,7 +123,8 @@ CONTAINS
                                do_kernel, pmat_ext)
          END IF
       ELSE IF (kg_env%tnadd_method == kg_tnadd_embed_ri) THEN
-         CALL kg_ekin_ri_embed(qs_env, kg_env, ks_matrix, ekin_mol, calc_force)
+         CALL kg_ekin_ri_embed(qs_env, kg_env, ks_matrix, ekin_mol, calc_force, &
+                               do_kernel, pmat_ext)
       ELSE IF (kg_env%tnadd_method == kg_tnadd_atomic) THEN
          CALL kg_ekin_atomic(qs_env, ks_matrix, ekin_mol)
       ELSE IF (kg_env%tnadd_method == kg_tnadd_none) THEN
@@ -151,10 +156,12 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'kg_ekin_embed'
 
-      INTEGER                                            :: handle, ispin, isub, nspins
+      INTEGER                                            :: handle, iounit, ispin, isub, &
+                                                            nspins
       LOGICAL                                            :: use_virial
       REAL(KIND=dp)                                      :: alpha, ekin_imol
       REAL(KIND=dp), DIMENSION(3, 3)                     :: xcvirial
+      TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: density_matrix
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(pw_env_type), POINTER                         :: pw_env
@@ -164,10 +171,11 @@ CONTAINS
       TYPE(qs_rho_type), POINTER                         :: old_rho, rho1, rho_struct
       TYPE(section_vals_type), POINTER                   :: xc_section
       TYPE(virial_type), POINTER                         :: virial
-      !
-      TYPE(cp_para_env_type), POINTER                    :: para_env
 
       CALL timeset(routineN, handle)
+
+      logger => cp_get_default_logger()
+      iounit = cp_logger_get_default_unit_nr(logger)
 
       NULLIFY (vxc_rho, vxc_tau, old_rho, rho_struct, ks_env)
 
@@ -176,7 +184,6 @@ CONTAINS
                       rho=old_rho, &
                       dft_control=dft_control, &
                       virial=virial, &
-                      para_env=para_env, &
                       pw_env=pw_env)
       nspins = dft_control%nspins
       use_virial = virial%pv_availability .AND. (.NOT. virial%pv_numer)
@@ -224,21 +231,26 @@ CONTAINS
       IF (do_kernel) THEN
          ! derivation wrt to rho_struct and evaluation at rho_struct
          CALL create_kernel(qs_env, &
-                            vxc=vxc_rho, &
-                            rho=rho_struct, &
-                            rho1=rho1, &
-                            xc_section=xc_section)
+                            vxc = vxc_rho, &
+                            rho = rho_struct, &
+                            rho1 = rho1, &
+                            xc_section = xc_section)
       ELSE
-         CALL qs_vxc_create(ks_env=ks_env, rho_struct=rho_struct, xc_section=xc_section, &
-                            vxc_rho=vxc_rho, vxc_tau=vxc_tau, exc=ekin_imol)
+         CALL qs_vxc_create(ks_env = ks_env, &
+                            rho_struct = rho_struct, &
+                            xc_section = xc_section, &
+                            vxc_rho = vxc_rho, &
+                            vxc_tau = vxc_tau, &
+                            exc = ekin_imol)
          IF (ASSOCIATED(vxc_tau)) THEN
             CPABORT(" KG with meta-kinetic energy functionals not implemented")
          END IF
       END IF
 
       DO ispin = 1, nspins
-         vxc_rho(ispin)%pw%cr3d = alpha*vxc_rho(ispin)%pw%cr3d*vxc_rho(ispin)%pw%pw_grid%dvol
+         CALL pw_scale(vxc_rho(ispin)%pw, alpha*vxc_rho(ispin)%pw%pw_grid%dvol)
       END DO
+
       ! Integrate xc-potential with external density for outer response forces
       IF (PRESENT(pmat_ext) .AND. .NOT. do_kernel) THEN
          CALL qs_rho_get(rho1, rho_ao=density_matrix)
@@ -289,7 +301,7 @@ CONTAINS
          ekin_mol = ekin_mol + ekin_imol
 
          DO ispin = 1, nspins
-            vxc_rho(ispin)%pw%cr3d = -alpha*vxc_rho(ispin)%pw%cr3d*vxc_rho(ispin)%pw%pw_grid%dvol
+            CALL pw_scale(vxc_rho(ispin)%pw, -alpha*vxc_rho(ispin)%pw%pw_grid%dvol)
          END DO
 
          ! Integrate with response density for outer response forces
@@ -502,39 +514,50 @@ CONTAINS
 !> \param ks_matrix ...
 !> \param ekin_mol ...
 !> \param calc_force ...
+!> \param do_kernel Contribution of kinetic energy functional to kernel in response calculation
+!> \param pmat_ext Response density used to fold 2nd deriv or to integrate kinetic energy functional
 ! **************************************************************************************************
-   SUBROUTINE kg_ekin_ri_embed(qs_env, kg_env, ks_matrix, ekin_mol, calc_force)
+   SUBROUTINE kg_ekin_ri_embed(qs_env, kg_env, ks_matrix, ekin_mol, calc_force, &
+                               do_kernel, pmat_ext)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(kg_environment_type), POINTER                 :: kg_env
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: ks_matrix
       REAL(KIND=dp), INTENT(out)                         :: ekin_mol
-      LOGICAL                                            :: calc_force
+      LOGICAL                                            :: calc_force, do_kernel
+      TYPE(dbcsr_p_type), DIMENSION(:), OPTIONAL, &
+         POINTER                                         :: pmat_ext
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'kg_ekin_ri_embed'
 
       INTEGER                                            :: color, handle, iatom, ikind, imol, &
-                                                            ispin, isub, natom, nkind, nspins
+                                                            iounit, ispin, isub, natom, nkind, &
+                                                            nspins
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: atomlist
       INTEGER, DIMENSION(:, :, :), POINTER               :: cell_to_index
       LOGICAL                                            :: use_virial
-      REAL(KIND=dp)                                      :: ekin_imol
+      REAL(KIND=dp)                                      :: alpha, ekin_imol
       REAL(KIND=dp), DIMENSION(3, 3)                     :: xcvirial
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(cp_para_env_type), POINTER                    :: para_env
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: ksmat
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: density_matrix
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: density_matrix, ksmat
+      TYPE(dbcsr_p_type), DIMENSION(:,:), POINTER        :: pmat
       TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(lri_density_type), POINTER                    :: lri_density
-      TYPE(lri_environment_type), POINTER                :: lri_env
+      TYPE(lri_density_type), POINTER                    :: lri_density, lri_rho1
+      TYPE(lri_environment_type), POINTER                :: lri_env, lri_env1
       TYPE(lri_kind_type), DIMENSION(:), POINTER         :: lri_v_int
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_p_type), DIMENSION(:), POINTER             :: vxc_rho, vxc_tau
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
-      TYPE(qs_rho_type), POINTER                         :: rho, rho_struct
+      TYPE(qs_rho_type), POINTER                         :: rho, rho1, rho_struct
+      TYPE(section_vals_type), POINTER                   :: xc_section
       TYPE(virial_type), POINTER                         :: virial
 
       CALL timeset(routineN, handle)
+
+      logger => cp_get_default_logger()
+      iounit = cp_logger_get_default_unit_nr(logger)
 
       CALL get_qs_env(qs_env, &
                       ks_env=ks_env, &
@@ -550,15 +573,22 @@ CONTAINS
       use_virial = virial%pv_availability .AND. (.NOT. virial%pv_numer)
       use_virial = use_virial .AND. calc_force
 
-      CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
+      ! Kernel potential in response calculation (no forces calculated at this point)
+      ! requires spin-factor
+      ! alpha = 2 closed-shell
+      ! alpha = 1 open-shell
+      alpha = 1.0_dp
+      IF (do_kernel .AND. .NOT. calc_force .AND. nspins == 1) alpha = 2.0_dp
+
+      CALL pw_env_get(pw_env, auxbas_pw_pool = auxbas_pw_pool)
 
       ! get the density matrix
-      CALL qs_rho_get(rho, rho_ao_kp=density_matrix)
+      CALL qs_rho_get(rho, rho_ao = density_matrix)
       ! allocate and initialize the density
       NULLIFY (rho_struct)
       CALL qs_rho_create(rho_struct)
       ! set the density matrix to the blocked matrix
-      CALL qs_rho_set(rho_struct, rho_ao_kp=density_matrix)
+      CALL qs_rho_set(rho_struct, rho_ao=density_matrix)
       CALL qs_rho_rebuild(rho_struct, qs_env, rebuild_ao=.FALSE., rebuild_grids=.TRUE.)
 
       CALL get_qs_env(qs_env, atomic_kind_set=atomic_kind_set)
@@ -566,23 +596,87 @@ CONTAINS
       cell_to_index(1, 1, 1) = 1
       lri_env => kg_env%lri_env
       lri_density => kg_env%lri_density
-      CALL calculate_lri_densities(lri_env, lri_density, qs_env, density_matrix, cell_to_index, &
+
+      NULLIFY(pmat)
+      ALLOCATE(pmat(nspins,1))
+      DO ispin = 1, nspins
+         pmat(ispin,1)%matrix => density_matrix(ispin)%matrix
+      END DO
+      CALL calculate_lri_densities(lri_env, lri_density, qs_env, pmat, cell_to_index, &
                                    rho_struct, atomic_kind_set, para_env)
       kg_env%lri_density => lri_density
+      
+      DEALLOCATE(pmat)
+
+      IF (PRESENT(pmat_ext)) THEN
+         ! If external density associated then it is needed either for
+         ! 1) folding of second derivative while partially integrating, or
+         ! 2) integration of response forces
+         NULLIFY (rho1)
+         CALL qs_rho_create(rho1)
+         CALL qs_rho_set(rho1, rho_ao = pmat_ext)
+         CALL qs_rho_rebuild(rho1, qs_env, rebuild_ao=.FALSE., rebuild_grids=.TRUE.)
+
+         lri_env1 => kg_env%lri_env1
+         lri_rho1 => kg_env%lri_rho1
+         ! calculate external density as LRI-densities
+         NULLIFY(pmat)
+         ALLOCATE(pmat(nspins,1))
+         DO ispin = 1, nspins
+            pmat(ispin,1)%matrix => pmat_ext(ispin)%matrix
+         END DO
+         CALL calculate_lri_densities(lri_env1, lri_rho1, qs_env, pmat, cell_to_index, &
+                                      rho1, atomic_kind_set, para_env)
+         kg_env%lri_rho1 => lri_rho1
+         DEALLOCATE(pmat)
+
+      END IF
+
+      ! XC-section pointing to kinetic energy functional in KG environment
+      NULLIFY(xc_section)
+      xc_section => kg_env%xc_section_kg
+
       ! full density kinetic energy term
       ekin_imol = 0.0_dp
       NULLIFY (vxc_rho, vxc_tau)
-      CALL qs_vxc_create(ks_env=ks_env, rho_struct=rho_struct, xc_section=kg_env%xc_section_kg, &
-                         vxc_rho=vxc_rho, vxc_tau=vxc_tau, exc=ekin_imol)
-      IF (ASSOCIATED(vxc_tau)) THEN
-         CPABORT(" KG with meta-kinetic energy functionals not implemented")
+
+      ! calculate xc potential or kernel
+      IF (do_kernel) THEN
+         !IF (iounit > 0) WRITE(iounit,*) "kg_ekin_embRI - kernel total"
+         ! derivation wrt to rho_struct and evaluation at rho_struct
+         CALL create_kernel(qs_env, &
+                            vxc=vxc_rho, &
+                            rho=rho_struct, &
+                            rho1=rho1, &
+                            xc_section=xc_section)
+      ELSE
+         !IF (iounit > 0) WRITE(iounit,*) "kg_ekin_embRI - vxc total"
+         CALL qs_vxc_create(ks_env = ks_env, &
+                            rho_struct = rho_struct, &
+                            xc_section = xc_section, &
+                            vxc_rho = vxc_rho, &
+                            vxc_tau = vxc_tau, &
+                            exc = ekin_imol)
+
+         IF (ASSOCIATED(vxc_tau)) THEN
+            CPABORT(" KG with meta-kinetic energy functionals not implemented")
+         END IF
       END IF
-      DO ispin = 1, nspins
-         vxc_rho(ispin)%pw%cr3d = vxc_rho(ispin)%pw%cr3d*vxc_rho(ispin)%pw%pw_grid%dvol
-         lri_v_int => lri_density%lri_coefs(ispin)%lri_kinds
+
+     DO ispin = 1, nspins
+         CALL pw_scale(vxc_rho(ispin)%pw, alpha*vxc_rho(ispin)%pw%pw_grid%dvol)
+
+         IF (PRESENT(pmat_ext) .AND. .NOT. do_kernel) THEN
+            !IF (iounit > 0) WRITE(*,*) "kg_ekin_embRI - int w/ pmat_ext"
+            lri_v_int => lri_rho1%lri_coefs(ispin)%lri_kinds
+         ELSE
+            !IF (iounit > 0) WRITE(*,*) "kg_ekin_embRI - int w/ rho_ao"
+            lri_v_int => lri_density%lri_coefs(ispin)%lri_kinds
+         END IF
          CALL integrate_v_rspace_one_center(vxc_rho(ispin), qs_env, lri_v_int, calc_force, "LRI_AUX")
          CALL pw_pool_give_back_pw(auxbas_pw_pool, vxc_rho(ispin)%pw)
       END DO
+
       DEALLOCATE (vxc_rho)
       ekin_mol = -ekin_imol
       xcvirial(1:3, 1:3) = 0.0_dp
@@ -600,21 +694,53 @@ CONTAINS
             color = kg_env%subset_of_mol(imol)
             IF (color == isub) atomlist(iatom) = 1
          END DO
+         !IF (iounit > 0) WRITE(*,*) "kg_ekin_embRI - lri_kg_rho_update - rho_struct"
          CALL lri_kg_rho_update(rho_struct, qs_env, lri_env, lri_density, atomlist)
+
+         ! Same for external (response) density if present
+         IF (PRESENT(pmat_ext)) THEN
+            !IF (iounit > 0) WRITE(*,*) "kg_ekin_embRI - lri_kg_rho_update - rho1"
+            CALL lri_kg_rho_update(rho1, qs_env, lri_env1, lri_rho1, atomlist)
+         END IF
 
          ekin_imol = 0.0_dp
          ! calc Hohenberg-Kohn kin. energy of the density corresp. to the remaining molecular block(s)
          NULLIFY (vxc_rho, vxc_tau)
-         CALL qs_vxc_create(ks_env=ks_env, rho_struct=rho_struct, xc_section=kg_env%xc_section_kg, &
-                            vxc_rho=vxc_rho, vxc_tau=vxc_tau, exc=ekin_imol)
+
+         ! calculate xc potential or kernel
+         IF (do_kernel) THEN
+            !IF (iounit > 0) WRITE(*,*) "kg_ekin_embRI - subsys kernel (isub)", isub
+            CALL create_kernel(qs_env, &
+                               vxc = vxc_rho, &
+                               rho = rho_struct, &
+                               rho1 = rho1, &
+                               xc_section = xc_section)
+         ELSE
+
+            !IF (iounit > 0) WRITE(*,*) "kg_ekin_embRI - subsys qs_vxc_create (isub)", isub
+            CALL qs_vxc_create(ks_env = ks_env, &
+                               rho_struct = rho_struct, &
+                               xc_section = xc_section, &
+                               vxc_rho = vxc_rho, &
+                               vxc_tau = vxc_tau, &
+                               exc = ekin_imol)
+         END IF
          ekin_mol = ekin_mol + ekin_imol
 !deb
 !     WRITE(6,*) " E KIN (molecule)    ",isub,ekin_imol
 !deb
 
          DO ispin = 1, nspins
-            vxc_rho(ispin)%pw%cr3d = -vxc_rho(ispin)%pw%cr3d*vxc_rho(ispin)%pw%pw_grid%dvol
-            lri_v_int => lri_density%lri_coefs(ispin)%lri_kinds
+            CALL pw_scale(vxc_rho(ispin)%pw, -alpha*vxc_rho(ispin)%pw%pw_grid%dvol)
+
+            IF (PRESENT(pmat_ext) .AND. .NOT. do_kernel) THEN
+               !IF(iounit > 0 ) WRITE(*,*) "kg_ekin_embRI - int w/ pmat_ext"
+               lri_v_int => lri_rho1%lri_coefs(ispin)%lri_kinds
+            ELSE
+               !IF(iounit > 0 ) WRITE(*,*) "kg_ekin_embRI - int w/ rho_ao"
+               lri_v_int => lri_density%lri_coefs(ispin)%lri_kinds
+            END IF
+
             CALL integrate_v_rspace_one_center(vxc_rho(ispin), qs_env, &
                                                lri_v_int, calc_force, &
                                                "LRI_AUX", atomlist=atomlist)
@@ -635,21 +761,55 @@ CONTAINS
 
       ALLOCATE (ksmat(1))
       DO ispin = 1, nspins
-         lri_v_int => lri_density%lri_coefs(ispin)%lri_kinds
-         DO ikind = 1, nkind
-            CALL mp_sum(lri_v_int(ikind)%v_int, para_env%group)
-         END DO
          ksmat(1)%matrix => ks_matrix(ispin)%matrix
-         CALL calculate_lri_ks_matrix(lri_env, lri_v_int, ksmat, atomic_kind_set)
+         IF (PRESENT(pmat_ext) .AND. .NOT. do_kernel) THEN
+            !IF(iounit > 0) WRITE(*,*) "kg_ekin_embRI - KS int with rho_ext"
+            lri_v_int => lri_rho1%lri_coefs(ispin)%lri_kinds
+            DO ikind = 1, nkind
+               CALL mp_sum(lri_v_int(ikind)%v_int, para_env%group)
+            END DO
+            CALL calculate_lri_ks_matrix(lri_env1, lri_v_int, ksmat, atomic_kind_set)
+         ELSE
+            !IF(iounit > 0) WRITE(*,*) "kg_ekin_embRI - KS int with rho_ao"
+            lri_v_int => lri_density%lri_coefs(ispin)%lri_kinds
+            DO ikind = 1, nkind
+               CALL mp_sum(lri_v_int(ikind)%v_int, para_env%group)
+            END DO
+            CALL calculate_lri_ks_matrix(lri_env, lri_v_int, ksmat, atomic_kind_set)
+         END IF
+
       END DO
       IF (calc_force) THEN
-         CALL calculate_lri_forces(lri_env, lri_density, qs_env, density_matrix, atomic_kind_set)
+
+         NULLIFY(pmat)
+         ALLOCATE(pmat(nspins,1))
+
+         IF (PRESENT(pmat_ext) .AND. .NOT. do_kernel) THEN
+            !IF(iounit > 0) WRITE(*,*) "kg_ekin_embRI - Forces with rho_ext"
+            DO ispin = 1, nspins
+               pmat(ispin,1)%matrix => pmat_ext(ispin)%matrix
+            END DO
+            CALL calculate_lri_forces(lri_env1, lri_rho1, qs_env, pmat, atomic_kind_set)
+         ELSE
+            !IF(iounit > 0) WRITE(*,*) "kg_ekin_embRI - Forces with rho_ao"
+            DO ispin = 1, nspins
+               pmat(ispin,1)%matrix => density_matrix(ispin)%matrix
+            END DO
+            CALL calculate_lri_forces(lri_env, lri_density, qs_env, pmat, atomic_kind_set)
+         END IF
+      
+         DEALLOCATE(pmat)
+
       ENDIF
       DEALLOCATE (atomlist, ksmat)
 
       ! clean up rho_struct
       CALL qs_rho_set(rho_struct, rho_ao=Null())
       CALL qs_rho_release(rho_struct)
+      IF (PRESENT(pmat_ext)) THEN
+         CALL qs_rho_set(rho1, rho_ao=Null())
+         CALL qs_rho_release(rho1)
+      END IF
       DEALLOCATE (cell_to_index)
 
       CALL timestop(handle)
