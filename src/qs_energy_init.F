@@ -218,6 +218,11 @@ CONTAINS
          CALL kg_build_neighborlist(qs_env, sab_orb=soo_list, molecular=.TRUE.)
          kg_env%lri_env%soo_list => soo_list
          CALL calculate_lri_integrals(kg_env%lri_env, qs_env)
+         IF (qs_env%energy_correction) THEN
+            kg_env%lri_env1%soo_list => soo_list
+            CALL calculate_lri_integrals(kg_env%lri_env1, qs_env)
+         END iF
+
          ! Atomic grids
       CASE (kg_tnadd_atomic)
          ! build the A-C list for the nonadditive kinetic energy potential
