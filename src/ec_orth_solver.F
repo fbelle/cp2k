@@ -507,6 +507,9 @@ CONTAINS
 
     ! Scale matrix_p by factor 1/2 in closed-shell
     IF (nspins == 1) CALL dbcsr_scale(matrix_p(1)%matrix, 0.5_dp)
+    DO ispin = 1, nspins
+       CALL dbcsr_filter(matrix_p(ispin)%matrix, linres_control%eps_filter**(2.0_dp/3.0_dp))
+    END DO
 
     ! Transform P, KS, and Harris kernel matrix into Orthonormal basis
     CALL dbcsr_create(matrix_s_sqrt, template=matrix_s(1)%matrix, &
