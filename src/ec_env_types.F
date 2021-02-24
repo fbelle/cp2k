@@ -13,8 +13,6 @@
 ! **************************************************************************************************
 MODULE ec_env_types
    USE cp_dbcsr_operations,             ONLY: dbcsr_deallocate_matrix_set
-   USE cp_fm_types,                     ONLY: cp_fm_p_type,&
-                                              cp_fm_release
    USE dm_ls_scf_types,                 ONLY: ls_scf_env_type,& 
                                               ls_scf_release
    USE dbcsr_api,                       ONLY: dbcsr_p_type,&
