@@ -1118,10 +1118,10 @@ CONTAINS
         ! tmp = ZFP + (ZFP)^T
         CALL dbcsr_add(matrix_tmp, matrix_tmp2, 1.0_dp, 1.0_dp)
 
+        CALL dbcsr_filter(matrix_tmp, eps_filter)
+
         ! Whz = ZFP + PFZ
         CALL dbcsr_copy(matrix_wz(ispin)%matrix, matrix_tmp, keep_sparsity = .TRUE.)
-
-        CALL dbcsr_filter(matrix_wz(ispin)%matrix, eps_filter)
 
      ENDDO
 
