@@ -289,6 +289,8 @@ CONTAINS
       ELSEIF (dft_control%qs_control%xtb) THEN
          CALL build_xtb_matrices(qs_env=qs_env, para_env=para_env, &
                                  calculate_forces=.TRUE.)
+      ELSEIF (qs_env%energy_correction) THEN
+         CALL energy_correction(qs_env, ec_init=.FALSE., calculate_forces=.TRUE.)
          ! Dispersion energy and forces are calculated in qs_energy?
       ELSE
          CALL build_core_hamiltonian_matrix(qs_env=qs_env, calculate_forces=.TRUE.)
@@ -308,9 +310,11 @@ CONTAINS
          ENDIF
       END IF
 
-      ! Compute grid-based forces
-      CALL qs_ks_update_qs_env(qs_env, calculate_forces=.TRUE.)
-
+      IF (.NOT. qs_env%energy_correction) THEN
+         ! Compute grid-based forces
+         CALL qs_ks_update_qs_env(qs_env, calculate_forces=.TRUE.)
+      END IF
+       
       ! MP2 Code
       IF (ASSOCIATED(qs_env%mp2_env)) THEN
          NULLIFY (matrix_p_mp2, matrix_w_mp2, rho, ks_env, energy)
@@ -380,9 +384,6 @@ CONTAINS
          END DO
          CALL calc_mixed_overlap_force(qs_env)
       END IF
-
-      ! Energy_correction
-      CALL energy_correction(qs_env, ec_init=.FALSE., calculate_forces=.TRUE.)
 
       ! replicate forces (get current pointer)
       NULLIFY (force)
