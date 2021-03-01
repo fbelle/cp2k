@@ -67,7 +67,8 @@ MODULE energy_corrections
         dbcsr_get_info, dbcsr_get_occupation, dbcsr_iterator_blocks_left, dbcsr_iterator_next_block, &
         dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, dbcsr_init_p, dbcsr_multiply, & 
         dbcsr_put_block, dbcsr_p_type, dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_type, &
-        dbcsr_type_no_symmetry, dbcsr_type_symmetric, dbcsr_print, dbcsr_frobenius_norm   
+        dbcsr_type_no_symmetry, dbcsr_type_symmetric, dbcsr_print, dbcsr_frobenius_norm,&
+        dbcsr_nfullrows_total, dbcsr_get_num_blocks, dbcsr_nfullcols_total   
    USE distribution_1d_types,           ONLY: distribution_1d_type
    USE distribution_2d_types,           ONLY: distribution_2d_type
    USE dm_ls_scf,                       ONLY: calculate_w_matrix,&
@@ -401,95 +402,6 @@ CONTAINS
    END SUBROUTINE evaluate_ec_core_matrix_traces
 
 ! **************************************************************************************************
-!> \brief  
-!> \param qs_env ...
-!> \param ec_env ...
-!> \author 
-!>          adapted for energy correction fbelle
-! **************************************************************************************************
-   SUBROUTINE ec_store_result_ls(qs_env, ec_env, iounit)
-      TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(energy_correction_type), POINTER              :: ec_env
-      INTEGER                                            :: iounit 
-
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'ec_store_result_ls'
-
-      INTEGER                                            :: ispin, istore, handle, nspins
-      TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(ls_scf_env_type), POINTER                     :: ls_scf_env
-      TYPE(dbcsr_type)                                   :: matrix_tmp
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
-      REAL(KIND=dp)                                      :: ener  
-
-      CALL timeset(routineN, handle)
-      
-IF (iounit > 0) WRITE (iounit,*) "ec_store_result_ls"
-
-      ! Store new density matrix in LS 
-
-IF (iounit > 0) WRITE(iounit,*) "ec_store_result_ls - ec_env%matrix_p(1,1)%matrix"
-CALL dbcsr_print(ec_env%matrix_p(1,1)%matrix)
-
-      ! Get ls_scf_env
-      CALL get_qs_env(qs_env, dft_control = dft_control, ls_scf_env=ls_scf_env)
-      nspins = dft_control%nspins
-
-      IF (ls_scf_env%scf_history%nstore > 0) THEN
-
-         CALL get_qs_env(qs_env, matrix_s=matrix_s)
-
-         DO ispin = 1, nspins
-            CALL dbcsr_create(matrix_tmp, template = ls_scf_env%matrix_p(ispin), &
-                              matrix_type=dbcsr_type_no_symmetry)
-
-            CALL dbcsr_copy(matrix_tmp, ec_env%matrix_p(ispin,1)%matrix, keep_sparsity=.TRUE.)
-            !CALL dbcsr_copy(matrix_tmp, ec_env%matrix_p(ispin,1)%matrix)
-
-            !CALL matrix_qs_to_ls(matrix_ls = matrix_tmp, &
-            !                     matrix_qs = ec_env%matrix_p(ispin,1)%matrix, &
-            !                     ls_mstruct = ls_scf_env%ls_mstruct, &
-            !                     covariant = .FALSE.)
-         END DO
-
-CALL calculate_ptrace(ec_env%matrix_p, ec_env%matrix_s, ener, dft_control%nspins)
-IF (iounit > 0) WRITE (iounit,*) "ec_store_result_ls - Tr[P_out*S]", ener
-
-IF (iounit > 0) WRITE(iounit,*) "ec_store_result_ls - matrix_tmp"
-CALL dbcsr_print(matrix_tmp)
-
-!CALL dbcsr_dot(matrix_tmp, ls_scf_env%matrix_s, ener)
-!IF (iounit > 0) WRITE (iounit,*) "ec_store_result_ls - Tr[P_out_ls*S_ls]", ener
-
-!IF (iounit > 0) WRITE(iounit,*) "ec_store_result_ls - ls_scf_env%scf_history%matrix(ispin, istore)"
-!CALL dbcsr_print(rho_ao_kp(1,1)%matrix)
-
-         ! Transfrom P_out from QS to LS
-         DO ispin = 1, nspins
-            istore = MOD(ls_scf_env%scf_history%istore - 1, ls_scf_env%scf_history%nstore) + 1
-            IF (iounit > 0) WRITE (iounit,*) "ec_store_result_ls - use istore", istore
-            !CALL matrix_qs_to_ls(matrix_ls = ls_scf_env%scf_history%matrix(ispin, istore), &
-            !                     !matrix_qs = ec_env%matrix_p(ispin,1)%matrix, &
-            !                     matrix_qs = rho_ao_kp(ispin,1)%matrix, &
-            !                     ls_mstruct = ls_scf_env%ls_mstruct, &
-            !                     covariant = .FALSE.)
-
-            ! Store new density matrix
-            CALL dbcsr_copy(ls_scf_env%scf_history%matrix(ispin, istore), matrix_tmp)
-
-IF (iounit > 0) WRITE(iounit,*) "ec_store_result_ls - ls_scf_env%scf_history%matrix(ispin, istore)"
-CALL dbcsr_print(ls_scf_env%scf_history%matrix(ispin, istore))
-
-         END DO
-
-      END IF
-
-      CALL dbcsr_release(matrix_tmp)
-
-      CALL timestop(handle)
-
-   END SUBROUTINE ec_store_result_ls
-
-! **************************************************************************************************
 !> \brief Harris Energy Correction to a Kohn-Sham simulation
 !>
 !> \param qs_env ...
@@ -508,11 +420,8 @@ CALL dbcsr_print(ls_scf_env%scf_history%matrix(ispin, istore))
 
       REAL(KIND=dp)                                      :: exc
       ! fbelle
-      CHARACTER(LEN=default_string_length)               :: name
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: rho_ao_kp
       TYPE(qs_rho_type), POINTER                         :: rho
-      TYPE(dft_control_type), POINTER                    :: dft_control
-      INTEGER                                            :: ic, ispin
       TYPE(pw_p_type), DIMENSION(:), POINTER             :: rho_g, rho_r
       REAL(KIND=dp)                                      :: rhotot
 
@@ -552,7 +461,7 @@ CALL dbcsr_print(ls_scf_env%scf_history%matrix(ispin, istore))
                              ec_env%matrix_hz)
          !
          ! fbelle XXX doesnt work on HIGH print setting
-         !CALL ec_properties(qs_env, ec_env)
+         CALL ec_properties(qs_env, ec_env)
 
 
 CALL get_qs_env(qs_env, rho = rho)
@@ -567,21 +476,6 @@ rhotot = pw_integrate_function(rho_g(1)%pw)
 !   CALL dbcsr_print(rho_ao_kp(1,1)%matrix)
 !END IF
 
-
-         ! Finally, adopt Harris density matrix into qs_env
-         ! XXX unnecessary, density matrix never read
-         ! in QS-KS : reads wave function (i.e. the MOs)
-         ! in LS : reads actually ls_scf_env%stored%matrix_p
-         !         but in ls-sparsity
-         CALL get_qs_env(qs_env, dft_control = dft_control, rho = rho)
-         CALL qs_rho_get(rho, rho_ao_kp = rho_ao_kp)
-         DO ic = 1, SIZE(rho_ao_kp, 2)
-            DO ispin = 1, dft_control%nspins
-               CALL dbcsr_get_info(rho_ao_kp(ispin, ic)%matrix, name=name) ! keep the name
-!               CALL dbcsr_copy(rho_ao_kp(ispin, ic)%matrix, ec_env%matrix_p(ispin, ic)%matrix, name=name)
-            END DO
-         END DO
-         CALL qs_rho_update_rho(rho, qs_env=qs_env)
 
 !rhotot = pw_integrate_function(rho_g(1)%pw)
 !WRITE(*,*) "harris_energy - after update - integrated rho_g", rhotot
@@ -918,8 +812,6 @@ IF (ASSOCIATED(ec_env%matrix_z)) CALL dbcsr_deallocate_matrix_set(ec_env%matrix_
       ! fbelle
       INTEGER                                            :: nrow, ncol, nblocks
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_s
-      ! fbelle
-      REAL(KIND=dp)                                      :: ener
 
       CALL timeset(routineN, handle)
 
@@ -983,7 +875,6 @@ IF (iounit > 0) WRITE (iounit,*) "ec_build_core_ham_force - qs matrix_s ncol", n
 IF (iounit > 0) WRITE (iounit,*) "ec_build_core_ham_force - qs matrix_s nrow", nrow
 IF (iounit > 0) WRITE (iounit,*) "ec_build_core_ham_force - qs matrix_s nblocks", nblocks
 
-
 IF (iounit > 0) WRITE (iounit,*) "ec_build_core_hamiltonian_force - scrm"
 ncol = dbcsr_nfullrows_total(scrm(1,1)%matrix)
 nrow = dbcsr_nfullcols_total(scrm(1,1)%matrix)
@@ -999,18 +890,12 @@ IF (iounit > 0) WRITE (iounit,*) "ec_build_core_ham_force - ec_env%matrix_s - nc
 IF (iounit > 0) WRITE (iounit,*) "ec_build_core_ham_force - ec_env%matrix_s - nrow", nrow
 IF (iounit > 0) WRITE (iounit,*) "ec_build_core_ham_force - ec_env%matrix_s - nblocks", nblocks
 
-IF (iounit > 0) WRITE (iounit,*) "ec_build_core_ham_force - ec_env%matrix_s"
-!CALL dbcsr_print(ec_env%matrix_s(1,1)%matrix)
-
 ncol = dbcsr_nfullrows_total(ec_env%matrix_w(1,1)%matrix)
 nrow = dbcsr_nfullcols_total(ec_env%matrix_w(1,1)%matrix)
 nblocks = dbcsr_get_num_blocks(ec_env%matrix_w(1,1)%matrix)
 IF (iounit > 0) WRITE (iounit,*) "ec_build_core_ham_force - ec_env%matrix_w - ncol", ncol
 IF (iounit > 0) WRITE (iounit,*) "ec_build_core_ham_force - ec_env%matrix_w - nrow", nrow
 IF (iounit > 0) WRITE (iounit,*) "ec_build_core_ham_force - ec_env%matrix_w - nblocks", nblocks
-
-IF (iounit > 0) WRITE (iounit,*) "ec_build_core_ham_force - ec_env%matrix_w"
-!CALL dbcsr_print(ec_env%matrix_w(1,1)%matrix)
 
       ! Overlap and kinetic energy matrices
       IF (debug_forces) fodeb(1:3) = force(1)%overlap(1:3, 1)
@@ -1087,22 +972,6 @@ IF (iounit > 0) WRITE (iounit,*) "ec_build_core_ham_force - ec_env%matrix_w"
 
       ! delete scr matrix
       CALL dbcsr_deallocate_matrix_set(scrm)
-
-! fbelle
-
-CALL calculate_ptrace(ec_env%matrix_h, ec_env%matrix_s, ener, dft_control%nspins)
-IF (iounit > 0) WRITE (iounit,*) "ec_build_core_hamiltonian_force - Tr[Hcore*S]", ener
-! kinetic energy
-CALL calculate_ptrace(ec_env%matrix_t, ec_env%matrix_s, ener, dft_control%nspins)
-IF (iounit > 0) WRITE (iounit,*) "ec_build_core_hamiltonian_force - Tr[T*S]", ener
-
-CALL calculate_ptrace(ec_env%matrix_h, ec_env%matrix_p, ener, dft_control%nspins)
-IF (iounit > 0) WRITE (iounit,*) "ec_build_core_hamiltonian_force - energy%core", ener
-! kinetic energy
-CALL calculate_ptrace(ec_env%matrix_t, ec_env%matrix_p, ener, dft_control%nspins)
-IF (iounit > 0) WRITE (iounit,*) "ec_build_core_hamiltonian_force - energy%kinetic", ener
-
-!--------------------
 
       CALL timestop(handle)
 
