@@ -737,6 +737,7 @@ CONTAINS
          CALL dbcsr_scale(p_env%p1(ispin)%matrix, 0.5_dp)
       ENDDO
       norm_zmo =  dbcsr_frobenius_norm(p_env%p1(1)%matrix)
+      IF (iounit > 0) WRITE (iounit,*) "|| Z (MO) ||_F :", norm_zmo
 
       ! LAST print
       counter=counter+1
