@@ -23,6 +23,9 @@ MODULE ec_environment
                                               Niklasson2014,&
                                               Shao2003
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_log_handling,                 ONLY: cp_get_default_logger,&
+                                              cp_logger_get_default_unit_nr,&
+                                              cp_logger_type
    USE cp_para_env,                     ONLY: cp_para_env_retain
    USE cp_para_types,                   ONLY: cp_para_env_type
    USE dm_ls_scf_types,                 ONLY: ls_scf_env_type
@@ -120,10 +123,11 @@ CONTAINS
       TYPE(section_vals_type), OPTIONAL, POINTER         :: dft_section
       TYPE(section_vals_type), OPTIONAL, POINTER         :: input
 
-      INTEGER                                            :: ikind, maxlgto, nkind
+      INTEGER                                            :: ikind, maxlgto, nkind, unit_nr
       LOGICAL                                            :: explicit
       REAL(KIND=dp)                                      :: eps_pgf_orb
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(cp_para_env_type), POINTER                    :: para_env
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(gto_basis_set_type), POINTER                  :: basis_set, harris_basis
@@ -151,6 +155,14 @@ CONTAINS
       NULLIFY (ec_env%vtau_rspace)
       ec_env%should_update = .TRUE.
       ec_env%mao = .FALSE.
+
+      ! get a useful output_unit
+      logger => cp_get_default_logger()
+      IF (logger%para_env%ionode) THEN
+         unit_nr = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
+      ELSE
+         unit_nr = -1
+      ENDIF
 
       IF (qs_env%energy_correction) THEN
 
@@ -272,6 +284,11 @@ CONTAINS
 
          IF (ec_env%use_ls_solver) THEN
             CALL ec_ls_create(qs_env, ec_env%ls_env)
+         END IF
+
+         ! Write input
+         IF (unit_nr > 0) THEN
+            CALL ec_write_input(ec_env, unit_nr)
          END IF
 
       END IF
@@ -412,8 +429,9 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      WRITE (unit_nr, '()')
-      WRITE (unit_nr, '(T2,A,A,A)') REPEAT("-", 30), " Energy Correction ", REPEAT("-", 29)
+      !WRITE (unit_nr, '()')
+      WRITE (unit_nr, '(T2,A,A,A,A,A)') "!", REPEAT("-", 29), &
+            " Energy Correction ", REPEAT("-", 29), "!"
 
       ! Algorithm
       SELECT CASE (ec_env%ks_solver)
@@ -446,12 +464,15 @@ CONTAINS
       CASE ("HARRIS")
           WRITE (unit_nr, '(T2,A,T61,A20)') "Harris Basis: ", "HARRIS"
       END SELECT
+      WRITE (unit_nr, '()')
 
       ! MAO
-      WRITE (unit_nr, '(T2,A,T61,L20)') "MAO:", ec_env%mao
-      WRITE (unit_nr, '(T2,A,T61,I20)') "MAO_MAX_ITER:", ec_env%mao_max_iter
-      WRITE (unit_nr, '(T2,A,T61,E20.3)') "MAO_EPS_GRAD:", ec_env%mao_eps_grad
-      WRITE (unit_nr, '()')
+      IF (ec_env%mao) THEN
+         WRITE (unit_nr, '(T2,A,T61,L20)') "MAO:", ec_env%mao
+         WRITE (unit_nr, '(T2,A,T61,I20)') "MAO_MAX_ITER:", ec_env%mao_max_iter
+         WRITE (unit_nr, '(T2,A,T61,E20.3)') "MAO_EPS_GRAD:", ec_env%mao_eps_grad
+         WRITE (unit_nr, '()')
+      END IF    
 
       ! Parameters depending on chosen algorithm to solve Harris functional
       IF ( .NOT. ec_env%use_ls_solver) THEN
@@ -530,7 +551,6 @@ CONTAINS
          CASE DEFAULT
             CPABORT("Unknown cluster type")
          END SELECT
-
 
       END IF
 

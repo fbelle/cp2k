@@ -439,13 +439,6 @@ CONTAINS
          CALL kg_env_create(qs_env, qs_env%kg_env, qs_kind_set, qs_env%input)
       END IF
 
-      dft_section => section_vals_get_subs_vals(qs_env%input, "DFT")
-      CALL section_vals_val_get(dft_section, "ENERGY_CORRECTION%_SECTION_PARAMETERS_", &
-                                l_val=qs_env%energy_correction)
-      IF (qs_env%energy_correction) THEN
-         CALL ec_env_create(qs_env, qs_env%ec_env, dft_section, qs_env%input)
-      END IF
-
       et_coupling_section => section_vals_get_subs_vals(qs_env%input, &
                                                         "PROPERTIES%ET_COUPLING")
       CALL section_vals_get(et_coupling_section, explicit=do_et)
@@ -460,6 +453,13 @@ CONTAINS
       IF (dft_control%qs_control%do_ls_scf) THEN
          CALL ls_scf_create(qs_env)
       ENDIF
+
+      dft_section => section_vals_get_subs_vals(qs_env%input, "DFT")
+      CALL section_vals_val_get(dft_section, "ENERGY_CORRECTION%_SECTION_PARAMETERS_", &
+                                l_val=qs_env%energy_correction)
+      IF (qs_env%energy_correction) THEN
+         CALL ec_env_create(qs_env, qs_env%ec_env, dft_section, qs_env%input)
+      END IF
 
       IF (dft_control%qs_control%do_almo_scf) THEN
          CALL almo_scf_env_create(qs_env)

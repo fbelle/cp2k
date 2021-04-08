@@ -601,9 +601,17 @@ CONTAINS
       IF (iounit > 0) WRITE (iounit,*) "|| Z (MO) ||_F :", norm_zmo
       CALL dbcsr_dot(ec_env%matrix_z(1)%matrix, matrix_s(1)%matrix, norm_zmo)
       IF (iounit > 0) WRITE (iounit,*) "Tr[PzS]", norm_zmo
-
       norm_zmo= dbcsr_frobenius_norm(ec_env%matrix_wz(1)%matrix)
-      IF (iounit > 0) WRITE (iounit,*) "|| Wz (AO) ||_F :", norm_zmo
+      IF (iounit > 0) WRITE (iounit,*) "|| Wz (MO) ||_F :", norm_zmo
+
+      IF (nspins == 2 ) THEN
+         norm_zmo= dbcsr_frobenius_norm(ec_env%matrix_z(2)%matrix)
+         IF (iounit > 0) WRITE (iounit,*) "|| Z (MO)(2) ||_F :", norm_zmo
+         CALL dbcsr_dot(ec_env%matrix_z(2)%matrix, matrix_s(1)%matrix, norm_zmo)
+         IF (iounit > 0) WRITE (iounit,*) "Tr[PzS(2)]", norm_zmo
+         norm_zmo= dbcsr_frobenius_norm(ec_env%matrix_wz(2)%matrix)
+         IF (iounit > 0) WRITE (iounit,*) "|| Wz (MO)(2) ||_F :", norm_zmo
+      END IF
 
       CALL timestop(handle)
 
@@ -1249,7 +1257,7 @@ CONTAINS
       NULLIFY (scrm)
 
       norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
-      IF (iounit > 0) WRITE(iounit,*) "||Whz(MO) PFZ+ZFP||", norm_res
+      IF (iounit > 0) WRITE(iounit,*) "||Whz(1) PFZ+ZFP||", norm_res
       CALL dbcsr_dot(matrix_s(1)%matrix, matrix_wz(1)%matrix, norm_res)
       IF (iounit > 0) WRITE(iounit,*) "Tr[WhzSin]", norm_res
       CALL dbcsr_dot(rho_ao(1)%matrix, matrix_wz(1)%matrix, norm_res)
@@ -1313,7 +1321,7 @@ CONTAINS
 !         END DO
 !
 !         norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
-!         IF (iounit > 0) WRITE(iounit,*) "||Whz(MO)||", norm_res
+!         IF (iounit > 0) WRITE(iounit,*) "||Whz(MO) CC^T**CC^T ||", norm_res
 !         CALL dbcsr_dot(matrix_s(1)%matrix, matrix_wz(1)%matrix, norm_res)
 !         IF(iounit > 0) WRITE(iounit,*) "Tr[WhzSin]", norm_res
 !         CALL dbcsr_dot(rho_ao(1)%matrix, matrix_wz(1)%matrix, norm_res)
@@ -1326,7 +1334,7 @@ CONTAINS
 !            CALL dbcsr_dot(rho_ao(2)%matrix, matrix_wz(2)%matrix, norm_res)
 !            IF(iounit > 0) WRITE(iounit,*) "Tr[WhzPin(2)]", norm_res
 !         END IF
-
+!
 !         DO ispin = 1, nspins
 !            CALL dbcsr_set(matrix_wz(ispin)%matrix, 0.0_dp)
 !         END DO
@@ -1340,7 +1348,7 @@ CONTAINS
 
          ! fbelle
          norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
-         IF (iounit > 0) WRITE(iounit,*) "||Whz(AO)||", norm_res
+         IF (iounit > 0) WRITE(iounit,*) "||Whz(AO) P*Wz*P ||", norm_res
          CALL dbcsr_dot(matrix_s(1)%matrix, matrix_wz(1)%matrix, norm_res)
          IF(iounit > 0) WRITE(iounit,*) "Tr[WhzSin]", norm_res
          CALL dbcsr_dot(rho_ao(1)%matrix, matrix_wz(1)%matrix, norm_res)
