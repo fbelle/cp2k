@@ -255,11 +255,9 @@ CONTAINS
     !CALL projector(qs_env, matrix_p, matrix_res, eps_filter, .TRUE.)
     CALL projector(qs_env, matrix_p, matrix_res, eps_filter)
 
-
     DO ispin = 1, nspins
        ! cg = p_0 = z_0
        CALL dbcsr_copy(matrix_cg(ispin)%matrix, matrix_res(ispin)%matrix)
-
     END DO
 
     ! header
@@ -508,9 +506,9 @@ CONTAINS
 
     ! Scale matrix_p by factor 1/2 in closed-shell
     IF (nspins == 1) CALL dbcsr_scale(matrix_p(1)%matrix, 0.5_dp)
-    DO ispin = 1, nspins
-       CALL dbcsr_filter(matrix_p(ispin)%matrix, linres_control%eps_filter**(2.0_dp/3.0_dp))
-    END DO
+!    DO ispin = 1, nspins
+!       CALL dbcsr_filter(matrix_p(ispin)%matrix, linres_control%eps_filter**(2.0_dp/3.0_dp))
+!    END DO
 
     ! Transform P, KS, and Harris kernel matrix into Orthonormal basis
     CALL dbcsr_create(matrix_s_sqrt, template=matrix_s(1)%matrix, &
@@ -693,25 +691,25 @@ CONTAINS
 
     ! Preconditioner
     linres_control%flag = ""
-    DO ispin = 1, nspins
-       IF (linres_control%preconditioner_type == precond_mlp) THEN
-          ! M * z_0 = r_0 
-          ! Conjugate gradient returns z_0
-          ! IF(para_env%mepos==0) WRITE(*,*) "M * z_0 = r_0"
-          CALL preconditioner(qs_env = qs_env,&
-                              matrix_ks = matrix_ks, &
-                              matrix_p = matrix_p, &
-                              matrix_rhs = matrix_res, &
-                              matrix_cg_z = matrix_z0,&
-                              eps_filter = eps_filter,&
-                              iounit = iounit)
-          linres_control%flag = "PCG-AO"
-       ELSE
-          ! z_0 = r_0
+    IF (linres_control%preconditioner_type == precond_mlp) THEN
+       ! M * z_0 = r_0 
+       ! Conjugate gradient returns z_0
+       ! IF(para_env%mepos==0) WRITE(*,*) "M * z_0 = r_0"
+       CALL preconditioner(qs_env = qs_env,&
+                           matrix_ks = matrix_ks, &
+                           matrix_p = matrix_p, &
+                           matrix_rhs = matrix_res, &
+                           matrix_cg_z = matrix_z0,&
+                           eps_filter = eps_filter,&
+                           iounit = iounit)
+       linres_control%flag = "PCG-AO"
+    ELSE
+       ! z_0 = r_0
+       DO ispin = 1, nspins
           CALL dbcsr_copy(matrix_z0(ispin)%matrix, matrix_res(ispin)%matrix)
           linres_control%flag = "CG-AO"
-       END IF
-    END DO
+       END DO
+    END IF
 
     norm_res = 0.0_dp
 
@@ -1004,8 +1002,13 @@ CONTAINS
     END DO
 
 ! ! DEBUG
-!    norm_zao = dbcsr_frobenius_norm(matrix_z(1)%matrix)
-!    IF (iounit > 0) WRITE (iounit,*) "|| Z (AO) ||_F :", norm_zao
+    norm_res = dbcsr_frobenius_norm(matrix_z(1)%matrix)
+    IF (iounit > 0) WRITE (iounit,*) "|| Z (AO) ||_F :", norm_res
+    IF (nspins == 2) THEN 
+       norm_res = dbcsr_frobenius_norm(matrix_z(2)%matrix)
+       IF (iounit > 0) WRITE (iounit,*) "|| Z (AO)(2) ||_F :", norm_res
+    END IF
+
 !
 !    ! x*A*x
 !    IF (iounit > 0)  WRITE(iounit,*) "build last z:"
@@ -1027,8 +1030,12 @@ CONTAINS
 !    IF (iounit > 0) WRITE (iounit, "(T2,A18,T20,I3,T25,1E16.10,T45,1E16.10,T68,1E16.10)") &
 !                           "It,res,zao,elec", counter, norm_res, norm_zao, norm_elec
 !
-!    CALL dbcsr_dot(ec_env%matrix_z(1)%matrix, matrix_s(1)%matrix, norm_res)
-!    IF (iounit > 0) WRITE (iounit,*) "Tr[PzS]", norm_res
+    CALL dbcsr_dot(ec_env%matrix_z(1)%matrix, matrix_s(1)%matrix, norm_res)
+    IF (iounit > 0) WRITE (iounit,*) "Tr[PzS]", norm_res
+    IF (nspins == 2) THEN 
+       CALL dbcsr_dot(ec_env%matrix_z(1)%matrix, matrix_s(1)%matrix, norm_res)
+       IF (iounit > 0) WRITE (iounit,*) "Tr[PzS]", norm_res
+    END IF
  ! DEBUG
 
     ! Calculate energy-weighted response density matrix
@@ -1087,7 +1094,7 @@ CONTAINS
      TYPE(dft_control_type), POINTER                    :: dft_control
      TYPE(cp_logger_type), POINTER                      :: logger
      TYPE(qs_rho_type), POINTER                         :: rho
-!     REAL(KIND=dp)                                      :: norm_res
+     REAL(KIND=dp)                                      :: norm_res
 
      CALL timeset(routineN, handle)
 
@@ -1136,14 +1143,23 @@ CONTAINS
 
      ENDDO
 
-!     IF(iounit > 0) WRITE(iounit,*) "Wz = 0.25*(Z*KS*P + P*KS*Z)"
-!     norm_res = 0.0_dp
-!     norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
-!     IF(iounit > 0) WRITE(iounit,*) "||Wz||_F", norm_res
-!     CALL dbcsr_dot(matrix_s(1)%matrix, matrix_wz(1)%matrix, norm_res)
-!     IF(iounit > 0) WRITE(iounit,*) "ec_res_ao - Tr[WinSin]", norm_res
-!     CALL dbcsr_dot(matrix_p(1)%matrix, matrix_wz(1)%matrix, norm_res)
-!     IF(iounit > 0) WRITE(iounit,*) "ec_res_ao - Tr[WinPin]", norm_res
+     IF(iounit > 0) WRITE(iounit,*) "Wz = 0.25*(Z*KS*P + P*KS*Z)"
+     norm_res = 0.0_dp
+     norm_res = dbcsr_frobenius_norm(matrix_wz(1)%matrix)
+     IF(iounit > 0) WRITE(iounit,*) "||Wz(1)||_F", norm_res
+     CALL dbcsr_dot(matrix_s(1)%matrix, matrix_wz(1)%matrix, norm_res)
+     IF(iounit > 0) WRITE(iounit,*) "ec_res_ao - Tr[WinSin]", norm_res
+     CALL dbcsr_dot(matrix_p(1)%matrix, matrix_wz(1)%matrix, norm_res)
+     IF(iounit > 0) WRITE(iounit,*) "ec_res_ao - Tr[WinPin]", norm_res
+
+     IF (nspins == 2) THEN
+        norm_res = dbcsr_frobenius_norm(matrix_wz(2)%matrix)
+        IF(iounit > 0) WRITE(iounit,*) "||Wz(2)||_F", norm_res
+        CALL dbcsr_dot(matrix_s(1)%matrix, matrix_wz(2)%matrix, norm_res)
+        IF(iounit > 0) WRITE(iounit,*) "ec_res_ao - Tr[WinSin(2)]", norm_res
+        CALL dbcsr_dot(matrix_p(2)%matrix, matrix_wz(1)%matrix, norm_res)
+        IF(iounit > 0) WRITE(iounit,*) "ec_res_ao - Tr[WinPin(2)]", norm_res
+     END IF
 
      CALL dbcsr_release(matrix_tmp)
      CALL dbcsr_release(matrix_tmp2)
