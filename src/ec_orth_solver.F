@@ -237,8 +237,9 @@ CONTAINS
     END DO
 
     ! Projector on trial matrix
-    !CALL projector(qs_env, matrix_p, matrix_cg_z, eps_filter, .FALSE.)
-    CALL projector(qs_env, matrix_p, matrix_cg_z, eps_filter)
+    ! Projector does not need to be applied here,  
+    ! as matrix_rhs already had this done before entering preconditioner
+    !CALL projector(qs_env, matrix_p, matrix_cg_z, eps_filter)
 
     ! Mz_0
     CALL hessian_op1(matrix_ks, matrix_p, matrix_cg_z, matrix_b, matrix_Ax, eps_filter)
@@ -252,7 +253,6 @@ CONTAINS
 !    IF (iounit > 0) WRITE(iounit,*) "||r_0||_F :", norm_res
 
     ! Matrix projector T
-    !CALL projector(qs_env, matrix_p, matrix_res, eps_filter, .TRUE.)
     CALL projector(qs_env, matrix_p, matrix_res, eps_filter)
 
     DO ispin = 1, nspins
@@ -281,7 +281,6 @@ CONTAINS
 
        ! Matrix projector
        CALL projector(qs_env, matrix_p, matrix_Ax, eps_filter)
-       !CALL projector(qs_env, matrix_p, matrix_Ax, eps_filter, .TRUE.)
 
        DO ispin = 1, nspins
 
