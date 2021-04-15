@@ -154,7 +154,8 @@ MODULE energy_corrections
                                               RECIPROCALSPACE,&
                                               pw_p_type
    USE qs_collocate_density,            ONLY: calculate_rho_elec
-   USE qs_core_energies,                ONLY: calculate_ecore_overlap
+   USE qs_core_energies,                ONLY: calculate_ecore_overlap,&
+                                              calculate_ptrace
    USE qs_dispersion_types,             ONLY: qs_dispersion_type
    USE qs_dispersion_pairpot,           ONLY: calculate_dispersion_pairpot
    USE qs_energy_types,                 ONLY: qs_energy_type
