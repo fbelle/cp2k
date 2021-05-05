@@ -1276,6 +1276,7 @@ CONTAINS
                         alpha_scalar=1.0_dp, beta_scalar=1.0_dp)
       END IF
 
+      ! Energy weighted response density
       CALL build_overlap_matrix(ks_env, matrix_s=scrm, &
                                 matrix_name="OVERLAP MATRIX", &
                                 basis_type_a="ORB", basis_type_b="ORB", &
@@ -1760,8 +1761,8 @@ CONTAINS
    END SUBROUTINE ks_ref_potential
 
 ! **************************************************************************************************
-!> \brief Win = 0.5(P*Win*P)
-!>
+!> \brief Win = focc*(P*(H[P_out - P_in] + H[Z] )*P)
+!>        Langrange multiplier matrix with response and perturbation (Harris) kernel matrices
 !>
 !> \param
 !> \par History
